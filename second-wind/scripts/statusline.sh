@@ -6,6 +6,7 @@
 # to the status bar and to nothing else, so this is the only way any other part of
 # the system can find out how much allowance is left.
 input=$(cat)
+umask 077
 SW_HOME="${SW_HOME:-$HOME/.second-wind}"
 CFG="$SW_HOME/config.json"
 command -v jq >/dev/null 2>&1 || exit 0
@@ -25,14 +26,21 @@ else
 fi
 acct=$(jq -r '.oauthAccount.emailAddress // empty' "$acctfile" 2>/dev/null)
 
+# Key the role by config directory, not by email. Matching on email meant that
+# if discovery could not read an address, the config held "unknown", the match
+# failed, the cache was written under some other name, and the usage guard found
+# no file and stayed silent. The headline feature would be off with nothing
+# saying so.
+here=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
 role=""
 if [ -f "$CFG" ]; then
-  pa=$(jq -r '.primary.account // empty' "$CFG" 2>/dev/null)
-  sa=$(jq -r '.secondary.account // empty' "$CFG" 2>/dev/null)
-  [ -n "$acct" ] && [ "$acct" = "$pa" ] && role=primary
-  [ -n "$acct" ] && [ "$acct" = "$sa" ] && role=secondary
+  ex() { case "$1" in "~"/*) printf '%s' "$HOME/${1#"~/"}";; *) printf '%s' "$1";; esac; }
+  pd=$(ex "$(jq -r '.primary.config_dir // empty' "$CFG" 2>/dev/null)")
+  sd=$(ex "$(jq -r '.secondary.config_dir // empty' "$CFG" 2>/dev/null)")
+  [ -n "$pd" ] && [ "$here" = "$pd" ] && role=primary
+  [ -n "$sd" ] && [ "$here" = "$sd" ] && role=secondary
 fi
-[ -n "$role" ] || role=$(printf '%s' "$acct" | cut -d@ -f1)
+[ -n "$role" ] || role=$(printf '%s' "${acct:-unknown}" | cut -d@ -f1)
 
 t5=$(jq -r '.thresholds.five_hour_pct // 90' "$CFG" 2>/dev/null || echo 90)
 t7=$(jq -r '.thresholds.seven_day_pct // 80' "$CFG" 2>/dev/null || echo 80)
@@ -51,7 +59,8 @@ out=""
 [ -n "$week" ] && out="$out · $(tint "$week" "$t7" "7d $(printf '%.0f' "$week")%")"
 if [ -n "$five" ] && [ -n "$five_r" ]; then
   n=${five%%.*}
-  [ "$n" -ge "$t5" ] 2>/dev/null && out="$out \033[2m(resets $(date -r "$five_r" +%H:%M 2>/dev/null))\033[0m"
+  [ "$n" -ge "$t5" ] 2>/dev/null && hm=$(date -r "$five_r" +%H:%M 2>/dev/null || date -d "@$five_r" +%H:%M 2>/dev/null || printf '')
+  [ -n "$hm" ] && out="$out \033[2m(resets $hm)\033[0m"
 fi
 [ -n "$out" ] || out="\033[2mno usage reported yet\033[0m"
 printf '%b' "$out"
@@ -65,6 +74,7 @@ if [ -n "$five" ] || [ -n "$week" ]; then
         --argjson t "$(date +%s)" \
     '{account:$a,role:$r,model:$m,effort:$e,five_hour_pct:$f5,seven_day_pct:$f7,
       five_hour_resets_at:$r5,seven_day_resets_at:$r7,cached_at:$t}' \
-    > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f" 2>/dev/null
+    > "$f.tmp.$$" 2>/dev/null && mv "$f.tmp.$$" "$f" 2>/dev/null
+  chmod 600 "$f" 2>/dev/null || true
 fi
 exit 0

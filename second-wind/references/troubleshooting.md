@@ -46,12 +46,23 @@ python3 scripts/report.py 7
 
 Read the reply, not the exit code. In `--work` mode, verify the artefact.
 
+## Start here: is it actually working?
+
+```bash
+python3 "$SW/scripts/setup.py" --check
+```
+
+It prints every link in the chain and names the one condition that is blocking
+handover. Almost everything below is faster to diagnose from that output.
+
 ## The status bar is blank, or shows no percentages
 
-The bar appears after a restart. The limit figures only exist once the account has
-had a reply in that session, and they are absent entirely for accounts the API does
-not report limits for. No cached figure means the usage guard stays quiet, which is
-deliberate: acting on a stale number is worse than not acting.
+In order: the bar only appears after a Claude Code restart; the limit figures only
+exist once the account has had a reply in that session; and some builds or plans
+do not report `rate_limits` to the status line at all, in which case handover
+cannot work and `--check` will keep saying NONE YET. No cached figure means the
+guard stays quiet, which is deliberate: acting on a stale number is worse than
+not acting.
 
 ## Failover will not fire
 

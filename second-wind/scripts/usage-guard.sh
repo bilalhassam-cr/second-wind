@@ -15,7 +15,13 @@ CFG="$SW_HOME/config.json"
 [ -f "$CFG" ] || exit 0
 [ -f "$SW_HOME/no-failover" ] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
-[ "$(jq -r '.failover.enabled // true' "$CFG")" = "true" ] || exit 0
+# jq's // treats false as absent, so `.failover.enabled // true` reads a
+# deliberate false as true and failover could not be switched off in config.
+cfgbool() { jq -r "if $1 == null then \"\" else ($1|tostring) end" "$CFG"; }
+fo=$(cfgbool '.failover.enabled'); [ "$fo" = "false" ] && exit 0
+is_int() { case "${1:-}" in ''|*[!0-9]*) return 1;; *) return 0;; esac; }
+# BSD date takes -r, GNU date takes -d @epoch
+hm() { date -r "$1" +%H:%M 2>/dev/null || date -d "@$1" +%H:%M 2>/dev/null || printf ''; }
 
 input=$(cat 2>/dev/null)
 # don't fire on the session's own machinery
@@ -23,14 +29,18 @@ case "$input" in
   *"<system-reminder>"*|*"<task-notification>"*|*"<command-name>"*) exit 0 ;;
 esac
 
-t5=$(jq -r '.thresholds.five_hour_pct // 90' "$CFG")
-t7=$(jq -r '.thresholds.seven_day_pct // 80' "$CFG")
+t5=$(jq -r '.thresholds.five_hour_pct // 90' "$CFG"); is_int "$t5" || t5=90
+t7=$(jq -r '.thresholds.seven_day_pct // 80' "$CFG"); is_int "$t7" || t7=80
 pf="$SW_HOME/usage-primary.json"
 [ -f "$pf" ] || exit 0
 
 # a stale reading is worse than none: the window may already have reset
-age=$(( $(date +%s) - $(jq -r '.cached_at // 0' "$pf") ))
+cached=$(jq -r '.cached_at // 0' "$pf"); is_int "$cached" || exit 0
+age=$(( $(date +%s) - cached ))
+# ignore readings older than an hour (the window may have reset) and any reading
+# stamped in the future (a corrupt cache would otherwise look permanently fresh)
 [ "$age" -gt 3600 ] && exit 0
+[ "$age" -lt -60 ] && exit 0
 
 five=$(jq -r '.five_hour_pct // empty' "$pf"); week=$(jq -r '.seven_day_pct // empty' "$pf")
 f=${five%%.*}; w=${week%%.*}
@@ -40,17 +50,18 @@ hit5=no; hit7=no
 [ "$hit5" = no ] && [ "$hit7" = no ] && exit 0
 
 sec_acct=$(jq -r '.secondary.account // "the secondary account"' "$CFG")
-sec_on=$(jq -r '.secondary.enabled // true' "$CFG")
-codex_on=$(jq -r '.codex.enabled // false' "$CFG")
+sec_on=$(cfgbool '.secondary.enabled'); [ -n "$sec_on" ] || sec_on=true
+codex_on=$(cfgbool '.codex.enabled'); [ -n "$codex_on" ] || codex_on=false
 resets=$(jq -r '.five_hour_resets_at // empty' "$pf")
 resets_txt=""
-[ -n "$resets" ] && resets_txt=" The 5-hour window resets at $(date -r "$resets" +%H:%M 2>/dev/null)."
+[ -n "$resets" ] && resets_txt=" The 5-hour window resets at $(hm "$resets")."
 
 # is the secondary itself in trouble?
 sf="$SW_HOME/usage-secondary.json"
 sec_note=""
 if [ -f "$sf" ]; then
-  sfa=$(( $(date +%s) - $(jq -r '.cached_at // 0' "$sf") ))
+  sfc=$(jq -r '.cached_at // 0' "$sf"); is_int "$sfc" || sfc=0
+  sfa=$(( $(date +%s) - sfc ))
   if [ "$sfa" -lt 86400 ]; then
     s5=$(jq -r '.five_hour_pct // empty' "$sf"); s5=${s5%%.*}
     [ -n "${s5:-}" ] && [ "$s5" -ge "$t5" ] 2>/dev/null && \

@@ -33,9 +33,16 @@ def first_json(text):
         return {}
 
 def account_from_file(config_dir):
-    # a custom config dir keeps oauthAccount in <dir>/.claude.json;
-    # the default profile keeps it in ~/.claude.json
-    for f in (os.path.join(config_dir, ".claude.json"), os.path.join(HOME, ".claude.json")):
+    """The default profile keeps oauthAccount in ~/.claude.json; a custom config
+    dir keeps its own. Never fall back from a custom dir to the default file: a
+    fresh or signed-out secondary would then report the PRIMARY account's email,
+    and the confirmation step that exists to stop the user getting the two
+    backwards would show the wrong account and look right."""
+    if os.path.realpath(config_dir) == os.path.realpath(os.path.join(HOME, ".claude")):
+        candidates = [os.path.join(HOME, ".claude.json")]
+    else:
+        candidates = [os.path.join(config_dir, ".claude.json")]
+    for f in candidates:
         try:
             with open(f) as fh:
                 a = json.load(fh).get("oauthAccount") or {}

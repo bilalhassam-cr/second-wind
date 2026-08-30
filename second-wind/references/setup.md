@@ -70,9 +70,4 @@ the CLI reads that same sign-in and needs no separate login.
 
 ## Terms of use
 
-This runs the official clients, once per account, each paying its own way. That is
-different in kind from a relay that multiplexes several subscriptions through one
-endpoint, which is the architecture that draws enforcement. Do not add one.
-
-Sharing a login with another person is prohibited outright. One person holding two
-subscriptions of their own is not.
+Covered once, in the README. Read it before installing.

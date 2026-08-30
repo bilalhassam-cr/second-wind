@@ -5,34 +5,37 @@ description: Run work on a second Claude Code account or on OpenAI Codex, either
 
 # Second wind
 
-Most people running Claude Code have more than one subscription sitting idle: a
-second Claude account, a ChatGPT plan with Codex on it, or both. This routes work
-to them, for two different reasons that need keeping apart.
+Routes work to a second Claude subscription or to Codex, for two different
+reasons that need keeping apart: **independence**, because a reviewer that
+watched you build the thing is not a reviewer, and **headroom**, because each
+subscription has its own usage window.
 
-**Independence.** A reviewer that watched you build the thing is not a reviewer.
-The other accounts arrive blind, which is the whole value when you want work
-challenged rather than confirmed.
+## First, find the scripts
 
-**Headroom.** Each subscription has its own usage window. Moving substantial work
-off the main account keeps it available for the conversation that has all the
-context.
-
-## Before anything else: is it set up?
+A Bash tool call runs in the user's project, so relative paths and `$0` do not
+resolve to this skill. Resolve the directory once, at the start of every use, and
+use `$SW` in every command below:
 
 ```bash
-python3 "$(dirname "$0")/scripts/setup.py" --show 2>/dev/null || echo NOT_SET_UP
+SW=$(jq -r '.skill_dir // empty' ~/.second-wind/config.json 2>/dev/null)
+SW=${SW/#\~/$HOME}
+[ -d "$SW" ] || SW=$HOME/.claude/skills/second-wind
+python3 "$SW/scripts/setup.py" --check 2>/dev/null || echo NOT_SET_UP
 ```
 
-If that says NOT_SET_UP, run the setup flow below. Do not guess which account is
-which, and do not proceed without config: sending someone's main work to the
-wrong subscription is worse than doing nothing.
+If that prints NOT_SET_UP, it is not configured. **Say one line offering to set it
+up, then get on with what the user actually asked for.** Never let a missing
+optional tool block the task: they came here to do something else.
+
+If it prints NOT ARMED, the delegation commands still work; only the automatic
+handover is inert. The `--check` output names the single condition blocking it.
 
 ## Setting it up
 
 1. Discover what is on the machine:
 
    ```bash
-   python3 scripts/discover.py
+   python3 "$SW/scripts/discover.py"
    ```
 
 2. Show the user what was found and **ask which account should be primary**. Use
@@ -50,7 +53,8 @@ wrong subscription is worse than doing nothing.
 3. Write the config:
 
    ```bash
-   python3 scripts/setup.py --write --primary ~/.claude --secondary ~/.claude-secondary
+   python3 "$SW/scripts/setup.py" --write \\
+     --primary ~/.claude --secondary ~/.claude-secondary
    ```
 
    Optional: `--codex off`, `--five-hour 85`, `--seven-day 75`,
@@ -73,8 +77,8 @@ delegation is the thing this skill exists to prevent: a job that half worked
 still returns prose that reads like success.
 
 ```bash
-scripts/run.sh secondary <prompt-file> [--review|--work] [--model M] [--effort E]
-scripts/run.sh codex     <prompt-file> [--review|--work] [--model M] [--effort E]
+"$SW/scripts/run.sh" secondary <prompt-file> [--review|--work] [--model M] [--effort E]
+"$SW/scripts/run.sh" codex     <prompt-file> [--review|--work] [--model M] [--effort E]
 ```
 
 Write the prompt to a file first, then pass the path. Building the command inline
@@ -82,7 +86,8 @@ turns quoting into the hard part of the job.
 
 ### The two modes
 
-**`--review` is read-only.** The worker cannot edit, write or create anything. Use
+**`--review` blocks the file-editing tools and the shell.** On the Claude worker
+that is `--disallowed-tools`; on Codex it is a real read-only sandbox. Use
 it when you want the work challenged, and whenever you are still part-way through
 a job yourself: two sessions editing the same files will clobber each other, and a
 reviewer that has not seen the conversation may "fix" something that was
@@ -110,12 +115,13 @@ For a review, the framing that gets a useful answer:
 
 ### Running several at once
 
-The runner is safe to run in parallel; the ledger is locked. When work genuinely
+The runner is safe to run in parallel: each call writes its own exchange file and
+appends one short line to the ledger, which does not interleave. When work genuinely
 splits into independent pieces, send them out together rather than in sequence:
 
 ```bash
-( scripts/run.sh secondary a.txt --work > a.out 2>/dev/null ) &
-( scripts/run.sh codex     b.txt --work > b.out 2>/dev/null ) &
+( "$SW/scripts/run.sh" secondary a.txt --work > a.out 2>/dev/null ) &
+( "$SW/scripts/run.sh" codex     b.txt --work > b.out 2>/dev/null ) &
 wait
 ```
 
@@ -137,7 +143,7 @@ or anything using a CDP harness, puppeteer or playwright, to a worker whose
 not sandboxed. Check with:
 
 ```bash
-python3 scripts/setup.py --show | jq '.codex.can_launch_browser'
+python3 "$SW/scripts/setup.py" --show | jq '.codex.can_launch_browser'
 ```
 
 This bites hardest in projects whose own instructions say to verify rendered
@@ -156,14 +162,21 @@ The behaviour is deliberate and worth preserving if you edit this:
   the work.
 - If the user says keep it here, keep it here. They can see the same numbers.
 
-One person moving their own work between their own two subscriptions between tasks
-is ordinary use. Silent mid-request rotation to defeat a per-account limit is not,
-and it is also just worse: you lose track of what ran where.
+Announcing the handover is not only a compliance posture, it is simply better:
+silent rotation means nobody can tell which account did which piece of work. The
+terms-of-use position is in the README; do not restate it here.
 
 Turn it off with `touch ~/.second-wind/no-failover`, or `failover.enabled: false`
 in the config.
 
 ## Reporting back, and the record
+
+**First check whether it actually worked.** A non-zero exit means the delegation
+failed, and the text you got back is an error message or a timeout notice, not an
+opinion. Exit 124 means it was killed for running too long. An empty reply with a
+zero exit is also a failure. In any of those cases say so plainly and do the work
+yourself; never quote a failure back as though the worker had considered the
+question.
 
 1. Show the worker's answer **verbatim** in a quoted block, labelled with which
    account produced it. Do not summarise it and do not soften it. The reason to
@@ -184,7 +197,7 @@ lives only in the delegation log is lost.
 Review what has been delegated:
 
 ```bash
-python3 scripts/report.py 7
+python3 "$SW/scripts/report.py" 7
 ```
 
 ## When it goes wrong

@@ -11,5 +11,11 @@ cp -R "$SRC/second-wind" "$DEST/second-wind"
 chmod +x "$DEST/second-wind/scripts/"*.sh "$DEST/second-wind/scripts/"*.py 2>/dev/null || true
 echo "Installed to $DEST/second-wind"
 echo
-echo "Next, in a Claude Code session:   /second-wind setup"
-echo "or from a terminal:               python3 $DEST/second-wind/scripts/setup.py --discover"
+echo
+echo "Note: this COPIES the skill. Re-run install.sh after editing the checkout."
+echo
+echo "Next, in a Claude Code session, say:  set up second-wind"
+echo "or from a terminal:"
+echo "  python3 $DEST/second-wind/scripts/setup.py --discover"
+echo "  python3 $DEST/second-wind/scripts/setup.py --write --primary ~/.claude --secondary <dir>"
+echo "  python3 $DEST/second-wind/scripts/setup.py --check"

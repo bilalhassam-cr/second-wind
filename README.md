@@ -29,15 +29,23 @@ gets close to its limit, the heavy lifting moves across so you can keep working.
 
 ## Requirements
 
-- Claude Code, and `jq`
-- Python 3.8 or newer
-- At least one of: a second Claude account, or Codex signed in to a ChatGPT plan
+- **The `claude` CLI on your PATH.** The desktop app alone does not put it there.
+  Without it, account discovery reports every profile as unknown and signed out.
+- `jq`, and Python 3.8 or newer
+- At least one of: a second Claude account, or the `codex` CLI signed in to a
+  ChatGPT plan
 - macOS or Linux
+
+Built and tested on macOS 26.5 with Claude Code 2.1.238 and Codex 0.150.1. The
+status bar needs a Claude Code build that reports `rate_limits` to the status
+line; `setup.py --check` tells you whether yours does. Flags on both CLIs move,
+so if a worker starts failing immediately, check that the flags in
+`scripts/run.sh` still exist in your version.
 
 ## Install
 
 ```bash
-git clone https://github.com/<you>/second-wind.git
+git clone https://github.com/YOUR-USERNAME/second-wind.git
 cd second-wind && ./install.sh
 ```
 
@@ -49,8 +57,19 @@ python3 ~/.claude/skills/second-wind/scripts/setup.py \
   --write --primary ~/.claude --secondary ~/.claude-secondary
 ```
 
-Restart Claude Code for the status bar. No second account yet? It is one directory
-and one sign-in: see `second-wind/references/setup.md`.
+Create the second profile **before** running setup: it is one directory and one
+sign-in, described in `second-wind/references/setup.md`. Setup refuses to write a
+config for a profile that does not exist or is not signed in.
+
+Restart Claude Code afterwards. Both the status bar and the automatic handover
+stay inert until you do. Then confirm it is actually working:
+
+```bash
+python3 ~/.claude/skills/second-wind/scripts/setup.py --check
+```
+
+That prints whether handover is armed, and if not, the one condition blocking it.
+It is the first thing to run whenever something seems wrong.
 
 ## Using it
 
@@ -60,14 +79,15 @@ other account do the research." "I am nearly out of usage, move this across."
 Under the hood every call goes through one runner, which is what records it:
 
 ```bash
-scripts/run.sh secondary prompt.txt --review    # read-only, independent
-scripts/run.sh codex     prompt.txt --work      # full access, does the job
+SW=~/.claude/skills/second-wind
+"$SW/scripts/run.sh" secondary prompt.txt --review   # no edit tools, no shell
+"$SW/scripts/run.sh" codex     prompt.txt --work     # full access, does the job
 ```
 
 Review what has been delegated:
 
 ```bash
-python3 scripts/report.py 7
+python3 "$SW/scripts/report.py" 7
 ```
 
 ## Three things worth knowing
@@ -88,19 +108,27 @@ that worker not to attempt browser work. This matters most in projects whose own
 instructions say to verify rendered output in a real browser, because the worker
 will otherwise follow them straight into the crash.
 
-## On terms of use
+## On terms of use, read this before installing
 
-This runs the official clients, one sign-in per account, each subscription paying
-its own way. That is different in kind from a relay multiplexing several
-subscriptions through one endpoint, which is the pattern that draws enforcement.
-Do not build one on top of this.
+Be clear-eyed about what this does. It moves your work to another account when
+the first one is close to its limit. Anthropic's usage policy has a clause about
+circumventing rate limits and capacity restrictions, and whether routine use of a
+second subscription you pay for falls under it is not something this README can
+settle for you. Read your own plan's terms and decide:
 
-Failover hands over **at a task boundary and tells you it did**, rather than
-rotating silently mid-request. That is partly about staying on the right side of
-the line and partly because you should know which account did your work.
+- Anthropic: <https://www.anthropic.com/legal/consumer-terms> and
+  <https://www.anthropic.com/legal/aup>
+- OpenAI: <https://openai.com/policies/terms-of-use>
 
-Sharing a login with another person is prohibited by the terms outright. One
-person holding two subscriptions of their own is not.
+What the design does do: official clients only, one sign-in per account, each
+subscription billed to itself, no relay or proxy multiplexing several accounts
+through one endpoint. Handover happens at a task boundary and announces itself,
+so you always know which account did the work. Nobody outside those companies
+knows how enforcement actually works, and this project makes no claim about it.
+
+If an account is suspended, it is your account and your risk. Automation driving
+a personal subscription is exactly the case worth checking your own terms on
+before you install this.
 
 ## Uninstall
 
@@ -109,8 +137,11 @@ python3 ~/.claude/skills/second-wind/scripts/setup.py --uninstall
 rm -rf ~/.second-wind ~/.claude/skills/second-wind
 ```
 
-Settings files are restored from the backups setup made. Your accounts are
-untouched.
+Uninstall removes the two keys it added and puts back any status line it
+replaced. It does not roll the whole settings file back, though setup did leave a
+timestamped backup of it beside the original. **Run the uninstall before the
+`rm -rf`**, because the replaced status line is stored under `~/.second-wind`.
+Your accounts are untouched.
 
 ## Licence
 

@@ -10,7 +10,7 @@ record it, and refuse to delegate browser work to a worker that cannot do it.
 
 Prints JSON. Changes nothing except a temporary Chrome profile it removes.
 """
-import json, os, shutil, subprocess, sys, tempfile
+import json, os, shutil, socket, subprocess, sys, tempfile
 
 def probe_browser_in_codex_sandbox(codex_bin):
     """Returns (can_launch, detail). A worker that fails here must never be sent
@@ -27,19 +27,31 @@ def probe_browser_in_codex_sandbox(codex_bin):
     if not codex_bin:
         return None, "codex not installed"
 
+    # a free port, not a fixed one: a second setup run or anything already
+    # listening would otherwise produce a false "inconclusive"
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
     tmp = tempfile.mkdtemp(prefix="second-wind-probe-")
     script = os.path.join(tmp, "probe.sh")
     with open(script, "w") as f:
         f.write(
             '#!/bin/sh\n'
             'D=$(mktemp -d)\n'
-            f'"{browser}" --headless=new --remote-debugging-port=9//PORT// '
+            # Headed, not headless. The crash this guard exists for is Chrome
+            # aborting in TransformProcessType because it cannot reach the window
+            # server, and a headless launch never asks the window server for
+            # anything. Probing headless would report "can launch" and the real
+            # crash would still happen.
+            f'"{browser}" --remote-debugging-port={port} '
             '--user-data-dir="$D" --no-first-run --no-default-browser-check '
-            '--disable-extensions about:blank >/dev/null 2>&1 &\n'
+            '--disable-extensions --disable-gpu about:blank >/dev/null 2>&1 &\n'
             'P=$!\n'
             'sleep 4\n'
-            'if kill -0 $P 2>/dev/null; then echo ALIVE; kill $P 2>/dev/null; else echo DIED; fi\n'
-            'rm -rf "$D"\n'.replace("9//PORT//", "9873")
+            'if kill -0 $P 2>/dev/null; then echo ALIVE; kill $P 2>/dev/null; '
+            'else echo DIED; fi\n'
+            'rm -rf "$D"\n'
         )
     os.chmod(script, 0o755)
     try:
