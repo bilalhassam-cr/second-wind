@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "primary": {
+    "kind": "claude",
+    "label": "primary",
+    "config_dir": "~/.claude",
+    "account": "you@example.com",
+    "note": "The account this session runs on. Orchestrates, decides, keeps the context."
+  },
+  "secondary": {
+    "kind": "claude",
+    "label": "secondary",
+    "config_dir": "~/.claude-secondary",
+    "account": "other@example.com",
+    "enabled": true,
+    "note": "A second Claude subscription with its own separate usage allowance."
+  },
+  "codex": {
+    "kind": "codex",
+    "label": "codex",
+    "enabled": true,
+    "account": "you@example.com",
+    "can_launch_browser": false,
+    "note": "OpenAI Codex on a ChatGPT subscription. Independent of both Claude allowances."
+  },
+  "thresholds": {
+    "five_hour_pct": 90,
+    "seven_day_pct": 80
+  },
+  "failover": {
+    "enabled": true,
+    "announce": true
+  },
+  "defaults": {
+    "mode": "review"
+  },
+  "log_dir": "~/.second-wind/log",
+  "timeout_seconds": 600
+}
