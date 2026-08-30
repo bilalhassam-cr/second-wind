@@ -30,11 +30,11 @@ python3 scripts/setup.py --show | jq '.codex'
 python3 scripts/probe.py
 ```
 
-The second command checks how the runner invokes Codex and whether a browser file
-exists. It launches nothing. `can_launch_browser` is always false when Codex is
-installed because every runner invocation is sandboxed. Keep browser work on the
-primary session. Do not "fix" it by disabling the worker's sandbox: that trades a
-dialog for unrestricted disk access.
+The second command reports the constant imposed by the runner. It launches
+nothing. `can_launch_browser` is always false when Codex is installed because
+every runner invocation is sandboxed. Keep browser work on the primary session.
+Do not "fix" it by disabling the worker's sandbox: that trades a dialog for
+unrestricted disk access.
 
 If a project has its own browser QA harness, put a line in that project's
 instructions saying which runtime may run it. The worker reads those instructions
@@ -57,17 +57,20 @@ Read the reply, not the exit code. In `--work` mode, verify the artefact.
 python3 "$SW/scripts/setup.py" --check
 ```
 
-It prints every link in the chain and names the one condition that is blocking
+It prints every link in the chain and names the conditions that are blocking
 handover. Almost everything below is faster to diagnose from that output.
 
 ## The status bar is blank, or shows no percentages
 
-In order: the bar only appears after a Claude Code restart; the limit figures only
-exist once the account has had a reply in that session; and some builds or plans
-do not report `rate_limits` to the status line at all, in which case handover
-cannot work and `--check` will keep saying NONE YET. No cached figure means the
-guard stays quiet, which is deliberate: acting on a stale number is worse than
-not acting.
+Status lines run in Claude Code terminal sessions. The desktop app does not run
+them, so it never writes `usage-primary.json` and automatic handover cannot arm
+for desktop-only use. Manual delegation through `scripts/run.sh` still works in
+desktop and terminal workflows.
+
+In a terminal, the bar only appears after a Claude Code restart and the limit
+figures only exist once the account has had a reply in that session. No cached
+figure means the guard stays quiet, which is deliberate: acting on a stale number
+is worse than not acting.
 
 ## Failover will not fire
 

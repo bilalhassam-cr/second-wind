@@ -1,99 +1,94 @@
-# Testing second-wind: a pack for a first-time installer
+# Testing second-wind
 
-You are the first person to install this who did not build it. That is exactly
-what makes your feedback useful. Please do not fix anything, do not read the
-source first, and do not work around problems. Follow the README as written and
-record what happens, including the parts that go wrong.
+These notes cover repository checks and a clean-install exercise. Record the
+operating system, Claude Code and Codex versions, available worker accounts, and
+whether the primary session runs in a terminal or the desktop app.
 
-Budget about 30 minutes.
+Linux is expected to work but remains untested. Add the distribution and shell to
+any Linux result.
 
-## Before you start
+## Repository checks
 
-Say what you are starting from:
+Run from the repository root:
 
-- Operating system and version
-- Do you have one Claude account or two?
-- Do you have Codex signed in to a ChatGPT plan?
-- Do you use Claude Code in the terminal, in the desktop app, or both?
+```bash
+python3 -m compileall -q second-wind/scripts
+for file in second-wind/scripts/*.sh install.sh; do sh -n "$file"; done
+shellcheck -s sh second-wind/scripts/*.sh install.sh
+```
 
-That last one matters more than it looks.
+Then reproduce the policy checks in `.github/workflows/checks.yml`. The tree must
+contain no personal email addresses, and the project rule also forbids em dashes.
 
-## Start the log
+## Clean-install exercise
+
+Budget about 30 minutes. Use accounts and directories that the tester controls.
+Do not repair the checkout while testing the documented path, because a workaround
+can hide the first-install fault being measured.
+
+Optionally start a terminal transcript:
 
 ```bash
 mkdir -p ~/second-wind-test
 script -q ~/second-wind-test/session.log
 ```
 
-That records everything you type and everything you see, into one file. Type
-`exit` when you are done. If `script` is not available, just copy and paste your
-terminal output into a file instead.
+Type `exit` when finished. If `script` is unavailable, save the terminal output
+another way. Logs and `setup.py --show` can contain account identifiers, so redact
+them before sharing.
 
-## The run
+Follow the README in order:
 
-Work through the README from the top. At each step, note:
+1. Install the skill.
+2. Restart Claude Code, then ask it to set up second-wind.
+3. Create and sign in to a secondary profile if required.
+4. Discover the available workers and write the config.
+5. Restart after the settings change.
+6. Run `setup.py --check` and verify that it reports the status line and usage
+   guard as installed.
 
-1. What you expected to happen
-2. What actually happened
-3. Whether you had to think, guess, or look something up
+For every step, record what was expected, what happened, the exact error if any,
+and any point where the next action was unclear.
 
-The steps are: install, create a second profile if you do not have one, discover,
-write the config, restart, then `--check`.
+## Behaviour checks
 
-**Please record every moment where you were unsure what to do next.** Those are
-worth more than the errors, because errors announce themselves and confusion does
-not.
+Ask for an independent review of a real item without naming second-wind or one of
+its commands. Then test these separately:
 
-## Then try to use it
+- delegate a piece of work in `--work` mode;
+- ask for the primary usage reading;
+- ask whether automatic handover is armed;
+- write each of `secondary`, `codex` and `both` to `~/.second-wind/mode`, submit a
+  prompt after each change, then remove the file;
+- inspect the latest exchange and ledger entries with `scripts/report.py 7`.
 
-Ask Claude, in your own words, for a second opinion on something real you are
-working on. Do not use the phrase "second wind" and do not name any command. We
-need to know whether it works when nobody is helping it along.
+In work mode, use a disposable directory. The worker runs unattended with its
+permission prompts disabled or automatically approved.
 
-Then try these, in your own words:
+## Expected limitations
 
-- Have the other account do a piece of actual work, not just review it
-- Ask what your usage is
-- Ask it to check whether the automatic handover is armed
+- The desktop app does not run status lines. It cannot write the usage cache or
+  arm automatic handover, although manual delegation still works.
+- Delegated secondary work uses `claude -p`, which runs no status line. A
+  `usage-secondary.json` reading is normally absent and is not refreshed by
+  delegated work.
+- Codex workers are sandboxed and cannot launch a browser. No test should try to
+  launch one from a worker.
 
-## What to send back
+## Result format
 
-One file, `~/second-wind-test/report.md`, with these five headings. Blunt is
-better than polite; the point is to find what is broken.
+Keep a short report with these headings:
 
 ```markdown
-## Where I started
-(OS, accounts, terminal or desktop app)
+## Environment
 
 ## What worked
-(one line each)
 
 ## What broke
-(what you did, what you expected, what happened, the exact error)
 
-## Where I was confused
-(the moments you had to guess, even if you guessed right)
+## Where the instructions were unclear
+
+## Checks and command output
 
 ## Would I keep it
-(yes or no, and the single change that would most improve it)
 ```
-
-Send that file plus `session.log`, plus the output of these three commands:
-
-```bash
-python3 ~/.claude/skills/second-wind/scripts/setup.py --check
-python3 ~/.claude/skills/second-wind/scripts/setup.py --show
-python3 ~/.claude/skills/second-wind/scripts/report.py 7
-```
-
-`--show` includes your account email addresses. Redact them if you would rather
-not share those; nothing else in it is sensitive.
-
-## Two things that are known to be shaky
-
-Tell us if you hit either, but they are not surprises:
-
-- The status bar and the automatic handover are inert until you restart Claude
-  Code. If `--check` says NONE YET after a restart and one message, say so: that
-  is the failure we most want to hear about.
-- Everything so far has only ever run on one Mac. Anything on Linux is untested.

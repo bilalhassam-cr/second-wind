@@ -13,11 +13,21 @@ set -u
 SW_HOME="${SW_HOME:-$HOME/.second-wind}"
 CFG="$SW_HOME/config.json"
 [ -f "$CFG" ] || exit 0
-[ -f "$SW_HOME/no-failover" ] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 # jq's // treats false as absent, so `.failover.enabled // true` reads a
 # deliberate false as true and failover could not be switched off in config.
 cfgbool() { jq -r "if $1 == null then \"\" else ($1|tostring) end" "$CFG"; }
+expand() { case "$1" in "~"/*) printf '%s' "$HOME/${1#"~/"}";; *) printf '%s' "$1";; esac; }
+
+# Setup installs this hook into both profiles so uninstall remains symmetric, but
+# the cache below is deliberately the primary cache. Letting the secondary run it
+# would describe the primary's figures as its own and could tell it to route work
+# to itself. An unset CLAUDE_CONFIG_DIR is the default primary profile.
+primary_dir=$(expand "$(jq -r '.primary.config_dir // empty' "$CFG")")
+current_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+[ -n "$primary_dir" ] && [ "${current_dir%/}" = "${primary_dir%/}" ] || exit 0
+
+[ -f "$SW_HOME/no-failover" ] && exit 0
 fo=$(cfgbool '.failover.enabled'); [ "$fo" = "false" ] && exit 0
 is_int() { case "${1:-}" in ''|*[!0-9]*) return 1;; *) return 0;; esac; }
 # BSD date takes -r, GNU date takes -d @epoch
@@ -28,6 +38,31 @@ input=$(cat 2>/dev/null)
 case "$input" in
   *"<system-reminder>"*|*"<task-notification>"*|*"<command-name>"*) exit 0 ;;
 esac
+
+# A mode file is an explicit task-boundary override, so it is handled before any
+# usage reading. It still honours the master failover switches above, and invalid
+# contents stay silent rather than routing work somewhere the user did not name.
+manual_mode=""
+[ -f "$SW_HOME/mode" ] && manual_mode=$(tr -d '[:space:]' < "$SW_HOME/mode" 2>/dev/null)
+case "$manual_mode" in
+  secondary) manual_workers="the secondary Claude account" ;;
+  codex) manual_workers="Codex" ;;
+  both) manual_workers="the secondary Claude account and Codex" ;;
+  *) manual_workers="" ;;
+esac
+if [ -n "$manual_workers" ]; then
+  msg="[second-wind] Manual routing override '$manual_mode' is active.
+
+Before starting the task in this message, tell the user in one line that you are routing
+the heavy work to $manual_workers, then send the substantial pieces there through
+second-wind. Keep orchestrating, reconciling and deciding on this account.
+
+Hand over at this task boundary, never part-way through a job already running here. If
+the user tells you to keep the work on this account, do that without arguing. Remove
+$SW_HOME/mode to return to usage-based handover."
+  jq -n --arg m "$msg" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$m}}'
+  exit 0
+fi
 
 t5=$(jq -r '.thresholds.five_hour_pct // 90' "$CFG"); is_int "$t5" || t5=90
 t7=$(jq -r '.thresholds.seven_day_pct // 80' "$CFG"); is_int "$t7" || t7=80
@@ -56,9 +91,12 @@ resets=$(jq -r '.five_hour_resets_at // empty' "$pf")
 resets_txt=""
 [ -n "$resets" ] && resets_txt=" The 5-hour window resets at $(hm "$resets")."
 
-# is the secondary itself in trouble?
+# Delegated secondary work uses print mode, which runs no status line. A secondary
+# reading therefore comes only from a separate interactive session and is usually
+# absent or behind the work delegated since it was written.
 sf="$SW_HOME/usage-secondary.json"
 sec_note=""
+[ "$sec_on" = "true" ] && sec_note=" Note: secondary usage is usually unknown because delegated print-mode sessions do not run a status line. Do not assume it has headroom."
 if [ -f "$sf" ]; then
   sfc=$(jq -r '.cached_at // 0' "$sf"); is_int "$sfc" || sfc=0
   sfa=$(( $(date +%s) - sfc ))

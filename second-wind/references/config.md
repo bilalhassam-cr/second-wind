@@ -32,9 +32,10 @@ so crossing it matters more than a 5-hour window that refills within the day.
 ~/.second-wind/
 ├── config.json            the settings above
 ├── usage-primary.json     last limit reading, written by the status bar
-├── usage-secondary.json   the same for the second account
+├── usage-secondary.json   last interactive secondary reading, usually absent because delegated print mode runs no status line
 ├── no-failover            present = automatic handover off
+├── mode                   optional manual override: secondary, codex or both
 └── log/
     ├── YYYY-MM.jsonl      one line per delegated call
-    └── <ts>-<worker>-<folder>.md   full prompt and reply
+    └── <ts>-<pid>-<worker>-<folder>.md   full prompt and reply
 ```

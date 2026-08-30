@@ -20,7 +20,8 @@ gets close to its limit, the heavy lifting moves across so you can keep working.
   not guess, because guessing sends your main work to the wrong subscription.
 - **Two modes.** Read-only for adversarial review, full access for real work.
 - **Automatic failover.** At 90% of your 5-hour window or 80% of your weekly one,
-  work routes to the other account. Both numbers are yours to change.
+  a hook asks the model to route the heavy work to another account, and the model
+  usually complies. Both numbers are yours to change.
 - **A status bar** showing which account you are on and how much of each limit is
   left.
 - **A log of everything delegated**, including the failures, because a delegation
@@ -34,22 +35,28 @@ gets close to its limit, the heavy lifting moves across so you can keep working.
 - `jq`, and Python 3.8 or newer
 - At least one of: a second Claude account, or the `codex` CLI signed in to a
   ChatGPT plan
-- macOS or Linux
+- macOS. Linux is expected to work, but has not been tested.
+- A Claude Code terminal session for automatic handover. Status lines run in the
+  terminal, and the desktop app does not run them, so desktop-only use never
+  writes the usage cache and cannot arm automatic handover. Manual delegation
+  through the skill still works in desktop and terminal workflows.
 
-Built and tested on macOS 26.5 with Claude Code 2.1.238 and Codex 0.150.1. The
-status bar needs a Claude Code build that reports `rate_limits` to the status
-line; `setup.py --check` tells you whether yours does. Flags on both CLIs move,
-so if a worker starts failing immediately, check that the flags in
-`scripts/run.sh` still exist in your version.
+Static script and repository policy checks have been run on macOS 26.5. Earlier
+end-to-end behaviour was exercised there with Claude Code 2.1.251 and Codex
+0.150.1, but against a divergent local copy. This installable repository has not
+yet been clean-installed and exercised end to end. Flags on both CLIs move, so if
+a worker starts failing immediately, check that the flags in `scripts/run.sh`
+still exist in your version.
 
 ## Install
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/second-wind.git
+git clone https://github.com/bilalhassam-cr/second-wind.git
 cd second-wind && ./install.sh
 ```
 
-Then, in a Claude Code session, say `set up second-wind`, or from a terminal:
+Restart Claude Code so a new session can see the copied skill. Then say `set up
+second-wind`, or run setup from a terminal:
 
 ```bash
 python3 ~/.claude/skills/second-wind/scripts/setup.py --discover
@@ -61,14 +68,15 @@ Create the second profile **before** running setup: it is one directory and one
 sign-in, described in `second-wind/references/setup.md`. Setup refuses to write a
 config for a profile that does not exist or is not signed in.
 
-Restart Claude Code afterwards. Both the status bar and the automatic handover
-stay inert until you do. Then confirm it is actually working:
+After setup writes the profile settings, restart Claude Code once more. Both the
+status bar and automatic handover stay inert until you do. Then confirm it is
+actually working:
 
 ```bash
 python3 ~/.claude/skills/second-wind/scripts/setup.py --check
 ```
 
-That prints whether handover is armed, and if not, the one condition blocking it.
+That prints whether handover is armed, and if not, the conditions blocking it.
 It is the first thing to run whenever something seems wrong.
 
 ## Using it
@@ -83,6 +91,19 @@ SW=~/.claude/skills/second-wind
 "$SW/scripts/run.sh" secondary prompt.txt --review   # no edit tools, no shell
 "$SW/scripts/run.sh" codex     prompt.txt --work     # full access, does the job
 ```
+
+Claude review mode blocks its built-in edit and shell tools, but it cannot
+constrain write-capable MCP servers configured in the secondary profile. Codex
+review mode uses a read-only sandbox.
+
+Work mode runs the Claude worker with all permission prompts disabled, or Codex
+with automatic approval, in your current directory. Do not point it at a
+directory you would not let an unattended agent modify.
+
+To force every task boundary to a worker regardless of usage, write `secondary`,
+`codex` or `both` to `~/.second-wind/mode`. Remove the file to return to
+usage-based handover. The `no-failover` file and `failover.enabled: false` remain
+master switches.
 
 Review what has been delegated:
 

@@ -28,7 +28,7 @@ up, then get on with what the user actually asked for.** Never let a missing
 optional tool block the task: they came here to do something else.
 
 If it prints NOT ARMED, the delegation commands still work; only the automatic
-handover is inert. The `--check` output names the single condition blocking it.
+handover is inert. The `--check` output names the conditions blocking it.
 
 ## Setting it up
 
@@ -53,16 +53,17 @@ handover is inert. The `--check` output names the single condition blocking it.
 3. Write the config:
 
    ```bash
-   python3 "$SW/scripts/setup.py" --write \\
+   python3 "$SW/scripts/setup.py" --write \
      --primary ~/.claude --secondary ~/.claude-secondary
    ```
 
    Optional: `--codex off`, `--five-hour 85`, `--seven-day 75`,
    `--default-mode work`, `--no-failover`.
 
-   This probes what each worker can do, writes `~/.second-wind/config.json`, and
-   adds a status bar and a usage guard to both profiles' settings files, backing
-   each up first and leaving every other setting untouched.
+   This records the constraints imposed by each worker command, writes
+   `~/.second-wind/config.json`, and adds a status bar and a usage guard to both
+   profiles' settings files, backing each up first and leaving every other
+   setting untouched.
 
 4. Tell them to restart Claude Code so the status bar appears, and that the limit
    figures only exist after the first reply in a session.
@@ -87,7 +88,8 @@ turns quoting into the hard part of the job.
 ### The two modes
 
 **`--review` blocks the file-editing tools and the shell.** On the Claude worker
-that is `--disallowed-tools`; on Codex it is a real read-only sandbox. Use
+that is `--disallowed-tools`, which does not constrain write-capable MCP servers
+configured in the secondary profile. On Codex it is a real read-only sandbox. Use
 it when you want the work challenged, and whenever you are still part-way through
 a job yourself: two sessions editing the same files will clobber each other, and a
 reviewer that has not seen the conversation may "fix" something that was
@@ -170,6 +172,10 @@ terms-of-use position is in the README; do not restate it here.
 
 Turn it off with `touch ~/.second-wind/no-failover`, or `failover.enabled: false`
 in the config.
+
+To force routing at every task boundary regardless of usage, write `secondary`,
+`codex` or `both` to `~/.second-wind/mode`. Remove that file to return to
+usage-based handover. The master failover switches still take precedence.
 
 ## Reporting back, and the record
 

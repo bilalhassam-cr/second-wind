@@ -99,7 +99,10 @@ trap cleanup EXIT
 # macOS has no timeout(1), and a hung worker would hang the caller. Run it in the
 # background, poll, kill the whole process group if it overruns.
 sw_run() {
-  set +m 2>/dev/null
+  # Job control gives the background worker its own process group. The worker can
+  # spawn grandchildren, so killing only its direct children leaves processes
+  # behind after a timeout.
+  set -m 2>/dev/null
   secs=$1; shift
   t_start=$(date +%s)
   outf=$(mktemp "${TMPDIR:-/tmp}/second-wind-out.XXXXXX")
@@ -109,11 +112,9 @@ sw_run() {
   while kill -0 "$pid" 2>/dev/null; do
     i=$((i+1))
     if [ "$i" -ge "$secs" ]; then
-      pkill -TERM -P "$pid" 2>/dev/null || true   # children first, or they outlive the parent
-      kill -TERM "$pid" 2>/dev/null
+      kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
       sleep 2
-      pkill -KILL -P "$pid" 2>/dev/null || true
-      kill -KILL "$pid" 2>/dev/null
+      kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
       timed_out=1; break
     fi
     sleep 1

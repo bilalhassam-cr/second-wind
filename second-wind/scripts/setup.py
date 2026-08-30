@@ -62,7 +62,7 @@ def merge_settings(config_dir, install=True):
                 data = json.load(f)
         except Exception:
             print(f"  ! {tilde(p)} is not valid JSON. Leaving it alone.", file=sys.stderr)
-            return None
+            return False
     b = backup(p)
 
     sl_cmd = os.path.join(HERE, "statusline.sh")
@@ -155,7 +155,7 @@ def cmd_write(a):
         sys.exit(f"second-wind: primary {a.primary} is not signed in. Sign it in first, "
                  "or pass --force.")
 
-    print("Checking what each worker can do...")
+    print("Recording the constraints imposed by each worker command...")
     probe = json.loads(subprocess.run(
         [sys.executable, os.path.join(HERE, "probe.py")],
         capture_output=True, text=True).stdout or "{}")
@@ -204,8 +204,14 @@ def cmd_write(a):
     write_json(CONFIG, cfg)
 
     b = merge_settings(cfg["primary"]["config_dir"], install=True)
+    if b is False:
+        sys.exit("second-wind: could not install the primary status line and usage guard. "
+                 "Fix its settings.json and run --write again.")
     if a.secondary:
-        merge_settings(cfg["secondary"]["config_dir"], install=True)
+        sb = merge_settings(cfg["secondary"]["config_dir"], install=True)
+        if sb is False:
+            sys.exit("second-wind: could not install the secondary status line and usage "
+                     "guard. Fix its settings.json and run --write again.")
 
     print(f"\nWrote {tilde(CONFIG)}")
     if b:
@@ -258,13 +264,36 @@ def cmd_check():
     t5 = cfg["thresholds"]["five_hour_pct"]; t7 = cfg["thresholds"]["seven_day_pct"]
     print(f"thresholds      5h {t5}%   7d {t7}%")
 
+    primary_settings = settings_path(cfg["primary"]["config_dir"])
+    sl_cmd = os.path.join(HERE, "statusline.sh")
+    guard_cmd = os.path.join(HERE, "usage-guard.sh")
+    try:
+        with open(primary_settings) as f:
+            settings = json.load(f)
+        status_installed = settings.get("statusLine", {}).get("command") == sl_cmd
+        prompt_hooks = settings.get("hooks", {}).get("UserPromptSubmit", [])
+        guard_installed = any(
+            hook.get("command") == guard_cmd
+            for group in prompt_hooks if isinstance(group, dict)
+            for hook in (group.get("hooks") or []) if isinstance(hook, dict)
+        )
+        print(f"status line      {'installed' if status_installed else 'MISSING'}")
+        print(f"usage guard      {'installed' if guard_installed else 'MISSING'}")
+        if not status_installed or not guard_installed:
+            print(f"                Check {tilde(primary_settings)} or run --write again.")
+            ok = False
+    except Exception as e:
+        print(f"settings         UNREADABLE: {tilde(primary_settings)}: {e}")
+        ok = False
+
     usage = os.path.join(SW_HOME, "usage-primary.json")
     if not os.path.exists(usage):
         print("reading         NONE YET")
-        print("                The status bar has not written one. Until it does, handover")
-        print("                cannot fire. Restart Claude Code and send one message, then")
-        print("                run this again. If it stays empty, your build may not report")
-        print("                rate_limits to the status line.")
+        print("                Only a terminal status line writes this cache. The desktop app")
+        print("                does not run status lines, so desktop-only use cannot arm")
+        print("                automatic handover. In a terminal, restart Claude Code, send")
+        print("                one message, then run this again. Manual delegation through")
+        print("                scripts/run.sh still works in terminal and desktop workflows.")
         ok = False
     else:
         try:
@@ -281,7 +310,7 @@ def cmd_check():
 
     print()
     print("ARMED: handover will fire when a threshold is crossed" if ok
-          else "NOT ARMED: fix the line marked above")
+          else "NOT ARMED: fix the failures shown above")
 
 def cmd_uninstall():
     if os.path.exists(CONFIG):
