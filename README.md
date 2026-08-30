@@ -103,8 +103,11 @@ profile.
 
 **A sandboxed worker cannot launch a browser.** Codex runs seatbelt-sandboxed and
 Chrome aborts at startup inside it, which surfaces to you as a "quit unexpectedly"
-dialog with nothing explaining why. Setup probes this once, and the runner tells
-that worker not to attempt browser work. This matters most in projects whose own
+dialog with nothing explaining why. The browser guard is always on for Codex
+because the runner always passes its own sandbox flag in both review and work mode.
+That command-line flag overrides `sandbox_mode`, so the user's Codex configuration
+does not change the result. Nothing is launched by this check. The runner tells the
+worker not to attempt browser work. This matters most in projects whose own
 instructions say to verify rendered output in a real browser, because the worker
 will otherwise follow them straight into the crash.
 

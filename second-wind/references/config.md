@@ -9,7 +9,7 @@ setup. `scripts/setup.py --show` prints it.
 | `secondary.config_dir` | The second Claude profile. Its own account, its own allowance. |
 | `secondary.enabled` | Set false to leave it out entirely. |
 | `codex.enabled` | Whether Codex is available as a worker. |
-| `codex.can_launch_browser` | Written by the probe. When false, the runner warns the worker off browser work. Do not set this by hand: it is a measured fact. |
+| `codex.can_launch_browser` | Always false for Codex because the runner always passes its own sandbox flag in both review and work mode. The command-line flag overrides `sandbox_mode`, so the user's Codex configuration does not change this. It is null only when Codex is not installed. Nothing is launched. When the value is not true, the runner warns the worker off browser work. |
 | `thresholds.five_hour_pct` | Failover trigger for the 5-hour window. Default 90. |
 | `thresholds.seven_day_pct` | Failover trigger for the weekly window. Default 80. |
 | `failover.enabled` | Master switch for automatic handover. |

@@ -33,4 +33,4 @@ Do not "simplify" these away; each cost real debugging time.
 - `codex login status` writes to stderr.
 - `--approve-for-me` cannot be combined with `-s`.
 - macOS has no `timeout(1)`; the runner has its own watchdog.
-- A sandboxed worker cannot launch a browser, so the probe records it and the runner warns the worker off.
+- A sandboxed worker cannot launch a browser, so the runner warns the worker off. A capability probe must not reproduce the failure it detects; the default probe launches nothing. When inferring instead of measuring, infer from the command the code actually uses, not from a setting that command overrides.

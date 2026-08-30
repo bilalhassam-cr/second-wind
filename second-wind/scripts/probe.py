@@ -1,16 +1,32 @@
 #!/usr/bin/env python3
-"""Test what each worker can actually do, rather than assuming.
+"""Determine what each worker can actually do, rather than assuming.
 
 The browser probe exists because of a real failure: Codex runs inside a seatbelt
 sandbox, and Chrome aborts at launch there (SIGABRT in TransformProcessType)
 because it cannot reach the window server. The user sees a "Google Chrome quit
 unexpectedly" dialog and nothing explains why. Any project whose instructions say
-to verify rendered output in a real browser will trigger it. So we find out once,
-record it, and refuse to delegate browser work to a worker that cannot do it.
+to verify rendered output in a real browser will trigger it. The default probe uses
+the sandbox mode imposed by the runner, so finding out cannot reproduce the crash it
+exists to prevent. The old live test remains available only as an explicit opt-in.
 
-Prints JSON. Changes nothing except a temporary Chrome profile it removes.
+Prints JSON. By default it launches nothing and changes nothing. With `--live`, it
+creates a temporary Chrome profile and removes it afterwards.
 """
-import json, os, shutil, socket, subprocess, sys, tempfile
+import argparse, json, os, shutil, socket, subprocess, sys, tempfile
+
+def probe_browser_from_runner(codex_bin):
+    """Returns (can_launch, detail) without launching a browser.
+
+    This is a property of how run.sh invokes Codex, not of Codex itself. If a
+    future runner path invokes Codex without a sandbox, that path may make true
+    possible and must determine the capability from the invocation it uses.
+    """
+    if not codex_bin:
+        return None, "codex not installed"
+    return False, ("run.sh passes -s read-only in review mode and --approve-for-me in "
+                   "work mode, which uses the workspace-write sandbox; these command-line "
+                   "choices override sandbox_mode, so the user's config does not change "
+                   "this, and a sandboxed process cannot reach the window server")
 
 def probe_browser_in_codex_sandbox(codex_bin):
     """Returns (can_launch, detail). A worker that fails here must never be sent
@@ -84,8 +100,21 @@ def probe_browser_direct():
     return (b is not None), (b or "no browser found")
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--live", action="store_true",
+        help="run the headed browser launch test instead of using the runner's invocation")
+    args = parser.parse_args()
+
+    if args.live:
+        print("WARNING: --live will crash a browser once and the user will see a system dialog.",
+              file=sys.stderr, flush=True)
+
     codex_bin = shutil.which("codex")
-    can, detail = probe_browser_in_codex_sandbox(codex_bin)
+    if args.live:
+        can, detail = probe_browser_in_codex_sandbox(codex_bin)
+    else:
+        can, detail = probe_browser_from_runner(codex_bin)
     direct_ok, direct_detail = probe_browser_direct()
     print(json.dumps({
         "codex": {"can_launch_browser": can, "detail": detail},

@@ -155,7 +155,7 @@ def cmd_write(a):
         sys.exit(f"second-wind: primary {a.primary} is not signed in. Sign it in first, "
                  "or pass --force.")
 
-    print("Probing what each worker can do (about 5 seconds)...")
+    print("Checking what each worker can do...")
     probe = json.loads(subprocess.run(
         [sys.executable, os.path.join(HERE, "probe.py")],
         capture_output=True, text=True).stdout or "{}")
@@ -216,7 +216,7 @@ def cmd_write(a):
     else:
         print("  secondary none (Codex only)")
     print(f"  codex     {'on, ' + cfg['codex']['account'] if codex_on else 'off'}")
-    if codex_on and codex_browser is False:
+    if codex_on and codex_browser is not True:
         print("  note: codex cannot launch a browser in its sandbox, so browser work")
         print("        will never be delegated to it. This is expected, not a fault.")
     print(f"  failover  {'on' if cfg['failover']['enabled'] else 'off'} "

@@ -133,9 +133,11 @@ runner is what actually shifts the load.
 
 **A sandboxed worker cannot launch a browser.** Codex runs seatbelt-sandboxed, and
 Chrome aborts at startup inside it because it cannot reach the window server. The
-user sees a "quit unexpectedly" dialog and nothing explains why. Setup probes this
-once and records the answer, and the runner prepends a line to that worker's
-prompts telling it not to try.
+user sees a "quit unexpectedly" dialog and nothing explains why. The browser guard
+is always on for Codex because the runner passes its own sandbox flag in both review
+and work mode. That command-line flag overrides `sandbox_mode`, so the user's Codex
+configuration does not change the result. Nothing is launched by this check. The
+runner prepends a line to the worker's prompts telling it not to try.
 
 So do not delegate browser QA, screenshot verification, scroll or motion checks,
 or anything using a CDP harness, puppeteer or playwright, to a worker whose

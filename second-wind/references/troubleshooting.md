@@ -19,17 +19,22 @@ browser profile yourself, and check `auth status` afterwards.
 
 Expected, and already handled. A sandboxed worker cannot launch a browser: it
 aborts at startup because it cannot reach the window server, and the operating
-system shows a "quit unexpectedly" dialog. Setup probes this and the runner warns
-the worker off. If it still happens:
+system shows a "quit unexpectedly" dialog. The browser guard is always on for
+Codex because the runner passes its own sandbox flag in both review and work mode.
+That command-line flag overrides `sandbox_mode`, so the user's Codex configuration
+does not change the result. The check launches nothing. If a browser still crashes
+during delegated work:
 
 ```bash
 python3 scripts/setup.py --show | jq '.codex'
 python3 scripts/probe.py
 ```
 
-If `can_launch_browser` is false, keep browser work on the primary session. Do not
-"fix" it by disabling the worker's sandbox: that trades a dialog for unrestricted
-disk access.
+The second command checks how the runner invokes Codex and whether a browser file
+exists. It launches nothing. `can_launch_browser` is always false when Codex is
+installed because every runner invocation is sandboxed. Keep browser work on the
+primary session. Do not "fix" it by disabling the worker's sandbox: that trades a
+dialog for unrestricted disk access.
 
 If a project has its own browser QA harness, put a line in that project's
 instructions saying which runtime may run it. The worker reads those instructions
