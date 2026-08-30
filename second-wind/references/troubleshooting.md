@@ -82,9 +82,16 @@ than an hour because a window may have reset since.
 ## Undo everything
 
 ```bash
-python3 scripts/setup.py --uninstall
-rm -rf ~/.second-wind
+python3 ~/.claude/skills/second-wind/scripts/setup.py --uninstall
+rm -rf ~/.second-wind ~/.claude/skills/second-wind
 ```
 
-That restores both settings files from the backups it made and leaves the accounts
-themselves alone.
+Run the uninstall **before** the `rm -rf`, because any status line it replaced is
+stored under `~/.second-wind` and is put back from there.
+
+It removes the two keys it added, the status line and the usage-guard hook, and
+restores whatever status line was there before. It does not roll the whole
+settings file back to how it was. Setup left a timestamped copy of the original
+beside it, so a full rollback is a manual file copy if you ever want one.
+
+Your accounts, their logins and their own settings are untouched throughout.

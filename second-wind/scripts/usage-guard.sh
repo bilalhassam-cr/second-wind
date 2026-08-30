@@ -25,7 +25,10 @@ expand() { case "$1" in "~"/*) printf '%s' "$HOME/${1#"~/"}";; *) printf '%s' "$
 # to itself. An unset CLAUDE_CONFIG_DIR is the default primary profile.
 primary_dir=$(expand "$(jq -r '.primary.config_dir // empty' "$CFG")")
 current_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
-[ -n "$primary_dir" ] && [ "${current_dir%/}" = "${primary_dir%/}" ] || exit 0
+# Compare resolved paths, so a symlinked or differently spelled config dir does
+# not silently disarm the guard in a session that really is the primary.
+resolve() { [ -d "$1" ] && (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "${1%/}"; }
+[ -n "$primary_dir" ] && [ "$(resolve "$current_dir")" = "$(resolve "$primary_dir")" ] || exit 0
 
 [ -f "$SW_HOME/no-failover" ] && exit 0
 fo=$(cfgbool '.failover.enabled'); [ "$fo" = "false" ] && exit 0
