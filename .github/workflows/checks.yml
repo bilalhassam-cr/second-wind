@@ -28,4 +28,10 @@ jobs:
              | grep -viE '/Users/<|/home/<|youruser|yourname'; then
             echo "absolute home path found; use ~ or \$HOME"; fail=1
           fi
+          # An em dash is easy to reintroduce in prose and violates the public
+          # writing convention even though it is not personal data.
+          emdash=$(printf '\342\200\224')
+          if grep -rn "$emdash" --exclude-dir=.git .; then
+            echo "em dash found; use British punctuation without em dashes"; fail=1
+          fi
           exit $fail

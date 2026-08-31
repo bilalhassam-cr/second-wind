@@ -16,6 +16,7 @@ echo "Note: this COPIES the skill. Re-run install.sh after editing the checkout.
 echo
 echo "Next, in a Claude Code session, say:  set up second-wind"
 echo "or from a terminal:"
-echo "  python3 $DEST/second-wind/scripts/setup.py --discover"
+echo "  python3 $DEST/second-wind/scripts/setup.py --detect"
 echo "  python3 $DEST/second-wind/scripts/setup.py --write --primary ~/.claude --secondary <dir>"
+echo "  python3 $DEST/second-wind/scripts/setup.py --accounts"
 echo "  python3 $DEST/second-wind/scripts/setup.py --check"

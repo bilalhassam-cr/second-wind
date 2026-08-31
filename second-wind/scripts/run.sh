@@ -3,6 +3,8 @@
 #
 #   run.sh secondary <prompt-file> [--review|--work] [--model M] [--effort E]
 #   run.sh codex     <prompt-file> [--review|--work] [--model M] [--effort E]
+#   run.sh grok      <prompt-file> [--review|--work] [--model M] [--effort E]
+#   run.sh cursor    <prompt-file> [--review|--work] [--model M]
 #
 # Prints the worker's reply on stdout. The call is logged either way, because a
 # delegation that failed quietly is the failure mode this exists to prevent: the
@@ -12,13 +14,13 @@ umask 077   # exchanges hold whole prompts and replies; they are nobody else's b
 
 SW_HOME="${SW_HOME:-$HOME/.second-wind}"
 CFG="$SW_HOME/config.json"
-[ -f "$CFG" ] || { echo "second-wind: not set up. Run scripts/setup.py --discover" >&2; exit 2; }
+[ -f "$CFG" ] || { echo "second-wind: not set up. Run scripts/setup.py --detect" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "second-wind: jq is required" >&2; exit 2; }
 need_bin() { command -v "$1" >/dev/null 2>&1 || { echo "second-wind: '$1' is not on PATH. Without it a delegation fails as a shell error that gets logged as though it were the worker's reply." >&2; exit 2; }; }
 
 worker=${1:-}; promptfile=${2:-}
 [ -n "$worker" ] && [ -f "$promptfile" ] || {
-  echo "usage: run.sh <secondary|codex> <prompt-file> [--review|--work] [--model M] [--effort E]" >&2; exit 2; }
+  echo "usage: run.sh <secondary|codex|grok|cursor> <prompt-file> [--review|--work] [--model M] [--effort E]" >&2; exit 2; }
 shift 2
 
 cfg() { jq -r "$1 // empty" "$CFG"; }
@@ -83,9 +85,8 @@ if [ "$worker" = codex ] && [ "$cb" != "true" ]; then
   guard="You are running inside a sandbox and cannot launch a web browser: it will abort at startup. Do not run any browser, headless browser, CDP harness, puppeteer or playwright step, even if this project's instructions tell you to verify rendered output that way. Hand that step back instead and say which step you skipped."
 fi
 
-# The prompt goes on stdin, never as an argument. Both CLIs have variadic options
-# (--add-dir, --disallowed-tools) that swallow a following positional argument,
-# and a long prompt would hit the argument-size limit besides.
+# The prompt is assembled once. Claude, Codex and Cursor read it on stdin. Grok's
+# single-turn flag requires its prompt as the immediately following argument.
 sendfile=$(mktemp "${TMPDIR:-/tmp}/second-wind-prompt.XXXXXX") || { echo "second-wind: cannot create a temp file" >&2; exit 2; }
 cleanup() { rm -f "$sendfile" 2>/dev/null; }
 trap 'cleanup; exit 130' INT TERM
@@ -167,6 +168,37 @@ case "$worker" in
     fi
     [ -n "$model" ] && set -- "$@" -m "$model"
     [ -n "$effort" ] && set -- "$@" -c "model_reasoning_effort=\"$effort\""
+    sw_run "$tmo" "$@"; rc=$?
+    ;;
+  grok)
+    [ "$(cfgbool '.grok.enabled')" = "true" ] || { echo "second-wind: grok is disabled in config" >&2; exit 2; }
+    need_bin grok
+    acct=$(cfg '.grok.account')
+    # The developer API is a separate paid product. Grok Build must spend the
+    # consumer subscription, never XAI_API_KEY.
+    unset XAI_API_KEY
+    grok_prompt=$(cat "$sendfile")
+    if [ "$mode" = review ]; then
+      set -- grok --disallowed-tools "Write,Edit,Bash"
+    else
+      set -- grok --permission-mode bypassPermissions
+    fi
+    [ -n "$model" ] && set -- "$@" --model "$model"
+    [ -n "$effort" ] && set -- "$@" --reasoning-effort "$effort"
+    # Keep this last: a flag between -p and the prompt is parsed as the missing
+    # --single value and Grok exits before doing any work.
+    set -- "$@" -p "$grok_prompt"
+    sw_run "$tmo" "$@"; rc=$?
+    ;;
+  cursor)
+    [ "$(cfgbool '.cursor.enabled')" = "true" ] || { echo "second-wind: cursor is disabled in config" >&2; exit 2; }
+    need_bin cursor-agent
+    [ -z "$effort" ] || { echo "second-wind: --effort is not supported by cursor-agent; choose a parameterised --model instead" >&2; exit 2; }
+    acct=$(cfg '.cursor.account')
+    set -- cursor-agent -p --trust
+    # --trust only skips the workspace prompt. It does not prevent writes.
+    [ "$mode" = review ] && set -- "$@" --mode ask
+    [ -n "$model" ] && set -- "$@" --model "$model"
     sw_run "$tmo" "$@"; rc=$?
     ;;
   *) rm -f "$sendfile"; echo "second-wind: unknown worker '$worker'" >&2; exit 2 ;;

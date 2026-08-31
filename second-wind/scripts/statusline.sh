@@ -37,8 +37,10 @@ if [ -f "$CFG" ]; then
   ex() { case "$1" in "~"/*) printf '%s' "$HOME/${1#"~/"}";; *) printf '%s' "$1";; esac; }
   pd=$(ex "$(jq -r '.primary.config_dir // empty' "$CFG" 2>/dev/null)")
   sd=$(ex "$(jq -r '.secondary.config_dir // empty' "$CFG" 2>/dev/null)")
+  rd=$(ex "$(jq -r '.reader.config_dir // empty' "$CFG" 2>/dev/null)")
   [ -n "$pd" ] && [ "$here" = "$pd" ] && role=primary
   [ -n "$sd" ] && [ "$here" = "$sd" ] && role=secondary
+  [ -n "$rd" ] && [ "$here" = "$rd" ] && role=reader
 fi
 [ -n "$role" ] || role=$(printf '%s' "${acct:-unknown}" | cut -d@ -f1)
 
@@ -65,7 +67,7 @@ fi
 [ -n "$out" ] || out="\033[2mno usage reported yet\033[0m"
 printf '%b' "$out"
 
-# cache, keyed by role so the two profiles never overwrite each other
+# Profiles must not overwrite each other's cache or hide a failed refresh.
 if [ -n "$five" ] || [ -n "$week" ]; then
   mkdir -p "$SW_HOME" 2>/dev/null
   f="$SW_HOME/usage-${role:-unknown}.json"
@@ -76,5 +78,7 @@ if [ -n "$five" ] || [ -n "$week" ]; then
       five_hour_resets_at:$r5,seven_day_resets_at:$r7,cached_at:$t}' \
     > "$f.tmp.$$" 2>/dev/null && mv "$f.tmp.$$" "$f" 2>/dev/null
   chmod 600 "$f" 2>/dev/null || true
+  printf '%s\n' "OK: interactive status line wrote this reading." \
+    > "$SW_HOME/refresh-status-${role:-unknown}.txt" 2>/dev/null || true
 fi
 exit 0

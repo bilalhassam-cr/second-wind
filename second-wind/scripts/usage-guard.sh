@@ -30,6 +30,13 @@ current_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
 resolve() { [ -d "$1" ] && (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "${1%/}"; }
 [ -n "$primary_dir" ] && [ "$(resolve "$current_dir")" = "$(resolve "$primary_dir")" ] || exit 0
 
+# Ask the refresh wrapper to read prompt-free usage panels when their cached
+# figures are stale. The wrapper enforces its interval and lock.
+script_dir=$(CDPATH= cd "$(dirname "$0")" 2>/dev/null && pwd)
+if [ -x "$script_dir/usage-refresh.sh" ]; then
+  nohup "$script_dir/usage-refresh.sh" >/dev/null 2>&1 </dev/null &
+fi
+
 [ -f "$SW_HOME/no-failover" ] && exit 0
 fo=$(cfgbool '.failover.enabled'); [ "$fo" = "false" ] && exit 0
 is_int() { case "${1:-}" in ''|*[!0-9]*) return 1;; *) return 0;; esac; }
@@ -50,7 +57,10 @@ manual_mode=""
 case "$manual_mode" in
   secondary) manual_workers="the secondary Claude account" ;;
   codex) manual_workers="Codex" ;;
+  grok) manual_workers="Grok Build" ;;
+  cursor) manual_workers="Cursor Agent" ;;
   both) manual_workers="the secondary Claude account and Codex" ;;
+  all) manual_workers="every enabled worker" ;;
   *) manual_workers="" ;;
 esac
 if [ -n "$manual_workers" ]; then
@@ -71,6 +81,10 @@ t5=$(jq -r '.thresholds.five_hour_pct // 90' "$CFG"); is_int "$t5" || t5=90
 t7=$(jq -r '.thresholds.seven_day_pct // 80' "$CFG"); is_int "$t7" || t7=80
 pf="$SW_HOME/usage-primary.json"
 [ -f "$pf" ] || exit 0
+primary_status="$SW_HOME/refresh-status-primary.txt"
+if [ -f "$primary_status" ]; then
+  case "$(sed -n '1p' "$primary_status" 2>/dev/null)" in OK*) ;; *) exit 0;; esac
+fi
 
 # a stale reading is worse than none: the window may already have reset
 cached=$(jq -r '.cached_at // 0' "$pf"); is_int "$cached" || exit 0
@@ -90,16 +104,15 @@ hit5=no; hit7=no
 sec_acct=$(jq -r '.secondary.account // "the secondary account"' "$CFG")
 sec_on=$(cfgbool '.secondary.enabled'); [ -n "$sec_on" ] || sec_on=true
 codex_on=$(cfgbool '.codex.enabled'); [ -n "$codex_on" ] || codex_on=false
+grok_on=$(cfgbool '.grok.enabled'); [ -n "$grok_on" ] || grok_on=false
+cursor_on=$(cfgbool '.cursor.enabled'); [ -n "$cursor_on" ] || cursor_on=false
 resets=$(jq -r '.five_hour_resets_at // empty' "$pf")
 resets_txt=""
 [ -n "$resets" ] && resets_txt=" The 5-hour window resets at $(hm "$resets")."
 
-# Delegated secondary work uses print mode, which runs no status line. A secondary
-# reading therefore comes only from a separate interactive session and is usually
-# absent or behind the work delegated since it was written.
 sf="$SW_HOME/usage-secondary.json"
 sec_note=""
-[ "$sec_on" = "true" ] && sec_note=" Note: secondary usage is usually unknown because delegated print-mode sessions do not run a status line. Do not assume it has headroom."
+[ "$sec_on" = "true" ] && sec_note=" Note: check the sorted accounts view before choosing a destination."
 if [ -f "$sf" ]; then
   sfc=$(jq -r '.cached_at // 0' "$sf"); is_int "$sfc" || sfc=0
   sfa=$(( $(date +%s) - sfc ))
@@ -117,6 +130,8 @@ which=""
 workers="the secondary Claude account ($sec_acct)"
 [ "$sec_on" = "true" ] || workers=""
 [ "$codex_on" = "true" ] && workers="${workers:+$workers, or }Codex"
+[ "$grok_on" = "true" ] && workers="${workers:+$workers, or }Grok Build"
+[ "$cursor_on" = "true" ] && workers="${workers:+$workers, or }Cursor Agent"
 [ -n "$workers" ] || exit 0
 
 msg="[second-wind] This account is running low: ${which}.${resets_txt}${sec_note}

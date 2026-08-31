@@ -68,6 +68,53 @@ the CLI reads that same sign-in and needs no separate login.
 
 `codex doctor` is the fast health check.
 
+Sign in with `codex login` and verify with `codex login status`. Codex needs a
+ChatGPT plan and spends that plan's allowance.
+
+## Grok Build
+
+Grok Build is included with SuperGrok and X Premium+. Install and sign in:
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login
+```
+
+It installs at `~/.grok/bin/grok`. Verify the sign-in with `grok models`, which
+sends no model prompt.
+
+**Never set `XAI_API_KEY`.** The `api.x.ai` developer API is a separate paid
+product. Grok Build must use the consumer allowance. Work uses
+`grok --permission-mode bypassPermissions -p "<prompt>"`; review uses
+`grok --disallowed-tools "Write,Edit,Bash" -p "<prompt>"`. The prompt must follow
+`-p` immediately.
+
+Grok `/usage` has one weekly window and no 5-hour window.
+
+## Cursor Agent
+
+Cursor Agent uses Cursor Pro. Install and sign in:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+cursor-agent login
+```
+
+Verify with `cursor-agent status --format json`. Work uses
+`cursor-agent -p --trust`. Review must add `--mode ask`. `--trust` by itself is
+not read-only and wrote a file during live testing.
+
+Headless runs can authenticate with `CURSOR_API_KEY`, but `/usage` requires the
+interactive browser login. Its monthly view reports Included, Auto and API pools
+plus a reset date. On-demand may appear unavailable even when the account holds
+credit.
+
+## The `agent` command collision
+
+Cursor's installer runs `rm -f ~/.local/bin/agent` and takes that generic name.
+That can delete Grok's `agent` alias, but Grok's `grok` command survives. Always
+use `grok` and `cursor-agent`, never `agent`.
+
 ## Terms of use
 
 Covered once, in the README. Read it before installing.

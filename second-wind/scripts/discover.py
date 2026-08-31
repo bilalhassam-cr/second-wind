@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""Find every Claude account and Codex install on this machine, and report what
-each one actually is. Prints JSON on stdout. Changes nothing.
+"""Find every supported account and worker command on this machine.
+
+Prints JSON on stdout and changes nothing. Grok Build does not expose a passive
+login-status command, so discovery reports its installation state without
+starting the client or guessing about authentication.
 
 It reports rather than decides on purpose: which account should be primary is a
 judgement about how someone works, not something a script can infer.
@@ -109,12 +112,51 @@ def codex_info():
         "account": acct or "unknown",
     }
 
+def grok_info():
+    b = shutil.which("grok")
+    if not b:
+        return {"installed": False, "logged_in": None}
+    return {
+        "installed": True,
+        "bin": b,
+        "logged_in": None,
+        "status": "not checked: Grok has no passive login-status command",
+    }
+
+def cursor_info():
+    b = shutil.which("cursor-agent")
+    if not b:
+        return {"installed": False, "logged_in": False}
+    try:
+        p = subprocess.run(
+            [b, "status", "--format", "json"], capture_output=True,
+            text=True, timeout=25, env=dict(os.environ),
+        )
+        data = first_json(p.stdout or p.stderr)
+    except Exception:
+        p, data = None, {}
+    user = data.get("user") if isinstance(data.get("user"), dict) else {}
+    account = (data.get("email") or data.get("account") or
+               user.get("email") or "unknown")
+    logged = bool(p and p.returncode == 0 and data)
+    if os.environ.get("CURSOR_API_KEY"):
+        logged = True
+    return {
+        "installed": True,
+        "bin": b,
+        "logged_in": logged,
+        "account": account,
+        "auth": "interactive login or CURSOR_API_KEY" if logged else "not signed in",
+    }
+
 def main():
     cb = shutil.which("claude")
     print(json.dumps({
         "claude_bin": cb or "",
         "claude_profiles": claude_profiles(cb),
         "codex": codex_info(),
+        "grok": grok_info(),
+        "cursor": cursor_info(),
     }, indent=2))
 
 if __name__ == "__main__":

@@ -1,17 +1,19 @@
 {
-  "version": 1,
+  "version": 3,
   "primary": {
     "kind": "claude",
     "label": "primary",
     "config_dir": "~/.claude",
-    "account": "you@example.com",
+    "account": "redacted",
+    "plan": "subscription",
     "note": "The account this session runs on. Orchestrates, decides, keeps the context."
   },
   "secondary": {
     "kind": "claude",
     "label": "secondary",
     "config_dir": "~/.claude-secondary",
-    "account": "other@example.com",
+    "account": "redacted",
+    "plan": "subscription",
     "enabled": true,
     "note": "A second Claude subscription with its own separate usage allowance."
   },
@@ -19,13 +21,35 @@
     "kind": "codex",
     "label": "codex",
     "enabled": true,
-    "account": "you@example.com",
+    "account": "redacted",
+    "plan": "subscription",
     "can_launch_browser": false,
     "note": "OpenAI Codex on a ChatGPT subscription. Independent of both Claude allowances."
+  },
+  "grok": {
+    "kind": "grok",
+    "label": "grok",
+    "enabled": true,
+    "account": "unknown",
+    "plan": "SuperGrok or X Premium+"
+  },
+  "cursor": {
+    "kind": "cursor",
+    "label": "cursor",
+    "enabled": true,
+    "account": "redacted",
+    "plan": "Cursor Pro"
   },
   "thresholds": {
     "five_hour_pct": 90,
     "seven_day_pct": 80
+  },
+  "refresh": {
+    "interval_minutes": 15,
+    "working_dir": "~/trusted-project",
+    "codex_enabled": true,
+    "grok_enabled": true,
+    "cursor_enabled": true
   },
   "failover": {
     "enabled": true,
