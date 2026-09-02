@@ -33,6 +33,24 @@ cfgbool() { jq -r "if $1 == null then \"\" else ($1|tostring) end" "$CFG"; }
 expand() { case "$1" in "~"/*) printf '%s' "$HOME/${1#"~/"}";; *) printf '%s' "$1";; esac; }
 is_int() { case "${1:-}" in ''|*[!0-9]*) return 1;; *) return 0;; esac; }
 
+# Every worker has to spend the subscription its own client is signed into. An
+# API key left in the environment makes the client bill that key instead,
+# quietly, and the delegation then costs money nobody meant to spend. Codex is
+# the sharpest case: its CLI prefers OPENAI_API_KEY over the ChatGPT login when
+# the variable is set. One list in one place, because three lists in three
+# branches is how one of them goes stale.
+creds_cleared=""
+isolate_credentials() {
+  case "$1" in
+    secondary) creds_cleared="ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN" ;;
+    codex)     creds_cleared="OPENAI_API_KEY" ;;
+    grok)      creds_cleared="XAI_API_KEY" ;;
+    cursor)    creds_cleared="CURSOR_API_KEY" ;;
+    *)         creds_cleared="" ;;
+  esac
+  for name in $creds_cleared; do unset "$name"; done
+}
+
 mode=$(cfg '.defaults.mode'); [ -n "$mode" ] || mode=review
 # an unrecognised mode used to fall through to full access, which is the wrong
 # way round for a default to fail
@@ -153,16 +171,14 @@ sw_run() {
   return $rc
 }
 
+isolate_credentials "$worker"
+
 case "$worker" in
   secondary)
     [ "$(cfgbool '.secondary.enabled')" = "false" ] && { echo "second-wind: secondary is disabled in config" >&2; exit 2; }
     need_bin claude
     dir=$(expand "$(cfg '.secondary.config_dir')")
     acct=$(cfg '.secondary.account')
-    # The worker has to spend the subscription this account is signed into. Any
-    # of these in the environment makes the CLI bill an API key instead, quietly,
-    # and the delegation then costs money nobody meant to spend.
-    unset ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN
     set -- claude -p --add-dir "$(pwd)"
     if [ "$mode" = review ]; then
       # Bash has to be blocked too. Without it a "read-only" reviewer can still
@@ -223,9 +239,6 @@ case "$worker" in
     [ "$(cfgbool '.grok.enabled')" = "true" ] || { echo "second-wind: grok is disabled in config" >&2; exit 2; }
     need_bin grok
     acct=$(cfg '.grok.account')
-    # The developer API is a separate paid product. Grok Build must spend the
-    # consumer subscription, never XAI_API_KEY.
-    unset XAI_API_KEY
     grok_prompt=$(cat "$sendfile")
     if [ "$mode" = review ]; then
       set -- grok --disallowed-tools "Write,Edit,Bash"
@@ -291,6 +304,7 @@ is_int "$reply_bytes" || reply_bytes=0
   printf -- '- Model: %s\n' "${model:-default}"
   printf -- '- Effort: %s\n' "${effort:-default}"
   printf -- '- Browser guard applied: %s\n' "$([ -n "$guard" ] && echo yes || echo no)"
+  printf -- '- Credentials isolated: %s\n' "${creds_cleared:-none}"
   printf -- '- Exit code: %s%s\n\n' "$rc" "$([ "$rc" = 124 ] && echo ' (killed on timeout)')"
   printf '## Prompt sent\n\n```\n'; cat "$sendfile"; printf '\n```\n\n'
   printf '## Reply\n\n'; cat "$bodyf"
@@ -335,6 +349,6 @@ printf '\n[second-wind] %s, %s mode, %ss, exit %s. Logged: %s\n' "$worker" "$mod
 # background: this run is finished and must not wait for a reader.
 if [ "${SW_NO_REFRESH:-}" != 1 ] && [ -f "$SCRIPT_DIR/usage-refresh.sh" ]; then
   nohup /bin/sh "$SCRIPT_DIR/usage-refresh.sh" --force --only "$worker" primary \
-    >/dev/null 2>&1 &
+    </dev/null >/dev/null 2>&1 &
 fi
 exit "$rc"

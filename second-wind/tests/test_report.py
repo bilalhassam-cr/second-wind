@@ -131,7 +131,7 @@ class Truncation(unittest.TestCase):
         data = bytes(range(256)) * 400          # 102400 bytes, no marker text in it
         limit = 8192
         body, _ = truncate.truncate(data, limit)
-        marker_at = body.find(b"[second-wind]")
+        marker_at = body.find(b"[second-wind:")
         self.assertGreater(marker_at, 0)
         head = body[:marker_at]
         tail = body[body.find(b"omitted here]") + len(b"omitted here]"):]
@@ -143,7 +143,7 @@ class Truncation(unittest.TestCase):
         data = b"z" * 30_000
         body, _ = truncate.truncate(data, 2048)
         text = body.decode("utf-8")
-        start = text.index("[second-wind] ") + len("[second-wind] ")
+        start = text.index("[second-wind: ") + len("[second-wind: ")
         stated = int(text[start:text.index(" bytes omitted here]")])
         kept = len(body) - len((truncate.MARKER % stated).encode("utf-8"))
         # what the marker claims was dropped plus what is still there is the
@@ -153,7 +153,7 @@ class Truncation(unittest.TestCase):
 
     def test_the_marker_text_is_the_agreed_wording(self):
         self.assertEqual(truncate.MARKER_TEXT % 42,
-                         "[second-wind] 42 bytes omitted here]")
+                         "[second-wind: 42 bytes omitted here]")
 
     def test_a_cut_never_leaves_half_a_character(self):
         # every character is three bytes, so a naive slice lands mid-character

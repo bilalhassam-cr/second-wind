@@ -27,7 +27,7 @@ import sys
 
 DEFAULT_MAX_KB = 200
 # Verbatim from the spec. The %d is the number of bytes dropped.
-MARKER_TEXT = "[second-wind] %d bytes omitted here]"
+MARKER_TEXT = "[second-wind: %d bytes omitted here]"
 # Blank lines around it so the marker reads as its own paragraph in the
 # markdown exchange rather than running into the reply text.
 MARKER = "\n\n" + MARKER_TEXT + "\n\n"
