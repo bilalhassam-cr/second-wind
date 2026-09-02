@@ -2,89 +2,318 @@
 """Summarise delegated work. Built for a weekly or monthly review.
 
     report.py [days]        default 7
+    report.py [days] --share
 
 The reverse check is the point: work handed out and never verified is the risk
 this log exists to expose. A delegated job that half-worked still returns text
 that reads like success, and its exit code is still zero.
+
+`--share` writes a single file you can hand to someone else, or paste into an
+issue, describing what this machine is running and what the last few
+delegations did. Email addresses become `<account>` and the home directory
+becomes `~`, so the file says what went wrong without saying who you are.
 """
-import json, os, sys, glob, time
+import glob
+import json
+import os
+import platform
+import re
+import subprocess
+import sys
+import time
 from collections import Counter
 
-DAYS = int(sys.argv[1]) if len(sys.argv) > 1 else 7
-SW_HOME = os.environ.get("SW_HOME", os.path.expanduser("~/.second-wind"))
-CFG = os.path.join(SW_HOME, "config.json")
-logdir = os.path.join(SW_HOME, "log")
-try:
-    with open(CFG) as f:
-        d = json.load(f).get("log_dir", "")
-    if d:
-        logdir = os.path.expanduser(d)
-except Exception:
-    pass
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import swlib  # noqa: E402
 
-if not os.path.isdir(logdir):
-    print(f"WARN second-wind: no log directory at {logdir}")
-    sys.exit(0)
+SHARE_PATH = os.path.join(os.path.expanduser("~"), "second-wind-test-report.md")
+FAIL_TAIL_LINES = 40
 
-cutoff = time.time() - DAYS * 86400
-def parse(ts):
+# Deliberately loose. A pattern that only catches well-formed addresses leaves
+# the malformed ones in, and it is the leftovers that get published.
+EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def redact(text):
+    """Strip the two things that identify a person: their address and their home
+    directory. Both appear in ordinary log output, so this runs over everything
+    the share file carries, including output captured from other scripts."""
+    if not text:
+        return ""
+    home = os.path.expanduser("~")
+    if home and home != "/":
+        text = text.replace(home, "~")
+    return EMAIL.sub("<account>", text)
+
+
+# ---------------------------------------------------------------- the ledger
+
+
+def log_dir():
+    """Where the ledgers and exchanges live. `log.dir` is the current key; the
+    old top-level `log_dir` is still read so an older config keeps working."""
+    cfg = swlib.load_config()
+    for value in ((cfg.get("log") or {}).get("dir"), cfg.get("log_dir")):
+        if value:
+            return os.path.expanduser(value)
+    return os.path.join(swlib.sw_home(), "log")
+
+
+def parse_ts(ts):
     try:
         return time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
     except Exception:
         return 0
 
-rows = []
-for f in sorted(glob.glob(os.path.join(logdir, "*.jsonl"))):
-    for line in open(f):
-        line = line.strip()
-        if not line:
-            continue
+
+def load_rows(logdir, days):
+    cutoff = time.time() - days * 86400
+    rows = []
+    for path in sorted(glob.glob(os.path.join(logdir, "*.jsonl"))):
         try:
-            r = json.loads(line)
-        except Exception:
+            handle = open(path)
+        except OSError:
             continue
-        if parse(r.get("ts", "")) >= cutoff:
-            rows.append(r)
+        with handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if parse_ts(row.get("ts", "")) >= cutoff:
+                    rows.append(row)
+    return rows
 
-if not rows:
-    print(f"PASS second-wind: nothing delegated in {DAYS} days "
-          "(the primary account carried all the work)")
-    sys.exit(0)
 
-by_worker = Counter(r.get("worker", "?") for r in rows)
-by_mode = Counter(r.get("mode", "?") for r in rows)
-fails = [r for r in rows if r.get("exit", 0) != 0]
-missing = [r for r in rows if not os.path.exists(r.get("exchange", ""))]
-secs = sum(r.get("duration_s", 0) for r in rows)
+def summary_lines(rows, days):
+    """The review itself, as lines. Same text on the terminal and in the share
+    file, so nobody has to reconcile two versions of the same finding."""
+    if not rows:
+        return ["PASS second-wind: nothing delegated in %d days "
+                "(the primary account carried all the work)" % days]
 
-parts = ", ".join(f"{n} {w}" for w, n in by_worker.most_common())
-modes = ", ".join(f"{n} {m}" for m, n in by_mode.most_common())
-status = "WARN" if (fails or missing) else "PASS"
-print(f"{status} second-wind: {len(rows)} calls in {DAYS} days ({parts}; {modes}), "
-      f"{secs // 60}m of work moved off the primary account, {len(fails)} failed")
+    by_worker = Counter(r.get("worker", "?") for r in rows)
+    by_mode = Counter(r.get("mode", "?") for r in rows)
+    fails = [r for r in rows if r.get("exit", 0) != 0]
+    missing = [r for r in rows if not os.path.exists(r.get("exchange", ""))]
+    secs = sum(r.get("duration_s", 0) for r in rows)
 
-if fails:
-    print("\nDo this: failed delegations to look at")
-    for r in fails[-3:]:
-        print(f"  - {r.get('ts','?')[:16]} {r.get('worker','?')} exit={r.get('exit')} "
-              f"in {os.path.basename(r.get('cwd','?'))}")
-        print(f"    {r.get('exchange','?')}")
+    parts = ", ".join("%d %s" % (n, w) for w, n in by_worker.most_common())
+    modes = ", ".join("%d %s" % (n, m) for m, n in by_mode.most_common())
+    status = "WARN" if (fails or missing) else "PASS"
+    out = ["%s second-wind: %d calls in %d days (%s; %s), %dm of work moved off "
+           "the primary account, %d failed"
+           % (status, len(rows), days, parts, modes, secs // 60, len(fails))]
 
-if missing:
-    print(f"\nWARN: {len(missing)} ledger entries point at an exchange file that is gone")
+    if fails:
+        out.append("")
+        out.append("Do this: failed delegations to look at")
+        for r in fails[-3:]:
+            out.append("  - %s %s exit=%s in %s"
+                       % (r.get("ts", "?")[:16], r.get("worker", "?"),
+                          r.get("exit"), os.path.basename(r.get("cwd", "?"))))
+            out.append("    %s" % r.get("exchange", "?"))
 
-big = [r for r in rows if r.get("reply_bytes", 0) > 3000 and r.get("exit", 0) == 0]
-if big:
-    print(f"\nWorth a look: {len(big)} substantial replies came back (over 3KB). "
-          "Confirm each finding landed in a memory file or a project file, not just here. "
-          "Neither worker's own memory is ever read by the primary session.")
-    for r in big[-3:]:
-        print(f"  - {r.get('ts','?')[:16]} {r.get('worker','?')} "
-              f"{r.get('reply_bytes')}b -> {os.path.basename(r.get('exchange',''))}")
+    if missing:
+        out.append("")
+        out.append("WARN: %d ledger entries point at an exchange file that is gone"
+                   % len(missing))
 
-thin = [r for r in rows if r.get("prompt_bytes", 0) > 4000
-        and r.get("reply_bytes", 0) < 500 and r.get("exit", 0) == 0]
-if thin:
-    print(f"\nWorth a look: {len(thin)} call(s) sent a large prompt and got a thin reply. "
-          "Delegating costs a prompt that has to carry context the worker lacks; when that "
-          "prompt is bigger than the answer, the job was cheaper done on the primary account.")
+    capped = [r for r in rows if r.get("truncated") is True]
+    if capped:
+        out.append("")
+        out.append("Note: %d exchange file(s) were capped on disk. The reply the "
+                   "caller saw was complete; the logged copy names the gap."
+                   % len(capped))
+
+    big = [r for r in rows if r.get("reply_bytes", 0) > 3000 and r.get("exit", 0) == 0]
+    if big:
+        out.append("")
+        out.append("Worth a look: %d substantial replies came back (over 3KB). "
+                   "Confirm each finding landed in a memory file or a project file, "
+                   "not just here. Neither worker's own memory is ever read by the "
+                   "primary session." % len(big))
+        for r in big[-3:]:
+            out.append("  - %s %s %sb -> %s"
+                       % (r.get("ts", "?")[:16], r.get("worker", "?"),
+                          r.get("reply_bytes"),
+                          os.path.basename(r.get("exchange", ""))))
+
+    thin = [r for r in rows if r.get("prompt_bytes", 0) > 4000
+            and r.get("reply_bytes", 0) < 500 and r.get("exit", 0) == 0]
+    if thin:
+        out.append("")
+        out.append("Worth a look: %d call(s) sent a large prompt and got a thin "
+                   "reply. Delegating costs a prompt that has to carry context the "
+                   "worker lacks; when that prompt is bigger than the answer, the "
+                   "job was cheaper done on the primary account." % len(thin))
+    return out
+
+
+# ---------------------------------------------------------------- share file
+
+
+def environment_lines():
+    cfg = swlib.load_config()
+    versions = swlib.client_versions()
+    clients = ", ".join("%s %s" % (name, version or "not installed")
+                        for name, version in sorted(versions.items()))
+    roles = swlib.enabled_roles(cfg)
+    return [
+        "- OS: %s" % platform.platform(),
+        "- Python: %s" % platform.python_version(),
+        "- Clients: %s" % clients,
+        "- Level: %s" % (cfg.get("level") or "not set in config"),
+        "- Config version: %s" % (cfg.get("version") or "unknown"),
+        "- Enabled workers: %s" % (", ".join(roles) if roles else "none"),
+        "- Log directory: %s" % swlib.tilde(log_dir()),
+    ]
+
+
+def status_lines():
+    """Every refresh-status file, in full. One stale line explains most of the
+    faults people report, and it is the first thing worth reading."""
+    out = []
+    for path in sorted(glob.glob(os.path.join(swlib.sw_home(),
+                                              "refresh-status-*.txt"))):
+        role = os.path.basename(path)[len("refresh-status-"):-len(".txt")]
+        try:
+            with open(path) as handle:
+                text = handle.read().strip()
+        except OSError as exc:
+            out.append("- %s: unreadable (%s)" % (role, exc))
+            continue
+        age = swlib.short_age(time.time() - os.path.getmtime(path))
+        lines = [line for line in text.splitlines() if line.strip()]
+        if not lines:
+            out.append("- %s: empty (%s ago)" % (role, age))
+            continue
+        out.append("- %s: %s (%s ago)" % (role, lines[0], age))
+        for extra in lines[1:]:
+            out.append("    %s" % extra)
+    return out or ["- no status files; the readers have not run"]
+
+
+def accounts_table():
+    script = os.path.join(HERE, "setup.py")
+    if not os.path.exists(script):
+        return "setup.py is not next to report.py, so no table could be produced."
+    try:
+        done = subprocess.run([sys.executable, script, "--accounts"],
+                              capture_output=True, text=True, timeout=120)
+    except Exception as exc:
+        return "The accounts table could not be produced (%s)." % exc
+    text = (done.stdout or "").strip()
+    if done.returncode != 0:
+        text = "%s\n[exit %d]\n%s" % (text, done.returncode,
+                                      (done.stderr or "").strip())
+    return keep_columns(text) or "The accounts table came back empty."
+
+
+def keep_columns(text):
+    """Redact the accounts table without wrecking its columns. The table is
+    padded to the width of the real account names, so swapping in a shorter
+    placeholder shifts every column after it. Padding the placeholder back to
+    the same width keeps the table readable, which is the point of including
+    it."""
+    def swap(match):
+        placeholder = "<account>"
+        pad = len(match.group(0)) - len(placeholder)
+        # Only pad inside a column. An address in a sentence is followed by
+        # punctuation, and padding that leaves a gap in the middle of a line.
+        after = text[match.end():match.end() + 1]
+        if pad > 0 and after == " ":
+            return placeholder + " " * pad
+        return placeholder
+    return EMAIL.sub(swap, text)
+
+
+def fail_tail(path, lines=FAIL_TAIL_LINES):
+    """The end of an exchange, which is where a failure explains itself: the
+    timeout notice, the last thing the worker tried, the error it printed. The
+    reply is the section worth reading, so the tail is taken from there when the
+    file has one, and from the whole file when it does not. Capped at 40 lines,
+    because this goes in a file somebody else reads."""
+    try:
+        with open(path, errors="replace") as handle:
+            text = handle.read()
+    except OSError as exc:
+        return "(exchange file unreadable: %s)" % exc
+    marker = "\n## Reply\n"
+    at = text.find(marker)
+    body = text[at + len(marker):] if at >= 0 else text
+    kept = body.splitlines()[-lines:]
+    tail = "\n".join(kept).strip()
+    return tail or "(no reply recorded)"
+
+
+def share_file(rows, days, logdir, path=SHARE_PATH):
+    parts = ["# second-wind test report", ""]
+    parts.append("Written %s. Home directory shown as ~ and email addresses "
+                 "replaced with <account>." % time.strftime("%Y-%m-%d %H:%M"))
+    parts += ["", "## Environment", ""] + environment_lines()
+    parts += ["", "## Reader status", ""] + status_lines()
+    parts += ["", "## Accounts", "", "```", accounts_table(), "```"]
+    parts += ["", "## Delegations, last %d days" % days, ""]
+    if not os.path.isdir(logdir):
+        parts.append("There is no log directory at %s." % swlib.tilde(logdir))
+    else:
+        parts += ["```"] + summary_lines(rows, days) + ["```"]
+
+    fails = [r for r in rows if r.get("exit", 0) != 0]
+    parts += ["", "## Failed exchanges", ""]
+    if not fails:
+        parts.append("None in this period.")
+    for r in fails:
+        parts.append("### %s %s, exit %s, %s mode"
+                     % (r.get("ts", "?")[:16], r.get("worker", "?"),
+                        r.get("exit"), r.get("mode", "?")))
+        parts.append("")
+        parts.append("Last %d lines of the reply:" % FAIL_TAIL_LINES)
+        parts.append("")
+        parts.append("```")
+        parts.append(fail_tail(r.get("exchange", "")))
+        parts.append("```")
+        parts.append("")
+
+    text = redact("\n".join(parts).rstrip() + "\n")
+    swlib.write_text_atomic(path, text)
+    return path
+
+
+# ---------------------------------------------------------------- entry point
+
+
+def main(argv):
+    days, share = 7, False
+    for arg in argv:
+        if arg == "--share":
+            share = True
+        elif arg.isdigit() and int(arg) > 0:
+            days = int(arg)
+        else:
+            sys.stderr.write("usage: report.py [days] [--share]\n")
+            return 2
+
+    logdir = log_dir()
+    rows = load_rows(logdir, days) if os.path.isdir(logdir) else []
+
+    if share:
+        path = share_file(rows, days, logdir)
+        print(path)
+        return 0
+
+    if not os.path.isdir(logdir):
+        print("WARN second-wind: no log directory at %s" % logdir)
+        return 0
+    for line in summary_lines(rows, days):
+        print(line)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

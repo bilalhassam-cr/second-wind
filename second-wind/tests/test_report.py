@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Tests for the report and for the exchange cap it reports on.
+
+Two things here are load bearing. The share file goes to someone else, so the
+redaction has to hold for the shapes a real log throws at it. And the cap
+decides what survives on disk, so its arithmetic is checked rather than eyeballed.
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "scripts")
+sys.path.insert(0, SCRIPTS)
+import truncate  # noqa: E402
+import report  # noqa: E402
+
+
+class Redaction(unittest.TestCase):
+    def test_email_becomes_account(self):
+        self.assertEqual(report.redact("signed in as someone@example.com now"),
+                         "signed in as <account> now")
+
+    def test_every_email_goes_not_only_the_first(self):
+        text = "a.person+tag@mail.example.com and other_1@sub.example.com"
+        self.assertEqual(report.redact(text), "<account> and <account>")
+
+    def test_home_directory_becomes_tilde(self):
+        home = os.path.expanduser("~")
+        text = "logged: %s/.second-wind/log/2026-09.jsonl" % home
+        self.assertEqual(report.redact(text),
+                         "logged: ~/.second-wind/log/2026-09.jsonl")
+
+    def test_both_in_one_line(self):
+        home = os.path.expanduser("~")
+        out = report.redact("%s/.claude holds me@example.com" % home)
+        self.assertEqual(out, "~/.claude holds <account>")
+        self.assertNotIn(home, out)
+
+    def test_email_inside_a_path_still_goes(self):
+        out = report.redact("/tmp/cache/me@example.com/session.json")
+        self.assertNotIn("@example.com", out)
+        self.assertIn("<account>", out)
+
+    def test_no_email_left_after_redacting_a_realistic_block(self):
+        home = os.path.expanduser("~")
+        block = "\n".join([
+            "- primary: OK (2m ago)",
+            "account first.last@example.com plan max",
+            "exchange %s/.second-wind/log/x.md" % home,
+            "LOGIN EXPIRED: sign in as ops@example.com",
+        ])
+        out = report.redact(block)
+        self.assertNotIn("@", out.replace("<account>", ""))
+        self.assertEqual(out.count("<account>"), 2)
+
+    def test_empty_and_none_are_safe(self):
+        self.assertEqual(report.redact(""), "")
+        self.assertEqual(report.redact(None), "")
+
+    def test_the_accounts_table_keeps_its_column_widths(self):
+        row = "secondary  someone@example.com  max        ready"
+        out = report.keep_columns(row)
+        self.assertNotIn("@", out)
+        self.assertEqual(len(out), len(row))
+        self.assertTrue(out.startswith("secondary  <account>"))
+
+    def test_an_address_shorter_than_the_placeholder_widens_the_line(self):
+        # Nothing can be trimmed to make room, so the column shifts: the
+        # placeholder is never cut down to fit. Assembled from pieces because
+        # any address written out whole in this repo has to sit under
+        # example.com, and no address that short can.
+        short = "a@" + "t" + ".co"
+        row = "primary  " + short + "  max"
+        out = report.keep_columns(row)
+        self.assertIn("<account>", out)
+        self.assertEqual(len(out), len(row) + len("<account>") - len(short))
+
+    def test_an_address_in_a_sentence_is_not_padded(self):
+        out = report.keep_columns("Work should go to: secondary "
+                                  "(someone@example.com)")
+        self.assertTrue(out.endswith("(<account>)"))
+
+    def test_ordinary_text_is_untouched(self):
+        self.assertEqual(report.redact("exit 0, 12s, review mode"),
+                         "exit 0, 12s, review mode")
+
+
+class LimitArithmetic(unittest.TestCase):
+    def test_kilobytes_become_bytes(self):
+        self.assertEqual(truncate.limit_bytes(200), 200 * 1024)
+        self.assertEqual(truncate.limit_bytes("50"), 50 * 1024)
+
+    def test_nonsense_falls_back_to_the_default(self):
+        for value in ("", None, "abc", 0, -5):
+            self.assertEqual(truncate.limit_bytes(value),
+                             truncate.DEFAULT_MAX_KB * 1024)
+
+
+class Truncation(unittest.TestCase):
+    def test_a_short_reply_is_left_exactly_as_it_came(self):
+        data = b"one line of reply\n"
+        body, cut = truncate.truncate(data, 1024)
+        self.assertEqual(body, data)
+        self.assertFalse(cut)
+
+    def test_a_reply_exactly_at_the_limit_is_not_cut(self):
+        data = b"x" * 1024
+        body, cut = truncate.truncate(data, 1024)
+        self.assertFalse(cut)
+        self.assertEqual(len(body), 1024)
+
+    def test_a_long_reply_is_cut_and_stays_inside_the_limit(self):
+        data = b"y" * 50_000
+        body, cut = truncate.truncate(data, 4096)
+        self.assertTrue(cut)
+        self.assertLessEqual(len(body), 4096)
+
+    def test_both_ends_survive(self):
+        data = b"HEAD" + b"m" * 50_000 + b"TAIL"
+        body, cut = truncate.truncate(data, 4096)
+        self.assertTrue(cut)
+        self.assertTrue(body.startswith(b"HEAD"))
+        self.assertTrue(body.endswith(b"TAIL"))
+
+    def test_the_split_is_three_quarters_head_one_quarter_tail(self):
+        data = bytes(range(256)) * 400          # 102400 bytes, no marker text in it
+        limit = 8192
+        body, _ = truncate.truncate(data, limit)
+        marker_at = body.find(b"[second-wind]")
+        self.assertGreater(marker_at, 0)
+        head = body[:marker_at]
+        tail = body[body.find(b"omitted here]") + len(b"omitted here]"):]
+        kept = len(head) + len(tail.strip())
+        # 75/25 of the budget, allowing for the marker and its blank lines
+        self.assertAlmostEqual(len(head) / float(kept), 0.75, delta=0.02)
+
+    def test_the_marker_names_the_number_of_bytes_dropped(self):
+        data = b"z" * 30_000
+        body, _ = truncate.truncate(data, 2048)
+        text = body.decode("utf-8")
+        start = text.index("[second-wind] ") + len("[second-wind] ")
+        stated = int(text[start:text.index(" bytes omitted here]")])
+        kept = len(body) - len((truncate.MARKER % stated).encode("utf-8"))
+        # what the marker claims was dropped plus what is still there is the
+        # size the worker actually sent
+        self.assertEqual(stated + kept, len(data))
+        self.assertGreater(stated, 0)
+
+    def test_the_marker_text_is_the_agreed_wording(self):
+        self.assertEqual(truncate.MARKER_TEXT % 42,
+                         "[second-wind] 42 bytes omitted here]")
+
+    def test_a_cut_never_leaves_half_a_character(self):
+        # every character is three bytes, so a naive slice lands mid-character
+        data = ("中" * 20_000).encode("utf-8")
+        body, cut = truncate.truncate(data, 4096)
+        self.assertTrue(cut)
+        body.decode("utf-8")          # raises if a cut split a character
+
+    def test_a_limit_smaller_than_the_marker_still_says_what_happened(self):
+        body, cut = truncate.truncate(b"q" * 5000, 8)
+        self.assertTrue(cut)
+        self.assertIn(b"bytes omitted here]", body)
+
+
+class TruncateCommandLine(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="sw-truncate-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.infile = os.path.join(self.dir, "full")
+        self.outfile = os.path.join(self.dir, "body")
+
+    def run_it(self, data, max_kb):
+        with open(self.infile, "wb") as handle:
+            handle.write(data)
+        done = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "truncate.py"),
+             self.infile, self.outfile, str(max_kb)],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return json.loads(done.stdout)
+
+    def test_it_reports_the_full_size_not_the_kept_size(self):
+        data = b"w" * 300_000
+        out = self.run_it(data, 1)
+        self.assertEqual(out["reply_bytes"], len(data))
+        self.assertTrue(out["truncated"])
+        self.assertLessEqual(out["kept_bytes"], 1024)
+        self.assertEqual(os.path.getsize(self.outfile), out["kept_bytes"])
+
+    def test_a_small_reply_passes_through_whole(self):
+        data = b"the whole reply\n"
+        out = self.run_it(data, 200)
+        self.assertFalse(out["truncated"])
+        self.assertEqual(out["reply_bytes"], len(data))
+        with open(self.outfile, "rb") as handle:
+            self.assertEqual(handle.read(), data)
+
+    def test_the_body_file_is_not_world_readable(self):
+        self.run_it(b"private\n", 200)
+        self.assertEqual(os.stat(self.outfile).st_mode & 0o077, 0)
+
+    def test_a_missing_input_file_fails_loudly(self):
+        done = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "truncate.py"),
+             os.path.join(self.dir, "nope"), self.outfile, "200"],
+            capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("cannot read", done.stderr)
+
+
+class LogDirectory(unittest.TestCase):
+    """The runner and the report have to agree on where the log is, including
+    for a config written before `log.dir` existed."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="sw-report-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.old = os.environ.get("SW_HOME")
+        os.environ["SW_HOME"] = self.dir
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        if self.old is None:
+            os.environ.pop("SW_HOME", None)
+        else:
+            os.environ["SW_HOME"] = self.old
+
+    def write_config(self, cfg):
+        with open(os.path.join(self.dir, "config.json"), "w") as handle:
+            json.dump(cfg, handle)
+
+    def test_new_key_wins(self):
+        self.write_config({"log": {"dir": "~/somewhere/new"},
+                           "log_dir": "~/somewhere/old"})
+        self.assertEqual(report.log_dir(),
+                         os.path.expanduser("~/somewhere/new"))
+
+    def test_old_key_still_read(self):
+        self.write_config({"log_dir": "~/somewhere/old"})
+        self.assertEqual(report.log_dir(),
+                         os.path.expanduser("~/somewhere/old"))
+
+    def test_neither_key_falls_back_under_sw_home(self):
+        self.write_config({})
+        self.assertEqual(report.log_dir(), os.path.join(self.dir, "log"))
+
+
+class Summary(unittest.TestCase):
+    def test_nothing_delegated_reads_as_a_pass(self):
+        lines = report.summary_lines([], 7)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("PASS"))
+
+    def test_a_failure_makes_it_a_warning_and_names_the_exchange(self):
+        rows = [{"ts": "2026-09-02T10:00:00Z", "worker": "codex", "mode": "work",
+                 "exit": 1, "duration_s": 5, "cwd": "/tmp/sw-test",
+                 "exchange": "/tmp/sw-test/gone.md"}]
+        text = "\n".join(report.summary_lines(rows, 7))
+        self.assertTrue(text.startswith("WARN"))
+        self.assertIn("gone.md", text)
+
+    def test_a_capped_exchange_is_called_out(self):
+        rows = [{"ts": "2026-09-02T10:00:00Z", "worker": "codex", "mode": "work",
+                 "exit": 0, "duration_s": 5, "cwd": "/tmp/sw-test",
+                 "exchange": __file__, "truncated": True, "reply_bytes": 900_000}]
+        text = "\n".join(report.summary_lines(rows, 7))
+        self.assertIn("capped on disk", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
