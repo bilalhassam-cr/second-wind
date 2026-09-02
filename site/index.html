@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>second-wind, private preview</title>
+<style>
+  :root {
+    --bg: #fbfaf8;
+    --panel: #ffffff;
+    --ink: #1a1a19;
+    --ink-soft: #55534e;
+    --line: #e2ded7;
+    --accent: #b4471c;
+    --code-bg: #f3f0ea;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413;
+      --panel: #1c1c1a;
+      --ink: #f2f0ec;
+      --ink-soft: #a8a49c;
+      --line: #302f2c;
+      --accent: #f0956a;
+      --code-bg: #232320;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.5;
+    min-height: 100vh;
+    display: flex;
+  }
+  main {
+    width: 100%;
+    max-width: 1060px;
+    margin: auto;
+    padding: 26px 20px 22px;
+  }
+  h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  h1 { font-size: 26px; font-weight: 650; letter-spacing: -0.02em; }
+  h2 { font-size: 15px; }
+  h3 { font-size: 14px; }
+  p { margin: 0; }
+  .lead { font-size: 16px; max-width: 58ch; margin-top: 6px; }
+  .soft { color: var(--ink-soft); }
+  .eyebrow {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.11em;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  header { padding-bottom: 14px; }
+  header .tag {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 9px;
+    margin-left: 10px;
+    vertical-align: 3px;
+    font-weight: 500;
+  }
+  section { padding: 12px 0; border-top: 1px solid var(--line); }
+  .grid { display: grid; gap: 16px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 13px 14px;
+  }
+  .card p { margin-top: 5px; color: var(--ink-soft); font-size: 13.5px; }
+  ol.steps { margin: 0; padding: 0; }
+  ol.steps li { list-style: none; display: flex; gap: 9px; align-items: baseline; font-size: 13.5px; }
+  .num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+    flex: none;
+  }
+  .stats { display: grid; gap: 14px; }
+  .stat .figure { font-size: 24px; font-weight: 600; font-family: var(--mono); letter-spacing: -0.03em; }
+  .stat .caption { font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
+  ul.plain { margin: 0; padding: 0; display: grid; gap: 9px; }
+  ul.plain li { list-style: none; font-size: 13.5px; }
+  ul.plain strong { font-weight: 600; }
+  ul.plain span { color: var(--ink-soft); }
+  pre {
+    margin: 0;
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 11px 12px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--ink);
+  }
+  code { font-family: var(--mono); }
+  footer {
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+    font-size: 12px;
+    color: var(--ink-soft);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    justify-content: space-between;
+  }
+  @media (min-width: 720px) {
+    .grid.two { grid-template-columns: 1fr 1fr; gap: 26px; }
+    .grid.three { grid-template-columns: repeat(3, 1fr); }
+    .stats { grid-template-columns: repeat(5, 1fr); }
+    ol.steps { grid-template-columns: repeat(4, 1fr); }
+    .install { grid-template-columns: 1.1fr 1fr; align-items: start; gap: 26px; }
+  }
+  @media (min-width: 1000px) {
+    body { font-size: 15px; }
+    main { padding: 22px 28px; }
+    h1 { font-size: 30px; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <h1>second-wind<span class="tag">private preview</span></h1>
+    <p class="lead">A Claude Code skill that hands work to the other AI subscriptions you already pay for, through their own clients, and logs every call.</p>
+  </header>
+
+  <section>
+    <div class="grid two">
+      <div>
+        <div class="eyebrow">Independence</div>
+        <h2>A reviewer that watched you build it is not a reviewer.</h2>
+        <p class="soft" style="margin-top:6px">A second Claude account, or Codex, arrives with none of your context. That is what you want when the work needs challenging rather than confirming.</p>
+      </div>
+      <div>
+        <div class="eyebrow">Headroom</div>
+        <h2>Every subscription has its own usage window.</h2>
+        <p class="soft" style="margin-top:6px">When your main account gets close to its limit, the heavy work moves to another account you already pay for and you carry on.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Three levels, chosen at setup</div>
+    <div class="grid three">
+      <div class="card">
+        <h3>Reviewer</h3>
+        <p>Read-only second opinions. Nothing in your session changes and no hooks are installed.</p>
+      </div>
+      <div class="card">
+        <h3>Worker</h3>
+        <p>Full read and write handover when you ask for it. The worker does the job in the current directory.</p>
+      </div>
+      <div class="card">
+        <h3>Relief</h3>
+        <p>Worker, plus automatic handover when the main account nears its limit. It waits for a task boundary and tells you.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">How it works</div>
+    <ol class="steps grid">
+      <li><span class="num">1</span><span>Write the brief for the worker in plain language.</span></li>
+      <li><span class="num">2</span><span>One runner sends it to the chosen client.</span></li>
+      <li><span class="num">3</span><span>The prompt, the reply and the outcome land in the ledger.</span></li>
+      <li><span class="num">4</span><span>Any handover announces which account did the work.</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="eyebrow">From the author's own ledger, 30 Aug to 2 Sep 2026</div>
+    <div class="stats">
+      <div class="stat"><div class="figure">68</div><div class="caption">delegated calls</div></div>
+      <div class="stat"><div class="figure">47 / 21</div><div class="caption">to Codex, to a second Claude account</div></div>
+      <div class="stat"><div class="figure">702</div><div class="caption">minutes of work moved off the main account</div></div>
+      <div class="stat"><div class="figure">6</div><div class="caption">failures, 5 of them timeouts</div></div>
+      <div class="stat"><div class="figure">11</div><div class="caption">projects</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="grid install">
+      <div>
+        <div class="eyebrow">What it will not do</div>
+        <ul class="plain">
+          <li><strong>No relay.</strong> <span>Official clients only, one sign-in per account, each subscription billed to itself.</span></li>
+          <li><strong>No token sharing.</strong> <span>Nothing here reads, copies or moves a credential.</span></li>
+          <li><strong>No silent rotation.</strong> <span>Handover happens at a task boundary and says so in the session.</span></li>
+        </ul>
+      </div>
+      <div>
+        <div class="eyebrow">Install</div>
+        <pre>git clone REPOSITORY_URL second-wind
+cd second-wind &amp;&amp; ./install.sh</pre>
+        <p class="soft" style="margin-top:9px;font-size:12.5px">Restart Claude Code, then say <code>set up second-wind</code>. Needs macOS, Claude Code 2.1.251 or newer on your PATH, <code>jq</code>, Python 3.9 or newer, and one other paid subscription. Read your own plan's terms before you install it.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Private preview for the Clearoute team.</span>
+    <span>Please do not share this link.</span>
+  </footer>
+
+</main>
+</body>
+</html>
