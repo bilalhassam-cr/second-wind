@@ -38,13 +38,19 @@ HOME = swlib.HOME
 LAUNCHD_LABEL = "com.second-wind.refresh"
 LAUNCHD_PLIST = os.path.join(HOME, "Library", "LaunchAgents", LAUNCHD_LABEL + ".plist")
 
-# event -> (hook file, timeout seconds, status message)
+# event -> (hook file, timeout seconds, status message, matcher)
+# The matcher is what stops a hook firing on every unrelated event. StopFailure
+# fires on any stop reason, and Notification on every notification Claude Code
+# raises, so both are narrowed to the ones that mean the allowance ran out.
 HOOK_FILES = {
-    "SessionStart": ("session-start.py", 10, "Reading the usage cache"),
-    "UserPromptSubmit": ("prompt-guard.py", 10, "Checking usage headroom"),
-    "StopFailure": ("stop-failure.py", 10, "Checking for a rate limit"),
-    "Notification": ("notification.py", 10, "Checking a usage notification"),
-    "PostModelSwitch": ("model-switch.py", 10, "Refreshing the usage reading"),
+    "SessionStart": ("session-start.py", 10, "Reading the usage cache", ""),
+    "UserPromptSubmit": ("prompt-guard.py", 10, "Checking usage headroom", ""),
+    "StopFailure": ("stop-failure.py", 10, "Checking for a rate limit",
+                    "rate_limit"),
+    "Notification": ("notification.py", 10, "Checking a usage notification",
+                     "quota_auto_resume_fired|quota_auto_resume_stale|"
+                     "quota_auto_resume_disabled"),
+    "PostModelSwitch": ("model-switch.py", 10, "Refreshing the usage reading", ""),
 }
 
 LEVELS = {
@@ -62,7 +68,7 @@ LEVELS = {
 # one of these is ours to remove, wherever an older version installed it.
 LEGACY_BASENAMES = {"usage-guard.sh", "statusline.sh", "session-brief.sh",
                     "usage-refresh-hook.sh"}
-HOOK_BASENAMES = {name for name, _, _ in HOOK_FILES.values()}
+HOOK_BASENAMES = {entry[0] for entry in HOOK_FILES.values()}
 
 
 def sw_home():
@@ -195,9 +201,11 @@ def merge_settings(config_dir, events=(), statusline=False, model_picker=None):
     hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
     strip_ours(hooks)
     for event in events:
-        command, timeout, message = (hook_command(event),) + HOOK_FILES[event][1:]
-        entry = {"hooks": [{"type": "command", "command": command,
+        _, timeout, message, matcher = HOOK_FILES[event]
+        entry = {"hooks": [{"type": "command", "command": hook_command(event),
                             "timeout": timeout, "statusMessage": message}]}
+        if matcher:
+            entry["matcher"] = matcher
         hooks.setdefault(event, []).append(entry)
     if hooks:
         data["hooks"] = hooks
@@ -236,13 +244,10 @@ def merge_settings(config_dir, events=(), statusline=False, model_picker=None):
         else:
             data.pop("statusLine", None)
 
-    if model_picker is True:
-        picker = data.get("modelPicker")
-        if not isinstance(picker, dict) or picker.get("_second_wind") is not True:
-            picker = {}
-        picker["_second_wind"] = True
-        data["modelPicker"] = picker
-    elif model_picker is False:
+    # We never create the modelPicker key. model-picker.py owns it and writes it
+    # with our marker on the first refresh, so setup writing a placeholder would
+    # only put an empty object in the user's settings for no gain.
+    if model_picker is False:
         picker = data.get("modelPicker")
         if isinstance(picker, dict) and picker.get("_second_wind") is True:
             data.pop("modelPicker", None)
@@ -317,6 +322,32 @@ def trust_codex(folder):
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
     return "trusted"
+
+
+def claude_trusted(config_dir, folder):
+    """Whether this Claude profile's project list still trusts our workdir.
+
+    Worth checking rather than assuming: a Claude Code session that was already
+    running when setup wrote the file keeps its own copy of the project list and
+    can write it back on exit, which quietly drops our entry.
+    """
+    path = claude_metadata_path(config_dir)
+    try:
+        with open(path) as handle:
+            data = json.load(handle)
+    except Exception:
+        return False
+    entry = (data.get("projects") or {}).get(folder)
+    return isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True
+
+
+def codex_trusted(folder):
+    path = os.path.join(HOME, ".codex", "config.toml")
+    try:
+        with open(path) as handle:
+            return ('[projects."%s"]' % folder) in handle.read()
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------- launchd
@@ -615,7 +646,7 @@ def cmd_write(a):
 
     print("\nProfile settings:")
     result = merge_settings(cfg["primary"]["config_dir"], events=level["events"],
-                           statusline=True, model_picker=a.model_picker == "on")
+                           statusline=True)
     if result is False:
         sys.exit("second-wind: could not install the primary hooks and status "
                  "line. Fix its settings.json and run --write again.")
@@ -655,7 +686,10 @@ def cmd_write(a):
     if missing:
         print("\n  ! these hook files are not present yet: %s"
               % ", ".join(HOOK_FILES[event][0] for event in missing))
-    print("\nRestart Claude Code. Then run:  setup.py --check  and  setup.py --accounts")
+    print("\nRestart Claude Code before relying on the pre-trusted working "
+          "directory: a running session holds its own copy of the project list "
+          "and can write it back over ours on exit.")
+    print("Then run:  setup.py --check  and  setup.py --accounts")
 
 
 # ---------------------------------------------------------------- accounts
@@ -709,6 +743,10 @@ def account_row(role, cfg):
     usage = swlib.load_usage(role)
     state = swlib.freshness(role, cfg=cfg)
     kind = swlib.status_kind(role)
+    # "none" means no status file, which is the ordinary case: statusline.sh
+    # writes a reading without writing a status. Only the four real faults
+    # override what the reading itself says.
+    problem = kind in ("login", "trust", "parser", "failed")
     blocking = kind in ("login", "trust", "parser")
     live = state in ("fresh", "stale") and not blocking
     head = swlib.headroom(role, usage) if live else None
@@ -720,7 +758,7 @@ def account_row(role, cfg):
         limits, age, version = "not readable for this sign-in", "unknown", \
             usage.get("client_version") or "unknown"
     else:
-        words = swlib.status_words(kind) if kind != "ok" else (
+        words = swlib.status_words(kind) if problem else (
             "ready" if state == "fresh" else
             ("reading is stale" if state == "stale" else "no current reading"))
         limits = limits_text(role, usage) if live else "unknown"
@@ -857,6 +895,32 @@ def cmd_check():
                              "" if folder and os.path.isdir(folder) else "  MISSING"))
     if not folder or not os.path.isdir(folder):
         faults.append("the readers' working directory does not exist. Rerun --write.")
+    elif folder:
+        # A pre-trust that did not survive is the difference between a reader
+        # that reads and one that sits on a trust modal, so check it, do not
+        # assume it.
+        for role in ("primary", "secondary", "reader"):
+            profile = cfg.get(role) or {}
+            if role != "primary" and not profile.get("enabled"):
+                continue
+            if claude_trusted(profile.get("config_dir", ""), folder):
+                row(role + " trust", "trusted")
+            else:
+                row(role + " trust", "NOT TRUSTED: restart Claude Code then "
+                                     "rerun --write, or open Claude Code once "
+                                     "in the workdir")
+                warnings.append("the %s profile does not trust the workdir, so "
+                                "its reader will meet a trust prompt instead of "
+                                "a usage panel." % role)
+        if (cfg.get("codex") or {}).get("enabled"):
+            if codex_trusted(folder):
+                row("codex trust", "trusted")
+            else:
+                row("codex trust", "NOT TRUSTED: restart codex then rerun "
+                                   "--write, or open codex once in the workdir")
+                warnings.append("Codex does not trust the workdir, so its reader "
+                                "will meet a trust modal instead of the status "
+                                "panel.")
 
     print()
     for role in ("primary", "secondary"):
@@ -896,10 +960,11 @@ def cmd_check():
             picker = data.get("modelPicker")
             ours = isinstance(picker, dict) and picker.get("_second_wind") is True
             want = (cfg.get("refresh") or {}).get("model_picker") is True
-            row("model picker", "on" if ours else "off")
-            if want and not ours:
-                warnings.append("model_picker is on in the config but the "
-                                "modelPicker key is not in settings.json.")
+            if not want:
+                row("model picker", "off")
+            else:
+                row("model picker", "on, labels written" if ours else
+                    "on, no labels written yet (the next refresh writes them)")
 
     print()
     if sys.platform == "darwin":
@@ -908,8 +973,14 @@ def cmd_check():
         row("launchd agent", "loaded" if loaded else
             ("written but NOT LOADED" if exists else "NOT INSTALLED"))
         if (cfg.get("refresh") or {}).get("launchd") and not loaded:
-            faults.append("the launchd refresh agent is not loaded, so nothing "
-                          "refreshes the readings on a schedule.")
+            message = ("the launchd refresh agent is not loaded, so nothing "
+                       "refreshes the readings on a schedule.")
+            # Only relief depends on a scheduled reading: it is what the guard
+            # reads. Reviewer and worker refresh on demand, so this is a warning.
+            if level["failover"]:
+                faults.append(message)
+            else:
+                warnings.append(message)
     else:
         row("scheduled refresh", "no launchd on this platform, use cron")
 
@@ -939,8 +1010,8 @@ def cmd_check():
         kind = swlib.status_kind(role)
         detail = "%s (%s old)" % (state, swlib.short_age(age)) if age is not None \
             else "none"
-        if kind != "ok":
-            detail += ", %s" % (swlib.status_phrase(kind) or swlib.status_words(kind))
+        if kind in ("login", "trust", "parser", "failed"):
+            detail += ", %s" % swlib.status_phrase(kind)
         row(role + " reading", detail)
         if state in ("dead", "none") or kind in ("login", "trust", "parser"):
             message = "the %s reading is %s." % (
@@ -995,13 +1066,19 @@ def cmd_uninstall():
             print("  ! could not clean %s. Edit it by hand."
                   % tilde(settings_path(folder)))
         else:
-            print("  %s cleaned: hooks, status line and model picker removed"
-                  % folder)
+            print("  %s cleaned: our hooks and status line removed, and our "
+                  "modelPicker key if it was there" % folder)
     if in_temp_home():
         print("  launchd left alone: SW_HOME points at a temporary directory")
     else:
         print("  %s" % launchd_remove())
     print("Accounts and logins were not touched.")
+    folder = expand((cfg.get("refresh") or {}).get("workdir", "")) or workdir_path()
+    print("The workdir trust entries are left in place, because removing them "
+          "would edit files a running client may be writing:")
+    print("  each Claude profile's .claude.json, under \"projects\": delete the "
+          "\"%s\" entry" % tilde(folder))
+    print("  ~/.codex/config.toml: delete the [projects.\"%s\"] block" % folder)
     print("Config and logs are still at %s; delete that folder to finish."
           % tilde(sw_home()))
 

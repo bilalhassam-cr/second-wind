@@ -23,7 +23,7 @@ in the repository is a complete sample.
 | `refresh.interval_minutes` | How old a reading may be before it counts as stale. Default 15. Also the launchd interval. |
 | `refresh.workdir` | `~/.second-wind/workdir`, created empty by setup and pre-trusted for each Claude profile and for Codex. The readers start here so a trust modal cannot block them. |
 | `refresh.launchd` | Whether the scheduled refresh agent is installed. macOS only. |
-| `refresh.model_picker` | Whether the `/model` rows are relabelled with the live figures. |
+| `refresh.model_picker` | Whether the `/model` rows are relabelled with the live figures. Setup only records the choice; the refresh writes the `modelPicker` key itself, marked as ours so uninstall can remove it. |
 | `refresh.cursor` | Whether the Cursor usage reader runs. False for an API-key sign-in. |
 | `failover.enabled` | Master switch for automatic handover. True at level `relief` only. |
 | `failover.announce` | Handover always says so. Kept as a key because silence is never the default. |
@@ -45,6 +45,10 @@ in the repository is a complete sample.
 
 The guard also goes into the secondary profile, where it exits at once because it is
 not the primary session. The status line goes into both.
+
+Two hooks are installed with a matcher so they fire only on the events that mean the
+allowance ran out: `StopFailure` on `rate_limit`, and `Notification` on
+`quota_auto_resume_fired|quota_auto_resume_stale|quota_auto_resume_disabled`.
 
 ## Choosing thresholds
 
@@ -102,6 +106,15 @@ the cached figures.
 Setup edits the `settings.json` of the primary and secondary profiles, the `.claude.json`
 of each Claude profile it pre-trusts, and `~/.codex/config.toml`. Before the first edit of
 any of them it writes `<file>.second-wind-original`, which is never overwritten, and it
-writes a timestamped copy on every later write. `--uninstall` removes our hooks, our status
-line, our `modelPicker` key and the launchd agent, restores a status line it replaced, and
-leaves accounts and logins alone.
+writes a timestamped copy on every later write.
+
+Restart Claude Code after `--write`. A session that was already running holds its own copy
+of the project list and can write it back on exit, which drops the trust entry setup just
+added. `--check` reads the trust store back for every Claude profile and for Codex and says
+`trusted` or `NOT TRUSTED`, so a pre-trust that did not survive is visible rather than
+discovered by a reader sitting on a modal.
+
+`--uninstall` removes our hooks, our status line, our `modelPicker` key and the launchd
+agent, restores a status line it replaced, and leaves accounts and logins alone. It leaves
+the workdir trust entries in place, because removing them means editing files a running
+client may be writing, and it prints where to delete them by hand.

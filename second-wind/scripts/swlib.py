@@ -240,8 +240,13 @@ def status(role):
     cache = usage_path(role)
     cache_time = 0.0
     if os.path.exists(cache):
-        cache_time = max(os.path.getmtime(cache),
-                         float(load_usage(role).get("cached_at") or 0))
+        # a corrupt cached_at must not take the caller down: the brief runs
+        # inside a hook, and a hook that raises is a broken session
+        try:
+            stamped = float(load_usage(role).get("cached_at") or 0)
+        except (TypeError, ValueError):
+            stamped = 0.0
+        cache_time = max(os.path.getmtime(cache), stamped)
     return message if status_time >= cache_time else ""
 
 

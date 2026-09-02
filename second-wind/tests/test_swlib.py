@@ -20,6 +20,14 @@ import setup as sw_setup  # noqa: E402
 
 NOW = 1_700_000_000
 
+# The matchers that stop a hook firing on every unrelated event. Written out
+# here rather than imported, so a change to the source has to be deliberate.
+HOOK_MATCHERS = {
+    "StopFailure": "rate_limit",
+    "Notification": "quota_auto_resume_fired|quota_auto_resume_stale|"
+                    "quota_auto_resume_disabled",
+}
+
 
 def read_text(path):
     with open(path) as handle:
@@ -72,6 +80,15 @@ class Base(unittest.TestCase):
         swlib.write_json_atomic(path, data)
         os.utime(path, (NOW - age_seconds, NOW - age_seconds))
         return path
+
+    def write_usage_live(self, role, age_seconds=0, **fields):
+        """A reading timed against the real clock, for code that calls
+        freshness() without a fixed now."""
+        drift = NOW - int(time.time())
+        return self.write_usage(role, age_seconds=age_seconds + drift, **fields)
+
+    def write_status_live(self, role, message):
+        return self.write_status(role, message, when=time.time())
 
     def write_status(self, role, message, when=NOW):
         path = swlib.status_path(role)
@@ -373,6 +390,162 @@ class Config(Base):
     def test_thresholds_reject_out_of_range_values(self):
         self.write_config(thresholds={"five_hour_pct": 500, "seven_day_pct": 70})
         self.assertEqual(swlib.thresholds(), (90, 70))
+
+
+class AccountRows(Base):
+    """The table cell for a role. statusline.sh writes a reading and no status
+    file at all, so a cache with no status must read as ready, not as a fault."""
+
+    def test_a_fresh_cache_with_no_status_file_is_ready(self):
+        cfg = self.write_config()
+        self.write_usage_live("primary", age_seconds=16, five_hour_pct=2,
+                              seven_day_pct=16)
+        self.assertFalse(os.path.exists(swlib.status_path("primary")))
+        row = sw_setup.account_row("primary", cfg)
+        self.assertEqual(row["status"], "ready")
+        self.assertEqual(row["headroom"], 84)
+        self.assertIn("5h 2%", row["limits"])
+        self.assertEqual(row["age"], "16s")
+
+    def test_a_stale_cache_with_no_status_file_says_stale(self):
+        cfg = self.write_config()
+        self.write_usage_live("primary", age_seconds=1800, five_hour_pct=2,
+                              seven_day_pct=16)
+        row = sw_setup.account_row("primary", cfg)
+        self.assertEqual(row["status"], "reading is stale")
+        self.assertEqual(row["headroom"], 84)
+
+    def test_a_real_fault_overrides_the_reading(self):
+        cfg = self.write_config()
+        self.write_usage_live("primary", age_seconds=16, five_hour_pct=2,
+                              seven_day_pct=16)
+        self.write_status_live("primary", "LOGIN EXPIRED: sign in again")
+        row = sw_setup.account_row("primary", cfg)
+        self.assertEqual(row["status"], "login expired")
+        self.assertIsNone(row["headroom"])
+
+    def test_no_cache_at_all_says_so(self):
+        cfg = self.write_config()
+        row = sw_setup.account_row("primary", cfg)
+        self.assertEqual(row["status"], "no current reading")
+        self.assertIsNone(row["headroom"])
+
+
+class CorruptCache(Base):
+    """A cache file can hold anything. Nothing in the library may raise on it,
+    because brief_lines runs inside a hook and a hook that raises breaks the
+    session."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config(primary={"config_dir": "~/.claude", "label": "P"})
+
+    def test_a_cached_at_that_is_not_a_number_does_not_raise(self):
+        swlib.write_json_atomic(swlib.usage_path("primary"),
+                                {"cached_at": "not-a-number", "five_hour_pct": 2,
+                                 "seven_day_pct": 3})
+        self.write_status_live("primary", "OK")
+        self.assertEqual(swlib.status("primary"), "OK")
+        self.assertIsNone(swlib.cache_age("primary"))
+        self.assertEqual(swlib.freshness("primary", now=NOW), "none")
+        self.assertEqual(swlib.brief_lines(now=NOW),
+                         ["P: no current reading, refreshing"])
+
+    def test_a_cache_that_is_not_an_object_does_not_raise(self):
+        swlib.write_text_atomic(swlib.usage_path("primary"), "[1, 2, 3]")
+        self.write_status_live("primary", "OK")
+        self.assertEqual(swlib.load_usage("primary"), {})
+        self.assertEqual(swlib.status("primary"), "OK")
+        self.assertEqual(swlib.brief_lines(now=NOW),
+                         ["P: no current reading, refreshing"])
+
+
+class InstalledSettings(Base):
+    """What setup actually writes into a profile's settings.json."""
+
+    def profile(self, contents=None):
+        folder = os.path.join(self.home, "profile")
+        os.makedirs(folder, exist_ok=True)
+        swlib.write_json_atomic(os.path.join(folder, "settings.json"),
+                                contents if contents is not None else {})
+        return folder
+
+    def settings(self, folder):
+        return read_json(os.path.join(folder, "settings.json"))
+
+    def test_the_narrowing_matchers_are_written(self):
+        folder = self.profile()
+        sw_setup.merge_settings(folder, events=("SessionStart", "StopFailure",
+                                                "Notification", "PostModelSwitch",
+                                                "UserPromptSubmit"),
+                                statusline=True)
+        hooks = self.settings(folder)["hooks"]
+        self.assertEqual([group["matcher"] for group in hooks["StopFailure"]],
+                         ["rate_limit"])
+        self.assertEqual(
+            [group["matcher"] for group in hooks["Notification"]],
+            ["quota_auto_resume_fired|quota_auto_resume_stale|"
+             "quota_auto_resume_disabled"])
+        for event in ("SessionStart", "PostModelSwitch", "UserPromptSubmit"):
+            self.assertNotIn("matcher", hooks[event][0], event)
+        for event, entry in HOOK_MATCHERS.items():
+            self.assertEqual(sw_setup.HOOK_FILES[event][3], entry)
+
+    def test_every_hook_is_installed_by_absolute_path(self):
+        folder = self.profile()
+        sw_setup.merge_settings(folder, events=tuple(sw_setup.HOOK_FILES))
+        hooks = self.settings(folder)["hooks"]
+        for event in sw_setup.HOOK_FILES:
+            command = hooks[event][0]["hooks"][0]["command"]
+            self.assertTrue(os.path.isabs(command), command)
+            self.assertEqual(os.path.basename(command),
+                             sw_setup.HOOK_FILES[event][0])
+
+    def test_setup_never_creates_the_model_picker_key(self):
+        folder = self.profile()
+        sw_setup.merge_settings(folder, events=("SessionStart",), statusline=True)
+        self.assertNotIn("modelPicker", self.settings(folder))
+
+    def test_uninstall_removes_only_a_marked_model_picker(self):
+        folder = self.profile({"modelPicker": {"labels": {"opus": "mine"}}})
+        sw_setup.merge_settings(folder, model_picker=False)
+        self.assertEqual(self.settings(folder)["modelPicker"],
+                         {"labels": {"opus": "mine"}})
+        folder = self.profile({"modelPicker": {"_second_wind": True,
+                                               "labels": {"opus": "5h 2%"}}})
+        sw_setup.merge_settings(folder, model_picker=False)
+        self.assertNotIn("modelPicker", self.settings(folder))
+
+
+class TrustStore(Base):
+    def test_a_claude_profile_reports_its_trust_honestly(self):
+        folder = os.path.join(self.home, "profile")
+        os.makedirs(folder)
+        workdir = os.path.join(self.home, "workdir")
+        metadata = os.path.join(folder, ".claude.json")
+        self.assertFalse(sw_setup.claude_trusted(folder, workdir))
+        swlib.write_json_atomic(metadata, {"projects": {}})
+        self.assertFalse(sw_setup.claude_trusted(folder, workdir))
+        self.assertEqual(sw_setup.trust_claude(folder, workdir), "trusted")
+        self.assertTrue(sw_setup.claude_trusted(folder, workdir))
+        # a running session writing its own copy back drops our entry
+        swlib.write_json_atomic(metadata, {"projects": {"/elsewhere": {}}})
+        self.assertFalse(sw_setup.claude_trusted(folder, workdir))
+
+    def test_codex_reports_its_trust_honestly(self):
+        previous_home = sw_setup.HOME
+        sw_setup.HOME = self.home
+        try:
+            workdir = os.path.join(self.home, "workdir")
+            self.assertFalse(sw_setup.codex_trusted(workdir))
+            os.makedirs(os.path.join(self.home, ".codex"))
+            swlib.write_text_atomic(
+                os.path.join(self.home, ".codex", "config.toml"), 'model = "x"\n')
+            self.assertFalse(sw_setup.codex_trusted(workdir))
+            sw_setup.trust_codex(workdir)
+            self.assertTrue(sw_setup.codex_trusted(workdir))
+        finally:
+            sw_setup.HOME = previous_home
 
 
 class SetupDecisions(Base):
