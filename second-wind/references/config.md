@@ -72,10 +72,13 @@ Every hook, `--check` and `--accounts` ask the same function:
 
 ## Headroom
 
-Claude and Codex: `100 - max(5-hour used, weekly used)`, and both windows are required,
-because one window alone hides the other. Grok reports a weekly window only, so it is
-`100 - weekly`. Cursor is `100 - max(Included, Auto, API)`. On-demand availability is
-context and does not override those pools. Unknown sorts last.
+Claude and Codex: `100 - max(the windows the client reported)`. Both windows are used when
+both are printed, so a nearly full weekly window cannot hide behind a quiet 5-hour one, and
+a window the panel does not print is skipped rather than fatal. The Codex status panel on
+some plans prints the weekly limit and no 5-hour line, and treating that as unreadable made
+Codex unroutable. Headroom is unknown only when neither window is present. Grok reports a
+weekly window only, so it is `100 - weekly`. Cursor is `100 - max(Included, Auto, API)`.
+On-demand availability is context and does not override those pools. Unknown sorts last.
 
 ## Files it creates
 

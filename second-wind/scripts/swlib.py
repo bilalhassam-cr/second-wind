@@ -356,18 +356,20 @@ def pool(usage, key):
 def headroom(role, usage):
     """Percentage of the strictest reported pool still unspent, or None.
 
-    Claude and Codex need both windows; a single window would hide the one that
-    is nearly full. Grok reports a weekly window only. Cursor reports monthly
-    pools.
+    Claude and Codex are judged on the windows the client actually printed. A
+    missing window is skipped rather than fatal: the Codex status panel on some
+    plans prints the weekly limit and no 5-hour line, and requiring both made
+    Codex unroutable forever. Grok reports a weekly window only. Cursor reports
+    monthly pools.
     """
     if not usage:
         return None
     if role in CLAUDE_ROLES or role == "codex":
-        five = number(usage.get("five_hour_pct"))
-        week = number(usage.get("seven_day_pct"))
-        if five is None or week is None:
+        windows = [w for w in (number(usage.get("five_hour_pct")),
+                               number(usage.get("seven_day_pct"))) if w is not None]
+        if not windows:
             return None
-        spent = max(five, week)
+        spent = max(windows)
     elif role == "grok":
         week = number(usage.get("seven_day_pct"))
         if week is None:

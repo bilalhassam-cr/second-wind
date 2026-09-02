@@ -142,20 +142,33 @@ class Freshness(Base):
 
 
 class Headroom(Base):
-    def test_claude_needs_both_windows(self):
+    def test_claude_uses_the_worst_window_it_was_given(self):
         self.assertEqual(swlib.headroom("primary",
                                         {"five_hour_pct": 20, "seven_day_pct": 40}), 60)
         self.assertEqual(swlib.headroom("secondary",
                                         {"five_hour_pct": 95, "seven_day_pct": 10}), 5)
-        self.assertIsNone(swlib.headroom("primary", {"five_hour_pct": 20,
-                                                     "seven_day_pct": None}))
-        self.assertIsNone(swlib.headroom("primary", {"seven_day_pct": 20}))
 
-    def test_codex_needs_both_windows(self):
+    def test_a_window_the_panel_did_not_print_is_skipped(self):
+        # the Codex panel on some plans prints the weekly limit and no 5-hour
+        # line, and treating that as unreadable made Codex unroutable
+        self.assertEqual(swlib.headroom("codex", {"five_hour_pct": None,
+                                                  "seven_day_pct": 13}), 87)
+        self.assertEqual(swlib.headroom("codex", {"seven_day_pct": 13}), 87)
+        self.assertEqual(swlib.headroom("primary", {"five_hour_pct": 20,
+                                                    "seven_day_pct": None}), 80)
+        self.assertEqual(swlib.headroom("primary", {"seven_day_pct": 20}), 80)
+
+    def test_neither_window_is_unknown(self):
+        for role in ("primary", "secondary", "codex"):
+            self.assertIsNone(swlib.headroom(role, {"five_hour_pct": None,
+                                                    "seven_day_pct": None}), role)
+            self.assertIsNone(swlib.headroom(role, {"plan": "max"}), role)
+
+    def test_codex_still_uses_the_worst_of_two_windows(self):
         self.assertEqual(swlib.headroom("codex",
                                         {"five_hour_pct": 5, "seven_day_pct": 13}), 87)
-        self.assertIsNone(swlib.headroom("codex", {"five_hour_pct": None,
-                                                   "seven_day_pct": 13}))
+        self.assertEqual(swlib.headroom("codex",
+                                        {"five_hour_pct": 40, "seven_day_pct": 13}), 60)
 
     def test_grok_is_weekly_only(self):
         self.assertEqual(swlib.headroom("grok", {"seven_day_pct": 13,

@@ -809,8 +809,9 @@ def cmd_accounts(a):
         print("Work destination: unknown until an eligible account has a readable "
               "limit.")
     print(note)
-    print("Headroom uses the strictest reported pool: 5h and weekly for Claude and "
-          "Codex, weekly for Grok, monthly pools for Cursor. Unknown sorts last.")
+    print("Headroom uses the strictest window the client reported: 5h and weekly "
+          "for Claude and Codex, whichever of them the panel printed, weekly for "
+          "Grok, monthly pools for Cursor. Unknown sorts last.")
 
     headers = ("ROLE", "ACCOUNT", "PLAN", "LIMITS", "AGE", "VERSION", "HEADROOM",
                "STATUS")
