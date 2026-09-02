@@ -1,70 +1,107 @@
 # Configuration
 
-`~/.second-wind/config.json`, written by setup, `chmod 600`. Edit by hand or rerun
-setup. `scripts/setup.py --show` prints it.
+`~/.second-wind/config.json`, version 4, written by setup, `chmod 600`. Edit by hand
+or rerun setup. `scripts/setup.py --show` prints it. `examples/config.example.json`
+in the repository is a complete sample.
 
 | Key | Meaning |
 |---|---|
+| `version` | Config schema version. This build writes and expects 4. `--check` fails an older one. |
+| `level` | `reviewer`, `worker` or `relief`. Sets `defaults.mode`, `failover.enabled` and which hooks setup installs. |
 | `primary.config_dir` | The profile that orchestrates and holds the conversation. Usually `~/.claude`. |
-| `primary.plan` | Plan reported during discovery. The refreshed cache remains authoritative for usage. |
+| `primary.label` | What the session brief calls this account. Defaults to the role name. |
+| `primary.plan` | Plan reported during discovery. The refreshed cache stays authoritative for usage. |
 | `secondary.config_dir` | The second Claude profile. Its own account, its own allowance. |
 | `secondary.enabled` | Set false to leave it out entirely. |
+| `reader.enabled` | Optional third Claude profile used only to read the primary's usage, so a background reader never shares a credential with the desktop app. When false, the primary reader runs with `CLAUDE_CONFIG_DIR` unset. |
 | `codex.enabled` | Whether Codex is available as a worker. |
-| `codex.plan` | Fallback plan label. The latest Codex cache supplies the live plan. |
-| `codex.can_launch_browser` | Always false for Codex because the runner always passes its own sandbox flag in both review and work mode. The command-line flag overrides `sandbox_mode`, so the user's Codex configuration does not change this. It is null only when Codex is not installed. Nothing is launched. When the value is not true, the runner warns the worker off browser work. |
-| `grok.enabled` | Whether Grok Build is available as a worker. |
+| `grok.enabled` | Whether Grok Build is available as a worker. Setup checks the login by running `grok models`, which needs a session and sends no prompt. |
 | `cursor.enabled` | Whether Cursor Agent is available as a worker. |
-| `thresholds.five_hour_pct` | Failover trigger for the 5-hour window. Default 90. |
-| `thresholds.seven_day_pct` | Failover trigger for the weekly window. Default 80. |
-| `refresh.interval_minutes` | How old a reading may be before another refresh is attempted. Default 15. |
-| `refresh.working_dir` | A directory already trusted by the primary profile. Usage readers start here so a trust prompt cannot block them. |
-| `refresh.codex_enabled` | Whether the Codex `/status` reader runs for an enabled Codex worker. |
-| `refresh.grok_enabled` | Whether the Grok `/usage` reader runs for an enabled Grok worker. |
-| `refresh.cursor_enabled` | Whether the Cursor `/usage` reader runs for an enabled Cursor worker. |
-| `failover.enabled` | Master switch for automatic handover. |
+| `cursor.auth` | `interactive` or `api_key`. An API key authorises delegation only: the usage panel needs a session, so `refresh.cursor` stays false. |
+| `thresholds.five_hour_pct` | Handover trigger for the 5-hour window. Default 90. |
+| `thresholds.seven_day_pct` | Handover trigger for the weekly window. Default 80. |
+| `refresh.interval_minutes` | How old a reading may be before it counts as stale. Default 15. Also the launchd interval. |
+| `refresh.workdir` | `~/.second-wind/workdir`, created empty by setup and pre-trusted for each Claude profile and for Codex. The readers start here so a trust modal cannot block them. |
+| `refresh.launchd` | Whether the scheduled refresh agent is installed. macOS only. |
+| `refresh.model_picker` | Whether the `/model` rows are relabelled with the live figures. |
+| `refresh.cursor` | Whether the Cursor usage reader runs. False for an API-key sign-in. |
+| `failover.enabled` | Master switch for automatic handover. True at level `relief` only. |
+| `failover.announce` | Handover always says so. Kept as a key because silence is never the default. |
 | `defaults.mode` | `review` (read-only) or `work` (full access) when no mode is passed. |
-| `log_dir` | Where the ledger and exchange files go. |
+| `log.dir` | Where the ledger and the exchange files go. |
+| `log.max_exchange_kb` | Size cap per saved exchange. |
+| `log.prune_days` | How long exchanges are kept. |
+| `timeout_seconds` | Seconds before a delegated call is killed. |
+| `tested_versions` | Client versions present when setup ran. `--check` warns when an installed client has moved on, because a moved label is the usual cause of a reading that stops parsing. |
+| `skill_dir` | Where the skill lives, so SKILL.md can find its own scripts. |
+
+## Service levels
+
+| Level | Mode | Automatic handover | Hooks installed |
+|---|---|---|---|
+| `reviewer` | review | off | SessionStart brief only |
+| `worker` | work | off | SessionStart, StopFailure, Notification, PostModelSwitch |
+| `relief` | work | on | the four above plus the UserPromptSubmit guard |
+
+The guard also goes into the secondary profile, where it exits at once because it is
+not the primary session. The status line goes into both.
 
 ## Choosing thresholds
 
-The primary account needs headroom left to orchestrate the handover, which is why
-the default trips at 90% rather than 100%. Lower it if you routinely run long
-sessions and want the switch earlier; raising it much above 90 risks having too
-little left to hand anything over.
+The primary account needs headroom left to orchestrate the handover, which is why the
+default trips at 90% rather than 100%. Lower it if you routinely run long sessions and
+want the switch earlier; raising it much above 90 risks having too little left to hand
+anything over.
 
-The weekly threshold sits lower at 80% on purpose. A weekly window recovers slowly,
-so crossing it matters more than a 5-hour window that refills within the day.
+The weekly threshold sits lower at 80% on purpose. A weekly window recovers slowly, so
+crossing it matters more than a 5-hour window that refills within the day.
 
-## Usage refresh and headroom
+## Staleness, one rule
 
-`usage-refresh.sh` opens each enabled official client's usage panel in the
-recorded trusted directory. It sends no model prompt. The interval is
-configurable; 15 minutes is the default. One failed client does not hide the
-others, and missing or unreadable figures remain unknown.
+Every hook, `--check` and `--accounts` ask the same function:
 
-Claude and Codex headroom is `100 - max(5-hour used, weekly used)`, and both
-figures are required. Codex percentages remaining are converted to percentages
-used. Its monthly credits cap overage only and do not decide headroom.
+- **fresh**: younger than `refresh.interval_minutes`.
+- **stale**: older than that. Still shown, always with its age.
+- **dead**: older than 60 minutes. The guard ignores it and the brief says "no current
+  reading" rather than quoting an hour-old percentage.
+- **none**: no reading at all.
 
-Grok has a weekly window only, so its headroom is the weekly percentage
-remaining. Cursor headroom uses the most spent reported monthly pool among
-Included, Auto and API. On-demand availability is shown as context and does not
-override those pools. Unknown readings sort last.
+## Headroom
+
+Claude and Codex: `100 - max(5-hour used, weekly used)`, and both windows are required,
+because one window alone hides the other. Grok reports a weekly window only, so it is
+`100 - weekly`. Cursor is `100 - max(Included, Auto, API)`. On-demand availability is
+context and does not override those pools. Unknown sorts last.
 
 ## Files it creates
 
 ```
 ~/.second-wind/
-├── config.json            the settings above
-├── usage-primary.json     last primary status-line or usage-panel reading
-├── usage-secondary.json   last secondary reading
-├── usage-codex.json       last Codex status-panel reading
-├── usage-grok.json        last Grok weekly reading
-├── usage-cursor.json      last Cursor monthly-pools reading
-├── refresh-status-*.txt   one outcome file per profile, including login failures
-├── no-failover            present = automatic handover off
-├── mode                   optional manual worker override
+├── config.json                the settings above
+├── workdir/                   empty, pre-trusted, where every reader starts
+├── usage-primary.json         last primary reading
+├── usage-secondary.json       last secondary reading
+├── usage-codex.json           last Codex status-panel reading
+├── usage-grok.json            last Grok weekly reading
+├── usage-cursor.json          last Cursor monthly-pools reading
+├── refresh-status-*.txt       one outcome line per role: OK, LOGIN EXPIRED,
+│                              TRUST PROMPT, PARSER MISMATCH or FAILED
+├── replaced-statusline.json   any status line we replaced, restored on uninstall
+├── no-failover                present = automatic handover off
+├── mode                       optional manual worker override
 └── log/
-    ├── YYYY-MM.jsonl      one line per delegated call
+    ├── YYYY-MM.jsonl          one line per delegated call
     └── <ts>-<pid>-<worker>-<folder>.md   full prompt and reply
 ```
+
+A status file newer than its reading wins: it describes the attempt that came after
+the cached figures.
+
+## Files it edits, and the backups it leaves
+
+Setup edits the `settings.json` of the primary and secondary profiles, the `.claude.json`
+of each Claude profile it pre-trusts, and `~/.codex/config.toml`. Before the first edit of
+any of them it writes `<file>.second-wind-original`, which is never overwritten, and it
+writes a timestamped copy on every later write. `--uninstall` removes our hooks, our status
+line, our `modelPicker` key and the launchd agent, restores a status line it replaced, and
+leaves accounts and logins alone.

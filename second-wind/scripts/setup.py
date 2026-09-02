@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the second-wind config and wire it into the primary profile.
+"""Write the second-wind config and wire it into the Claude profiles.
 
 Two steps on purpose. `--detect` reports what is on the machine; a human then
 chooses which account is primary. A script cannot infer that choice: primary is
@@ -8,235 +8,522 @@ backwards silently sends their main work to the wrong subscription.
 
   setup.py --detect
   setup.py --write --primary ~/.claude --secondary ~/.claude-secondary
+      --level reviewer|worker|relief [--reader ~/.claude-usage]
       [--codex on|off] [--grok on|off] [--cursor on|off]
-  setup.py --accounts
+      [--five-hour N] [--seven-day N] [--refresh-minutes N]
+      [--model-picker on|off] [--no-launchd] [--timeout N] [--force]
+  setup.py --accounts [--live]
+  setup.py --check
   setup.py --show
   setup.py --uninstall
 """
-import argparse, json, os, shutil, subprocess, sys, tempfile, time
+import argparse
+import json
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
 
-HOME = os.path.expanduser("~")
-SW_HOME = os.environ.get("SW_HOME", os.path.join(HOME, ".second-wind"))
-CONFIG = os.path.join(SW_HOME, "config.json")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import swlib
+from swlib import expand, tilde
+
 HERE = os.path.dirname(os.path.abspath(__file__))
+HOOK_DIR = os.path.join(HERE, "hooks")
+HOME = swlib.HOME
 
-def tilde(p): return p.replace(HOME, "~", 1)
-def expand(p): return os.path.expanduser(p)
+LAUNCHD_LABEL = "com.second-wind.refresh"
+LAUNCHD_PLIST = os.path.join(HOME, "Library", "LaunchAgents", LAUNCHD_LABEL + ".plist")
 
-def load_cfg():
-    with open(CONFIG) as f:
-        return json.load(f)
+# event -> (hook file, timeout seconds, status message)
+HOOK_FILES = {
+    "SessionStart": ("session-start.py", 10, "Reading the usage cache"),
+    "UserPromptSubmit": ("prompt-guard.py", 10, "Checking usage headroom"),
+    "StopFailure": ("stop-failure.py", 10, "Checking for a rate limit"),
+    "Notification": ("notification.py", 10, "Checking a usage notification"),
+    "PostModelSwitch": ("model-switch.py", 10, "Refreshing the usage reading"),
+}
+
+LEVELS = {
+    "reviewer": {"mode": "review", "failover": False,
+                 "events": ("SessionStart",)},
+    "worker": {"mode": "work", "failover": False,
+               "events": ("SessionStart", "StopFailure", "Notification",
+                          "PostModelSwitch")},
+    "relief": {"mode": "work", "failover": True,
+               "events": ("SessionStart", "StopFailure", "Notification",
+                          "PostModelSwitch", "UserPromptSubmit")},
+}
+
+# Names that have ever belonged to second-wind. Any settings entry pointing at
+# one of these is ours to remove, wherever an older version installed it.
+LEGACY_BASENAMES = {"usage-guard.sh", "statusline.sh", "session-brief.sh",
+                    "usage-refresh-hook.sh"}
+HOOK_BASENAMES = {name for name, _, _ in HOOK_FILES.values()}
+
+
+def sw_home():
+    return swlib.sw_home()
+
+
+def config_file():
+    return swlib.config_path()
+
+
+def workdir_path():
+    return os.path.join(sw_home(), "workdir")
+
+
+def in_temp_home():
+    """A test run points SW_HOME at a temporary directory. Do not touch the
+    real launchd domain in that case."""
+    real = os.path.realpath(sw_home())
+    return real.startswith("/tmp/") or real.startswith("/private/tmp/")
+
 
 def settings_path(config_dir):
     return os.path.join(expand(config_dir), "settings.json")
 
-def write_json(path, data, mode=0o600):
-    """Write via a temp file in the same directory then rename, so a crash or a
-    concurrent reader never sees a half-written settings file."""
-    d = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".second-wind-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except Exception:
-        os.unlink(tmp)
-        raise
 
-def backup(path):
-    if os.path.exists(path):
-        b = f"{path}.second-wind-backup-{time.strftime('%Y%m%d-%H%M%S')}"
-        shutil.copy2(path, b)
-        return b
-    return None
-
-def merge_settings(config_dir, install=True, include_guard=True):
-    """Add (or remove) the status bar and the usage-guard hook, leaving every
-    other setting alone. We never rewrite a settings file wholesale: it is the
-    user's, and it usually holds hooks and plugins we know nothing about."""
-    p = settings_path(config_dir)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    data = {}
-    if os.path.exists(p):
-        try:
-            with open(p) as f:
-                data = json.load(f)
-        except Exception:
-            print(f"  ! {tilde(p)} is not valid JSON. Leaving it alone.", file=sys.stderr)
-            return False
-    b = backup(p)
-
-    sl_cmd = os.path.join(HERE, "statusline.sh")
-    guard_cmd = os.path.join(HERE, "usage-guard.sh")
-    sl = {"type": "command", "command": sl_cmd, "padding": 0}
-    hook = {"hooks": [{"type": "command", "command": guard_cmd,
-                       "timeout": 10, "statusMessage": "Checking usage headroom"}]}
-    saved = os.path.join(SW_HOME, "replaced-statusline.json")
-
-    def ours(h):
-        # match on our own command path, not on a substring of the whole entry,
-        # so we never delete a hook that merely mentions the same words
-        return any(x.get("command") == guard_cmd for x in (h.get("hooks") or [])
-                   if isinstance(x, dict))
-
-    if install:
-        existing = data.get("statusLine")
-        if existing and existing != sl:
-            # keep whatever was there so uninstall can put it back
-            os.makedirs(SW_HOME, exist_ok=True)
-            store = {}
-            if os.path.exists(saved):
-                try:
-                    store = json.load(open(saved))
-                except Exception:
-                    store = {}
-            store[config_dir] = existing
-            write_json(saved, store)
-            print(f"  note: replaced an existing status line in {tilde(p)}. "
-                  f"Uninstall restores it.")
-        data["statusLine"] = sl
-        if include_guard:
-            hooks = data.setdefault("hooks", {})
-            ups = [h for h in hooks.get("UserPromptSubmit", []) if not ours(h)]
-            ups.append(hook)
-            hooks["UserPromptSubmit"] = ups
-    else:
-        if data.get("statusLine", {}).get("command") == sl_cmd:
-            restored = None
-            if os.path.exists(saved):
-                try:
-                    restored = json.load(open(saved)).get(config_dir)
-                except Exception:
-                    restored = None
-            if restored:
-                data["statusLine"] = restored
-                print(f"  restored the previous status line in {tilde(p)}")
-            else:
-                data.pop("statusLine", None)
-        hooks = data.get("hooks", {})
-        if "UserPromptSubmit" in hooks:
-            hooks["UserPromptSubmit"] = [h for h in hooks["UserPromptSubmit"] if not ours(h)]
-            if not hooks["UserPromptSubmit"]:
-                hooks.pop("UserPromptSubmit")
-    write_json(p, data, mode=0o600)
-    return b
-
-def metadata_path(config_dir):
+def claude_metadata_path(config_dir):
+    """The default profile keeps its project list in ~/.claude.json; any other
+    profile keeps its own copy inside the config directory."""
     d = expand(config_dir)
     if os.path.realpath(d) == os.path.realpath(os.path.join(HOME, ".claude")):
         return os.path.join(HOME, ".claude.json")
     return os.path.join(d, ".claude.json")
 
-def trusted_project(config_dir):
-    """Use a trust decision the user has already made instead of inventing one."""
-    path = metadata_path(config_dir)
-    try:
-        with open(path) as f:
-            data = json.load(f)
-    except Exception as e:
-        sys.exit(f"second-wind: cannot read {tilde(path)} to find a trusted working "
-                 f"directory: {e}")
-    projects = data.get("projects") or {}
-    candidates = []
-    for project, entry in projects.items():
-        if (isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True
-                and os.path.isdir(expand(project))):
-            candidates.append((expand(project), entry))
-    if not candidates:
-        sys.exit("second-wind: the primary profile has no existing trusted working "
-                 "directory. Trust one in Claude Code, then run --write again.")
-    current = os.path.realpath(os.getcwd())
-    candidates.sort(key=lambda item: os.path.realpath(item[0]) != current)
-    return data, candidates[0][0], candidates[0][1]
 
-def cmd_discover():
-    subprocess.run([sys.executable, os.path.join(HERE, "discover.py")])
+def discover():
+    out = subprocess.run([sys.executable, os.path.join(HERE, "discover.py")],
+                         capture_output=True, text=True).stdout
+    try:
+        return json.loads(out or "{}")
+    except ValueError:
+        return {}
+
+
+# ---------------------------------------------------------------- settings
+
+
+def hook_command(event):
+    return os.path.join(HOOK_DIR, HOOK_FILES[event][0])
+
+
+def statusline_command():
+    return os.path.join(HERE, "statusline.sh")
+
+
+def is_ours(command):
+    """True for a command second-wind installed, in this version or an older
+    one. Matched on our own basenames and our own hooks directory, never on a
+    substring of the whole entry, so a hook that merely mentions usage stays."""
+    if not isinstance(command, str) or not command.strip():
+        return False
+    # scan every token, because an entry may name an interpreter first
+    for token in command.split():
+        base = os.path.basename(token)
+        parent = os.path.basename(os.path.dirname(token))
+        if base in LEGACY_BASENAMES:
+            return True
+        if parent == "hooks" and base in HOOK_BASENAMES:
+            return True
+        if "second-wind" in token and (base.endswith(".py") or base.endswith(".sh")):
+            return True
+    return False
+
+
+def strip_ours(hooks):
+    """Remove our entries from a settings hooks block, in place."""
+    for event in list(hooks.keys()):
+        groups = hooks.get(event)
+        if not isinstance(groups, list):
+            continue
+        kept = []
+        for group in groups:
+            if not isinstance(group, dict):
+                kept.append(group)
+                continue
+            inner = [h for h in (group.get("hooks") or [])
+                     if not (isinstance(h, dict) and is_ours(h.get("command", "")))]
+            if inner:
+                copy = dict(group)
+                copy["hooks"] = inner
+                kept.append(copy)
+            elif not group.get("hooks"):
+                kept.append(group)
+        if kept:
+            hooks[event] = kept
+        else:
+            hooks.pop(event)
+
+
+def read_settings(config_dir):
+    path = settings_path(config_dir)
+    if not os.path.exists(path):
+        return {}, path
+    try:
+        with open(path) as handle:
+            data = json.load(handle)
+        return (data if isinstance(data, dict) else {}), path
+    except Exception as exc:
+        print("  ! %s is not valid JSON (%s). Leaving it alone."
+              % (tilde(path), exc), file=sys.stderr)
+        return None, path
+
+
+def replaced_store():
+    return os.path.join(sw_home(), "replaced-statusline.json")
+
+
+def merge_settings(config_dir, events=(), statusline=False, model_picker=None):
+    """Install or remove our own keys, leaving every other setting alone.
+
+    We never rewrite a settings file wholesale: it is the user's, and it usually
+    holds hooks and plugins we know nothing about. Passing no events and no
+    status line is the uninstall path.
+    """
+    data, path = read_settings(config_dir)
+    if data is None:
+        return False
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    _, stamped = swlib.backup_once(path)
+
+    hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
+    strip_ours(hooks)
+    for event in events:
+        command, timeout, message = (hook_command(event),) + HOOK_FILES[event][1:]
+        entry = {"hooks": [{"type": "command", "command": command,
+                            "timeout": timeout, "statusMessage": message}]}
+        hooks.setdefault(event, []).append(entry)
+    if hooks:
+        data["hooks"] = hooks
+    else:
+        data.pop("hooks", None)
+
+    sl = {"type": "command", "command": statusline_command(), "padding": 0}
+    if statusline:
+        existing = data.get("statusLine")
+        if existing and existing != sl:
+            store = {}
+            if os.path.exists(replaced_store()):
+                try:
+                    with open(replaced_store()) as handle:
+                        store = json.load(handle)
+                except Exception:
+                    store = {}
+            store[tilde(expand(config_dir))] = existing
+            swlib.write_json_atomic(replaced_store(), store)
+            print("  note: replaced an existing status line in %s. "
+                  "Uninstall restores it." % tilde(path))
+        data["statusLine"] = sl
+    elif isinstance(data.get("statusLine"), dict) and \
+            data["statusLine"].get("command") == statusline_command():
+        restored = None
+        if os.path.exists(replaced_store()):
+            try:
+                with open(replaced_store()) as handle:
+                    store = json.load(handle)
+                restored = store.get(tilde(expand(config_dir))) or store.get(config_dir)
+            except Exception:
+                restored = None
+        if restored:
+            data["statusLine"] = restored
+            print("  restored the previous status line in %s" % tilde(path))
+        else:
+            data.pop("statusLine", None)
+
+    if model_picker is True:
+        picker = data.get("modelPicker")
+        if not isinstance(picker, dict) or picker.get("_second_wind") is not True:
+            picker = {}
+        picker["_second_wind"] = True
+        data["modelPicker"] = picker
+    elif model_picker is False:
+        picker = data.get("modelPicker")
+        if isinstance(picker, dict) and picker.get("_second_wind") is True:
+            data.pop("modelPicker", None)
+
+    swlib.write_json_atomic(path, data, mode=0o600)
+    return stamped or True
+
+
+# ---------------------------------------------------------------- trust
+
+
+def trust_claude(config_dir, folder):
+    """Mark our own working directory trusted for a Claude profile.
+
+    This is a setting the user asked for at setup, on a directory second-wind
+    creates and owns. No reader ever answers a trust dialog: the dialog is what
+    this prevents, and a reader that meets one stops and reports.
+    """
+    path = claude_metadata_path(config_dir)
+    data = {}
+    if os.path.exists(path):
+        try:
+            with open(path) as handle:
+                data = json.load(handle)
+        except Exception as exc:
+            return "could not read %s (%s)" % (tilde(path), exc)
+        if not isinstance(data, dict):
+            return "%s is not a JSON object" % tilde(path)
+    projects = data.get("projects")
+    if not isinstance(projects, dict):
+        projects = {}
+    entry = projects.get(folder)
+    if not isinstance(entry, dict):
+        entry = {}
+    if entry.get("hasTrustDialogAccepted") is True:
+        return "already trusted"
+    entry["hasTrustDialogAccepted"] = True
+    projects[folder] = entry
+    data["projects"] = projects
+    if os.path.exists(path):
+        swlib.backup_once(path)
+    swlib.write_json_atomic(path, data, mode=0o600)
+    return "trusted"
+
+
+def trust_codex(folder):
+    """Append a trust entry to the Codex config, if it is not there already.
+
+    Codex 0.152 shows a trust modal on launch in an unknown directory, which
+    stops the reader before it can ask for /status.
+    """
+    path = os.path.join(HOME, ".codex", "config.toml")
+    text = ""
+    if os.path.exists(path):
+        try:
+            with open(path) as handle:
+                text = handle.read()
+        except Exception as exc:
+            return "could not read %s (%s)" % (tilde(path), exc)
+    header = '[projects."%s"]' % folder
+    if header in text:
+        return "already trusted"
+    if os.path.exists(path):
+        swlib.backup_once(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    block = "\n%s\ntrust_level = \"trusted\"\n" % header
+    new = (text.rstrip("\n") + "\n" + block) if text.strip() else block.lstrip("\n")
+    handle, tmp = tempfile.mkstemp(dir=os.path.dirname(path),
+                                   prefix=".second-wind-", suffix=".tmp")
+    with os.fdopen(handle, "w") as out:
+        out.write(new)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    return "trusted"
+
+
+# ---------------------------------------------------------------- launchd
+
+
+def launchd_plist(interval_seconds):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+           "HOME": HOME}
+    if os.environ.get("SW_HOME"):
+        env["SW_HOME"] = os.environ["SW_HOME"]
+    return {
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": ["/bin/sh", os.path.join(HERE, "usage-refresh.sh"),
+                             "--if-claude-running"],
+        "StartInterval": int(interval_seconds),
+        "RunAtLoad": False,
+        "EnvironmentVariables": env,
+        "StandardErrorPath": os.path.join(sw_home(), "log", "launchd.err"),
+    }
+
+
+def launchd_install(interval_seconds):
+    """Write the agent and load it. Returns a line to print."""
+    if sys.platform != "darwin":
+        minutes = max(1, int(interval_seconds) // 60)
+        return ("no launchd on this platform. Add this cron line instead:\n"
+                "  */%d * * * * %s --if-claude-running"
+                % (minutes, os.path.join(HERE, "usage-refresh.sh")))
+    os.makedirs(os.path.dirname(LAUNCHD_PLIST), exist_ok=True)
+    os.makedirs(os.path.join(sw_home(), "log"), exist_ok=True)
+    handle, tmp = tempfile.mkstemp(dir=os.path.dirname(LAUNCHD_PLIST),
+                                   prefix=".second-wind-", suffix=".plist")
+    with os.fdopen(handle, "wb") as out:
+        plistlib.dump(launchd_plist(interval_seconds), out)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, LAUNCHD_PLIST)
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", "gui/%d/%s" % (uid, LAUNCHD_LABEL)],
+                   capture_output=True, text=True)
+    done = subprocess.run(["launchctl", "bootstrap", "gui/%d" % uid, LAUNCHD_PLIST],
+                          capture_output=True, text=True)
+    if done.returncode == 0:
+        return "installed and loaded (every %d minutes)" % (int(interval_seconds) // 60)
+    fallback = subprocess.run(["launchctl", "load", "-w", LAUNCHD_PLIST],
+                              capture_output=True, text=True)
+    if fallback.returncode == 0:
+        return "installed and loaded through launchctl load"
+    detail = (done.stderr or done.stdout or "").strip().splitlines()
+    return ("written to %s but not loaded: %s. Load it with: launchctl bootstrap "
+            "gui/$(id -u) %s" % (tilde(LAUNCHD_PLIST),
+                                 detail[0] if detail else "unknown error",
+                                 tilde(LAUNCHD_PLIST)))
+
+
+def launchd_loaded():
+    if sys.platform != "darwin":
+        return None
+    uid = os.getuid()
+    done = subprocess.run(["launchctl", "print", "gui/%d/%s" % (uid, LAUNCHD_LABEL)],
+                          capture_output=True, text=True)
+    if done.returncode == 0:
+        return True
+    done = subprocess.run(["launchctl", "list", LAUNCHD_LABEL],
+                          capture_output=True, text=True)
+    return done.returncode == 0
+
+
+def launchd_remove():
+    if sys.platform != "darwin":
+        return "nothing to remove"
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", "gui/%d/%s" % (uid, LAUNCHD_LABEL)],
+                   capture_output=True, text=True)
+    subprocess.run(["launchctl", "unload", LAUNCHD_PLIST], capture_output=True, text=True)
+    if os.path.exists(LAUNCHD_PLIST):
+        os.unlink(LAUNCHD_PLIST)
+        return "unloaded and deleted %s" % tilde(LAUNCHD_PLIST)
+    return "no launchd agent was installed"
+
+
+# ---------------------------------------------------------------- detect
+
 
 def detection():
-    found = json.loads(subprocess.run(
-        [sys.executable, os.path.join(HERE, "discover.py")],
-        capture_output=True, text=True).stdout or "{}")
-    if os.path.exists(CONFIG):
-        try:
-            found["config"] = load_cfg()
-        except Exception as exc:
-            found["config"] = {"error": f"could not read config: {exc}"}
+    found = discover()
+    if swlib.is_configured():
+        found["config"] = swlib.load_config() or {
+            "error": "could not read %s" % tilde(config_file())}
     else:
         found["config"] = None
     return found
 
+
 def cmd_detect():
     print(json.dumps(detection(), indent=2))
 
+
+def cmd_show():
+    if not swlib.is_configured():
+        sys.exit("second-wind: not set up yet. Run setup.py --detect first.")
+    print(json.dumps(swlib.load_config(), indent=2))
+
+
+# ---------------------------------------------------------------- write
+
+
 def cmd_write(a):
-    previous = load_cfg() if os.path.exists(CONFIG) else {}
-    prof = json.loads(subprocess.run(
-        [sys.executable, os.path.join(HERE, "discover.py")],
-        capture_output=True, text=True).stdout or "{}")
-    by_dir = {p["config_dir"]: p for p in prof.get("claude_profiles", [])}
+    if not swlib.has_jq():
+        sys.exit("second-wind: jq is not on PATH. The status line and the refresh "
+                 "script both need it. Install jq, then run --write again.")
+    previous = swlib.load_config()
+    found = discover()
+    by_dir = {p["config_dir"]: p for p in found.get("claude_profiles", [])}
 
     def look(d):
+        if not d:
+            return {}
         return by_dir.get(tilde(expand(d))) or by_dir.get(d) or {}
 
-    prim = look(a.primary)
-    sec = look(a.secondary) if a.secondary else {}
-    if a.secondary and os.path.realpath(expand(a.primary)) == os.path.realpath(expand(a.secondary)):
-        sys.exit("second-wind: primary and secondary resolve to the same directory.")
-    if a.secondary and not os.path.isdir(expand(a.secondary)):
-        sys.exit(f"second-wind: {a.secondary} does not exist. Create and sign in to the "
-                 "profile first: see references/setup.md. Refusing to write settings into a "
-                 "directory that is not a Claude profile.")
-    for name, v in (("--five-hour", a.five_hour), ("--seven-day", a.seven_day)):
-        if not 1 <= v <= 100:
-            sys.exit(f"second-wind: {name} must be between 1 and 100")
+    for name, value in (("--five-hour", a.five_hour), ("--seven-day", a.seven_day)):
+        if not 1 <= value <= 100:
+            sys.exit("second-wind: %s must be between 1 and 100" % name)
     if a.timeout < 30:
         sys.exit("second-wind: --timeout must be at least 30 seconds")
     if not 1 <= a.refresh_minutes <= 1440:
         sys.exit("second-wind: --refresh-minutes must be between 1 and 1440")
+
+    dirs = {"primary": a.primary, "secondary": a.secondary, "reader": a.reader}
+    for role, folder in dirs.items():
+        if role != "primary" and folder and not os.path.isdir(expand(folder)):
+            sys.exit("second-wind: %s does not exist. Create and sign in to the "
+                     "profile first: see references/setup.md. Refusing to write "
+                     "settings into a directory that is not a Claude profile."
+                     % folder)
+    if not os.path.isdir(expand(a.primary)):
+        sys.exit("second-wind: %s does not exist." % a.primary)
+    seen = {}
+    for role, folder in dirs.items():
+        if not folder:
+            continue
+        real = os.path.realpath(expand(folder))
+        if real in seen:
+            sys.exit("second-wind: %s and %s resolve to the same directory."
+                     % (seen[real], role))
+        seen[real] = role
+
+    prim = look(a.primary)
+    sec = look(a.secondary)
+    rdr = look(a.reader)
     if not prim.get("logged_in"):
-        print(f"  ! primary {a.primary} is not signed in. Sign it in first.", file=sys.stderr)
-    if a.secondary and not sec.get("logged_in"):
-        if not a.force:
-            sys.exit(f"second-wind: secondary {a.secondary} is not signed in, so every "
-                     "delegation to it would fail. Sign it in first, or pass --force.")
-        print(f"  ! secondary {a.secondary} is not signed in (forced).", file=sys.stderr)
-    if not prim.get("logged_in") and not a.force:
-        sys.exit(f"second-wind: primary {a.primary} is not signed in. Sign it in first, "
-                 "or pass --force.")
+        print("  ! primary %s does not report a terminal login. The desktop app "
+              "can be signed in while the CLI check says otherwise, so this is a "
+              "warning, not a refusal." % a.primary, file=sys.stderr)
+    for role, folder, info in (("secondary", a.secondary, sec),
+                               ("reader", a.reader, rdr)):
+        if folder and not info.get("logged_in"):
+            if not a.force:
+                sys.exit("second-wind: %s %s is not signed in, so it would fail "
+                         "every time it was used. Sign it in first, or pass "
+                         "--force." % (role, folder))
+            print("  ! %s %s is not signed in (forced)." % (role, folder),
+                  file=sys.stderr)
 
-    print("Recording the constraints imposed by each worker command...")
-    probe = json.loads(subprocess.run(
-        [sys.executable, os.path.join(HERE, "probe.py")],
-        capture_output=True, text=True).stdout or "{}")
-    codex_browser = (probe.get("codex") or {}).get("can_launch_browser")
-
-    def selected(name, state, require_login=True):
-        info = prof.get(name) or {}
+    def selected(name, state):
+        info = found.get(name) or {}
         installed = info.get("installed") is True
         logged = info.get("logged_in") is True
         if state == "on" and not installed:
-            sys.exit(f"second-wind: --{name} on was requested, but its command is not on PATH.")
-        if state == "on" and require_login and not logged:
-            sys.exit(f"second-wind: --{name} on was requested, but it is not signed in.")
+            sys.exit("second-wind: --%s on was requested, but its command is not "
+                     "on PATH." % name)
+        if state == "on" and not logged:
+            sys.exit("second-wind: --%s on was requested, but it is not signed in."
+                     % name)
         if state == "off":
             return False
-        return installed and (logged or not require_login)
+        return installed and logged
 
     codex_on = selected("codex", a.codex)
-    grok_on = selected("grok", a.grok, require_login=False)
+    grok_on = selected("grok", a.grok)
     cursor_on = selected("cursor", a.cursor)
     if not any((a.secondary, codex_on, grok_on, cursor_on)):
-        sys.exit("second-wind: nothing to delegate to. Connect at least one worker first.")
-    _, working_dir, _ = trusted_project(a.primary)
+        sys.exit("second-wind: nothing to delegate to. Connect at least one "
+                 "worker first.")
+    cursor_reads = bool(cursor_on and (found.get("cursor") or {}).get("can_read_usage"))
+
+    level = LEVELS[a.level]
+    versions = swlib.client_versions()
+    launchd_on = (not a.no_launchd and sys.platform == "darwin"
+                  and not in_temp_home())
+    folder = workdir_path()
+    os.makedirs(sw_home(), exist_ok=True)
+    os.makedirs(os.path.join(sw_home(), "log"), exist_ok=True)
+    os.makedirs(folder, exist_ok=True)
+    # the log holds whole prompts and replies, so keep the tree private
+    os.chmod(sw_home(), 0o700)
+    os.chmod(os.path.join(sw_home(), "log"), 0o700)
+    os.chmod(folder, 0o700)
+
     cfg = {
-        "version": 3,
+        "version": swlib.CONFIG_VERSION,
         "created": time.strftime("%Y-%m-%d"),
+        "level": a.level,
         "primary": {
             "kind": "claude", "label": "primary",
             "config_dir": tilde(expand(a.primary)),
             "account": prim.get("account", "unknown"),
-            "plan": prim.get("subscription", "unknown") or "unknown",
+            "plan": prim.get("subscription") or "unknown",
             "is_default_dir": prim.get("is_default_dir", False),
         },
         "secondary": {
@@ -244,15 +531,20 @@ def cmd_write(a):
             "enabled": bool(a.secondary),
             "config_dir": tilde(expand(a.secondary)) if a.secondary else "",
             "account": sec.get("account", "unknown") if a.secondary else "",
-            "plan": (sec.get("subscription", "unknown") or "unknown") if a.secondary else "",
+            "plan": (sec.get("subscription") or "unknown") if a.secondary else "",
             "is_default_dir": sec.get("is_default_dir", False),
+        },
+        "reader": {
+            "kind": "claude", "label": "reader",
+            "enabled": bool(a.reader),
+            "config_dir": tilde(expand(a.reader)) if a.reader else "",
+            "account": rdr.get("account", "unknown") if a.reader else "",
+            "read_for": "primary",
         },
         "codex": {
             "kind": "codex", "label": "codex", "enabled": codex_on,
-            "account": prof.get("codex", {}).get("account", "unknown"),
+            "account": (found.get("codex") or {}).get("account", "unknown"),
             "plan": "unknown",
-            "can_launch_browser": codex_browser,
-            "browser_probe": (probe.get("codex") or {}).get("detail", ""),
         },
         "grok": {
             "kind": "grok", "label": "grok", "enabled": grok_on,
@@ -260,117 +552,114 @@ def cmd_write(a):
         },
         "cursor": {
             "kind": "cursor", "label": "cursor", "enabled": cursor_on,
-            "account": prof.get("cursor", {}).get("account", "unknown"),
+            "account": (found.get("cursor") or {}).get("account", "unknown"),
             "plan": "Cursor Pro",
+            "auth": (found.get("cursor") or {}).get("auth", "none"),
         },
         "thresholds": {"five_hour_pct": a.five_hour, "seven_day_pct": a.seven_day},
         "refresh": {
             "interval_minutes": a.refresh_minutes,
-            "working_dir": tilde(working_dir),
-            "codex_enabled": codex_on and a.codex_harvest == "on",
-            "grok_enabled": grok_on,
-            "cursor_enabled": cursor_on,
+            "workdir": tilde(folder),
+            "launchd": launchd_on,
+            "model_picker": a.model_picker == "on",
+            "cursor": cursor_reads,
+        },
+        "failover": {"enabled": level["failover"], "announce": True},
+        "defaults": {"mode": level["mode"]},
+        "log": {
+            "dir": tilde(os.path.join(sw_home(), "log")),
+            "max_exchange_kb": 200,
+            "prune_days": 30,
         },
         "timeout_seconds": a.timeout,
-        "failover": {"enabled": not a.no_failover, "announce": True},
-        "defaults": {"mode": a.default_mode},
-        "log_dir": tilde(os.path.join(SW_HOME, "log")),
+        "tested_versions": versions,
         # where the skill lives, so SKILL.md can find its own scripts. Relative
         # paths do not work: a Bash tool call runs in the user's project, not here.
         "skill_dir": tilde(os.path.dirname(HERE)),
     }
-    os.makedirs(SW_HOME, exist_ok=True)
-    os.makedirs(os.path.join(SW_HOME, "log"), exist_ok=True)
-    # the log holds whole prompts and replies, so keep the tree private
-    os.chmod(SW_HOME, 0o700)
-    os.chmod(os.path.join(SW_HOME, "log"), 0o700)
-    write_json(CONFIG, cfg)
+    swlib.write_json_atomic(config_file(), cfg)
 
-    b = merge_settings(cfg["primary"]["config_dir"], install=True)
-    if b is False:
-        sys.exit("second-wind: could not install the primary status line and usage guard. "
-                 "Fix its settings.json and run --write again.")
+    print("\nWrote %s" % tilde(config_file()))
+    print("  level     %s (mode %s, automatic handover %s)"
+          % (a.level, level["mode"], "on" if level["failover"] else "off"))
+    print("  primary   %s   (%s)" % (cfg["primary"]["account"],
+                                     cfg["primary"]["config_dir"]))
     if a.secondary:
-        sb = merge_settings(cfg["secondary"]["config_dir"], install=True)
-        if sb is False:
-            sys.exit("second-wind: could not install the secondary status line and usage "
-                     "guard. Fix its settings.json and run --write again.")
-    old_reader = (previous.get("reader") or {}).get("config_dir")
-    if old_reader:
-        merge_settings(old_reader, install=False, include_guard=False)
-
-    print(f"\nWrote {tilde(CONFIG)}")
-    if b:
-        print(f"Backed up the primary settings file to {tilde(b)}")
-    print(f"  primary   {cfg['primary']['account']}   ({cfg['primary']['config_dir']})")
-    if a.secondary:
-        print(f"  secondary {cfg['secondary']['account']}   ({cfg['secondary']['config_dir']})")
+        print("  secondary %s   (%s)" % (cfg["secondary"]["account"],
+                                         cfg["secondary"]["config_dir"]))
     else:
         print("  secondary off")
-    print(f"  codex     {'on, ' + cfg['codex']['account'] if codex_on else 'off'}")
-    print(f"  grok      {'on' if grok_on else 'off'}")
-    print(f"  cursor    {'on, ' + cfg['cursor']['account'] if cursor_on else 'off'}")
-    print("  Claude usage reader     on")
-    print(f"  Codex usage reader      "
-          f"{'on' if cfg['refresh']['codex_enabled'] else 'off'}")
-    if codex_on and codex_browser is not True:
-        print("  note: codex cannot launch a browser in its sandbox, so browser work")
-        print("        will never be delegated to it. This is expected, not a fault.")
-    print(f"  failover  {'on' if cfg['failover']['enabled'] else 'off'} "
-          f"at {a.five_hour}% of the 5-hour window and {a.seven_day}% of the weekly window")
-    print("\nRestart Claude Code. Then run:  setup.py --accounts  and  setup.py --check")
+    if a.reader:
+        print("  reader    %s   (%s)" % (cfg["reader"]["account"],
+                                         cfg["reader"]["config_dir"]))
+    print("  codex     %s" % ("on, " + cfg["codex"]["account"] if codex_on else "off"))
+    print("  grok      %s" % ("on" if grok_on else "off"))
+    if cursor_on:
+        print("  cursor    on, %s (%s sign-in, usage reading %s)"
+              % (cfg["cursor"]["account"], cfg["cursor"]["auth"],
+                 "on" if cursor_reads else "off, an API key cannot read the panel"))
+    else:
+        print("  cursor    off")
 
-def cmd_show():
-    if not os.path.exists(CONFIG):
-        sys.exit("second-wind: not set up yet. Run setup.py --detect first.")
-    print(json.dumps(load_cfg(), indent=2))
+    print("\nWorking directory for the readers: %s" % tilde(folder))
+    print("  claude %s: %s" % (cfg["primary"]["config_dir"],
+                               trust_claude(a.primary, folder)))
+    if a.secondary:
+        print("  claude %s: %s" % (cfg["secondary"]["config_dir"],
+                                   trust_claude(a.secondary, folder)))
+    if a.reader:
+        print("  claude %s: %s" % (cfg["reader"]["config_dir"],
+                                   trust_claude(a.reader, folder)))
+    if codex_on:
+        print("  codex: %s" % trust_codex(folder))
 
-def cache_age(path):
-    try:
-        with open(path) as f:
-            cached = int(json.load(f).get("cached_at", 0))
-        age = int(time.time()) - cached
-        return age if age >= -60 else None
-    except Exception:
-        return None
+    print("\nProfile settings:")
+    result = merge_settings(cfg["primary"]["config_dir"], events=level["events"],
+                           statusline=True, model_picker=a.model_picker == "on")
+    if result is False:
+        sys.exit("second-wind: could not install the primary hooks and status "
+                 "line. Fix its settings.json and run --write again.")
+    print("  primary   %s hooks and the status line installed"
+          % ", ".join(level["events"]))
+    if a.secondary:
+        guard = ("UserPromptSubmit",) if "UserPromptSubmit" in level["events"] else ()
+        if merge_settings(cfg["secondary"]["config_dir"], events=guard,
+                          statusline=True) is False:
+            sys.exit("second-wind: could not install the secondary status line. "
+                     "Fix its settings.json and run --write again.")
+        print("  secondary status line%s installed"
+              % (" and the guard" if guard else ""))
+    for stale_dir in {(previous.get(role) or {}).get("config_dir")
+                      for role in ("primary", "secondary", "reader")} | \
+            {cfg["reader"]["config_dir"]}:
+        if not stale_dir:
+            continue
+        current = {cfg["primary"]["config_dir"], cfg["secondary"]["config_dir"]}
+        if stale_dir in current or not os.path.isdir(expand(stale_dir)):
+            continue
+        merge_settings(stale_dir, model_picker=False)
+        print("  %s cleared of second-wind entries" % stale_dir)
 
-def short_age(seconds):
-    if seconds is None:
-        return "unknown"
-    if seconds < 90:
-        return f"{max(0, seconds)}s"
-    minutes = seconds // 60
-    if minutes < 90:
-        return f"{minutes}m"
-    hours = minutes // 60
-    if hours < 48:
-        return f"{hours}h"
-    return f"{hours // 24}d"
+    print("\nBackground refresh:")
+    if a.no_launchd or in_temp_home():
+        print("  skipped. Run %s yourself, or rerun --write without --no-launchd."
+              % tilde(os.path.join(HERE, "usage-refresh.sh")))
+    else:
+        print("  %s" % launchd_install(a.refresh_minutes * 60))
 
-def load_usage(role):
-    path = os.path.join(SW_HOME, f"usage-{role}.json")
-    try:
-        with open(path) as f:
-            return json.load(f), path
-    except Exception:
-        return {}, path
+    print("\nTested against: %s"
+          % ", ".join("%s %s" % (name, version or "not installed")
+                      for name, version in versions.items()))
+    missing = [event for event in level["events"]
+               if not os.path.exists(hook_command(event))]
+    if missing:
+        print("\n  ! these hook files are not present yet: %s"
+              % ", ".join(HOOK_FILES[event][0] for event in missing))
+    print("\nRestart Claude Code. Then run:  setup.py --check  and  setup.py --accounts")
 
-def effective_status(role, usage_path, cached_at):
-    path = os.path.join(SW_HOME, f"refresh-status-{role}.txt")
-    try:
-        with open(path) as f:
-            message = f.readline().strip()
-        status_time = os.path.getmtime(path)
-    except Exception:
-        return ""
-    usage_time = max(cached_at or 0, os.path.getmtime(usage_path) if os.path.exists(usage_path) else 0)
-    return message if status_time >= usage_time else ""
 
-def number(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+# ---------------------------------------------------------------- accounts
+
 
 def reset_text(value):
     if value in (None, ""):
@@ -380,346 +669,399 @@ def reset_text(value):
     except (TypeError, ValueError, OverflowError):
         return str(value).strip()
 
+
 def window_text(used, reset):
-    pct = number(used)
-    return f"{pct:.0f}% / {reset_text(reset)}" if pct is not None else "unknown"
+    pct = swlib.number(used)
+    return "%.0f%% / %s" % (pct, reset_text(reset)) if pct is not None else "unknown"
 
-def status_summary(message, has_cache):
-    upper = message.upper()
-    if "LOGIN EXPIRED" in upper:
-        return "login expired: sign in"
-    if "VERSION TOO OLD" in upper:
-        return "version too old: upgrade Claude Code"
-    if "MISSING PROFILE" in upper:
-        return "profile missing: rerun setup"
-    if message and not upper.startswith("OK"):
-        return "cached after refresh failure" if has_cache else "refresh failed"
-    return "ready" if has_cache else "no reading"
 
-def account_row(role, profile, enabled=True):
-    usage, path = load_usage(role)
-    cached_at = int(usage.get("cached_at", 0) or 0)
-    age = cache_age(path)
-    message = effective_status(role, path, cached_at)
-    blocking = any(marker in message.upper() for marker in
-                   ("LOGIN EXPIRED", "VERSION TOO OLD", "MISSING PROFILE"))
-    five = None if blocking else number(usage.get("five_hour_pct"))
-    week = None if blocking else number(usage.get("seven_day_pct"))
-    cursor_pools = [number(usage.get(key)) for key in
-                    ("included_pct", "auto_pct", "api_pct")]
-    cursor_pools = [value for value in cursor_pools if value is not None]
-    if role in ("primary", "secondary", "codex"):
-        headroom = None if five is None or week is None else 100 - max(five, week)
-        limits = (f"5h {window_text(five, usage.get('five_hour_resets_at') or usage.get('five_hour_resets'))}; "
-                  f"week {window_text(week, usage.get('seven_day_resets_at') or usage.get('seven_day_resets'))}")
-    elif role == "grok":
-        headroom = None if week is None else 100 - week
-        limits = f"week {window_text(week, usage.get('seven_day_resets'))}"
-    else:
-        headroom = None if not cursor_pools else 100 - max(cursor_pools)
+def limits_text(role, usage):
+    if not usage:
+        return "unknown"
+    extra = usage.get("extra") or {}
+    if role == "cursor":
         parts = []
-        for label, key in (("Included", "included_pct"), ("Auto", "auto_pct"), ("API", "api_pct")):
-            value = number(usage.get(key))
-            parts.append(f"{label} {value:.0f}%" if value is not None else f"{label} unknown")
-        if usage.get("resets"):
-            parts.append(f"resets {usage['resets']}")
-        if usage.get("on_demand") is None and usage:
-            parts.append("on-demand unavailable")
-        limits = "; ".join(parts) if usage else "unknown"
-    headroom = None if headroom is None else min(100, max(0, headroom))
+        for label, key in (("Included", "included_pct"), ("Auto", "auto_pct"),
+                           ("API", "api_pct")):
+            value = swlib.pool(usage, key)
+            parts.append("%s %.0f%%" % (label, value) if value is not None
+                         else "%s unknown" % label)
+        resets = extra.get("resets") or usage.get("resets")
+        if resets:
+            parts.append("resets %s" % resets)
+        return "; ".join(parts)
+    if role == "grok":
+        return "week %s" % window_text(usage.get("seven_day_pct"),
+                                       usage.get("seven_day_resets_at")
+                                       or usage.get("seven_day_resets"))
+    return ("5h %s; week %s"
+            % (window_text(usage.get("five_hour_pct"),
+                           usage.get("five_hour_resets_at")
+                           or usage.get("five_hour_resets")),
+               window_text(usage.get("seven_day_pct"),
+                           usage.get("seven_day_resets_at")
+                           or usage.get("seven_day_resets"))))
+
+
+def account_row(role, cfg):
+    profile = cfg.get(role) or {}
+    enabled = role in swlib.enabled_roles(cfg)
+    usage = swlib.load_usage(role)
+    state = swlib.freshness(role, cfg=cfg)
+    kind = swlib.status_kind(role)
+    blocking = kind in ("login", "trust", "parser")
+    live = state in ("fresh", "stale") and not blocking
+    head = swlib.headroom(role, usage) if live else None
     if not enabled:
-        headroom = None
-        limits = "unknown"
-        message = "DISABLED"
-    account = usage.get("account") or profile.get("account") or "unknown"
-    plan = usage.get("plan") or profile.get("plan") or "unknown"
+        words, head = "disabled", None
+        limits, age, version = "unknown", "unknown", "unknown"
+    elif not swlib.reading_enabled(role, cfg):
+        words, head = "no usage reading", None
+        limits, age, version = "not readable for this sign-in", "unknown", \
+            usage.get("client_version") or "unknown"
+    else:
+        words = swlib.status_words(kind) if kind != "ok" else (
+            "ready" if state == "fresh" else
+            ("reading is stale" if state == "stale" else "no current reading"))
+        limits = limits_text(role, usage) if live else "unknown"
+        age = swlib.short_age(swlib.cache_age(role)) if usage else "unknown"
+        version = usage.get("client_version") or "unknown"
     return {
         "role": role,
-        "account": account,
-        "plan": plan,
+        "account": usage.get("account") or profile.get("account") or "unknown",
+        "plan": usage.get("plan") or profile.get("plan") or "unknown",
         "limits": limits,
-        "age": short_age(age) if usage else "unknown",
-        "headroom": headroom,
-        "status": "disabled" if message == "DISABLED" else status_summary(message, bool(usage)),
+        "age": age,
+        "version": version,
+        "headroom": head,
+        "status": words,
         "eligible": enabled,
-        "usage": usage,
-        "config_dir": profile.get("config_dir", ""),
     }
 
-def live_plan(config_dir):
-    """Ask a profile what plan it is on. Cheap and local: no tokens are spent.
 
-    The stored plan can be "unknown" because discovery ran while that profile's
-    terminal login was expired, which says nothing about the account itself.
-    """
-    if not config_dir:
-        return ""
-    env = dict(os.environ)
-    if os.path.realpath(expand(config_dir)) == os.path.realpath(os.path.join(HOME, ".claude")):
-        env.pop("CLAUDE_CONFIG_DIR", None)
-    else:
-        env["CLAUDE_CONFIG_DIR"] = expand(config_dir)
-    try:
-        out = subprocess.run(["claude", "auth", "status", "--json"],
-                             capture_output=True, text=True, timeout=20,
-                             env=env).stdout
-        return (json.loads(out) or {}).get("subscriptionType", "") or ""
-    except Exception:
-        return ""
-
-def cmd_accounts():
-    if not os.path.exists(CONFIG):
+def cmd_accounts(a):
+    if not swlib.is_configured():
         print("NOT SET UP. Run: setup.py --detect")
         return
-    cfg = load_cfg()
-    try:
-        interval = int((cfg.get("refresh") or {}).get("interval_minutes", 15) or 15)
-    except (TypeError, ValueError):
-        interval = 15
-    if interval < 1:
-        interval = 15
-    refresh = cfg.get("refresh") or {}
-    roles = ["primary"]
-    if (cfg.get("secondary") or {}).get("enabled"):
-        roles.append("secondary")
-    for role in ("codex", "grok", "cursor"):
-        if ((cfg.get(role) or {}).get("enabled") is True and
-                refresh.get(f"{role}_enabled", True) is True):
-            roles.append(role)
-    stale = [role for role in roles
-             if (cache_age(os.path.join(SW_HOME, f"usage-{role}.json")) is None
-                 or cache_age(os.path.join(SW_HOME, f"usage-{role}.json")) >= interval * 60)]
-    refresh_note = "Usage readings were already fresh; no refresh was needed."
-    if stale:
+    cfg = swlib.load_config()
+    if a.live:
+        script = os.path.join(HERE, "usage-refresh.sh")
         try:
-            subprocess.run([os.path.join(HERE, "usage-refresh.sh")], timeout=120,
+            subprocess.run(["/bin/sh", script, "--force"], timeout=120,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            refresh_note = ("A refresh was attempted for stale enabled readings. "
-                            "Failures remain unknown or show a cached age.")
+            note = "Readers were run just now."
         except subprocess.TimeoutExpired:
-            refresh_note = "Refresh timed out. Showing cached figures with their age."
-        except OSError as e:
-            refresh_note = f"Refresh could not start ({e}). Showing cached figures with their age."
-    rows = []
-    for role in ("primary", "secondary", "codex", "grok", "cursor"):
-        profile = cfg.get(role) or {}
-        rows.append(account_row(role, profile,
-                                role == "primary" or bool(profile.get("enabled"))))
-
-    role_order = {"primary": 0, "secondary": 1, "codex": 2, "grok": 3, "cursor": 4}
-    rows.sort(key=lambda row: (
-        row["headroom"] is None,
-        -(row["headroom"] or 0),
-        role_order[row["role"]],
-    ))
-    recommendation = next((row for row in rows
-                           if row["eligible"] and row["headroom"] is not None), None)
-    if recommendation:
-        print(f"Work should go to: {recommendation['role']} ({recommendation['account']})")
+            note = "The refresh did not finish inside 120 seconds. Figures below are cached."
+        except OSError as exc:
+            note = "The refresh could not start (%s). Figures below are cached." % exc
     else:
-        print("Work destination: unknown until an eligible account has a readable limit.")
-    print(refresh_note)
-    for row in rows:
-        if row["role"] in ("primary", "secondary") and row.get("plan", "unknown") in ("", "unknown"):
-            got = live_plan(row.get("config_dir", ""))
-            if got:
-                row["plan"] = got
+        note = ("Cached figures. Nothing was spawned. Add --live to run the readers "
+                "first.")
 
-    print("Headroom uses the strictest reported pool: 5h and weekly for Claude/Codex, weekly for Grok, monthly pools for Cursor. Unknown sorts last.")
+    rows = [account_row(role, cfg) for role in swlib.ROLES]
+    order = {role: i for i, role in enumerate(swlib.ROLES)}
+    rows.sort(key=lambda row: (row["headroom"] is None,
+                               -(row["headroom"] or 0),
+                               order[row["role"]]))
+    pick = next((row for row in rows
+                 if row["eligible"] and row["headroom"] is not None), None)
+    if pick:
+        print("Work should go to: %s (%s)" % (pick["role"], pick["account"]))
+    else:
+        print("Work destination: unknown until an eligible account has a readable "
+              "limit.")
+    print(note)
+    print("Headroom uses the strictest reported pool: 5h and weekly for Claude and "
+          "Codex, weekly for Grok, monthly pools for Cursor. Unknown sorts last.")
 
-    headers = ("ROLE", "ACCOUNT", "PLAN", "LIMITS", "AGE", "HEADROOM", "STATUS")
-    values = []
-    for row in rows:
-        values.append((
-            row["role"], row["account"], row["plan"], row["limits"],
-            row["age"], f"{row['headroom']:.0f}%" if row["headroom"] is not None else "unknown",
-            row["status"],
-        ))
-    widths = [max(len(str(headers[i])), *(len(str(row[i])) for row in values))
+    headers = ("ROLE", "ACCOUNT", "PLAN", "LIMITS", "AGE", "VERSION", "HEADROOM",
+               "STATUS")
+    values = [(row["role"], row["account"], row["plan"], row["limits"], row["age"],
+               row["version"],
+               "%d%%" % row["headroom"] if row["headroom"] is not None else "unknown",
+               row["status"]) for row in rows]
+    widths = [max(len(headers[i]), *(len(str(row[i])) for row in values))
               for i in range(len(headers) - 1)]
+
     def line(row):
         left = "  ".join(str(row[i]).ljust(widths[i]) for i in range(len(widths)))
-        return f"{left}  {row[-1]}"
+        return "%s  %s" % (left, row[-1])
+
     print(line(headers))
     print(line(tuple("-" * len(header) for header in headers)))
     for row in values:
         print(line(row))
 
-    codex_usage = next((row["usage"] for row in rows if row["role"] == "codex"), {})
-    if codex_usage.get("monthly_credit_pct") is not None or codex_usage.get("credits_note"):
-        credit_parts = []
-        monthly = number(codex_usage.get("monthly_credit_pct"))
-        if monthly is not None:
-            credit_parts.append(f"{monthly:.0f}% used")
-        if codex_usage.get("monthly_credit_resets"):
-            credit_parts.append(f"resets {codex_usage['monthly_credit_resets']}")
-        if codex_usage.get("credits_note"):
-            credit_parts.append(codex_usage["credits_note"])
-        print("Codex monthly credits: " + ", ".join(credit_parts)
-              + ". They cap overage only; the 5h and weekly plan windows determine headroom.")
+
+# ---------------------------------------------------------------- check
+
 
 def cmd_check():
-    """Answer the one question the tool cannot answer for itself: is the
-    automatic handover actually armed? Every link in that chain fails silently by
-    design, so without this there is no way to tell working from broken."""
-    if not os.path.exists(CONFIG):
-        print("NOT SET UP. Run: setup.py --detect"); return
-    cfg = load_cfg()
-    ok = True
-    print(f"config          {tilde(CONFIG)}")
-    print(f"primary         {cfg['primary']['account']}  ({cfg['primary']['config_dir']})")
-    sec = cfg.get("secondary", {})
-    print(f"secondary       {sec.get('account') or 'none'}"
-          f"{'  (' + sec['config_dir'] + ')' if sec.get('config_dir') else ''}"
-          f"{'' if sec.get('enabled') else '  [disabled]'}")
-    cx = cfg.get("codex", {})
-    print(f"codex           {cx.get('account') if cx.get('enabled') else 'off'}")
-    if cx.get("enabled") and cx.get("can_launch_browser") is not True:
-        print("                cannot launch a browser, so browser work is never sent to it")
-    for role in ("grok", "cursor"):
+    """Answer the one question the tool cannot answer for itself: is this
+    actually wired up? Every link in the chain fails silently by design, so
+    without this there is no way to tell working from broken."""
+    if not swlib.is_configured():
+        print("NOT SET UP. Run: setup.py --detect")
+        return
+    cfg = swlib.load_config()
+    level_name = cfg.get("level") or ("relief" if (cfg.get("failover") or {})
+                                      .get("enabled") else "worker")
+    level = LEVELS.get(level_name, LEVELS["worker"])
+    faults, warnings = [], []
+
+    def row(label, value):
+        print("%-28s%s" % (label, value))
+
+    row("config", tilde(config_file()))
+    row("version", str(cfg.get("version", "unknown")))
+    if cfg.get("version") != swlib.CONFIG_VERSION:
+        faults.append("config is version %s, this build writes version %d. Rerun "
+                      "--write." % (cfg.get("version", "unknown"),
+                                    swlib.CONFIG_VERSION))
+    row("level", "%s (mode %s, automatic handover %s)"
+        % (level_name, (cfg.get("defaults") or {}).get("mode", "unknown"),
+           "on" if (cfg.get("failover") or {}).get("enabled") else "off"))
+    row("primary", "%s  (%s)" % ((cfg.get("primary") or {}).get("account", "unknown"),
+                                 (cfg.get("primary") or {}).get("config_dir", "")))
+    for role in ("secondary", "reader"):
         profile = cfg.get(role) or {}
-        print(f"{role:15} {profile.get('account', 'unknown') if profile.get('enabled') else 'off'}")
-
-    commands = {"codex": "codex", "grok": "grok", "cursor": "cursor-agent"}
-    for role, command in commands.items():
-        if (cfg.get(role) or {}).get("enabled"):
-            installed = shutil.which(command) is not None
-            print(f"{role + ' command':15} {'installed' if installed else 'MISSING'}")
-            if not installed:
-                ok = False
-
-    fo = cfg.get("failover", {}).get("enabled", True)
-    print(f"failover        {'on' if fo else 'OFF in config'}")
-    if not fo:
-        ok = False
-    if os.path.exists(os.path.join(SW_HOME, "no-failover")):
-        print("                OFF: ~/.second-wind/no-failover exists"); ok = False
-
-    t5 = cfg["thresholds"]["five_hour_pct"]; t7 = cfg["thresholds"]["seven_day_pct"]
-    print(f"thresholds      5h {t5}%   7d {t7}%")
-    refresh = cfg.get("refresh") or {}
-    print("Claude reader   on")
+        if profile.get("enabled"):
+            row(role, "%s  (%s)" % (profile.get("account", "unknown"),
+                                    profile.get("config_dir", "")))
+        else:
+            row(role, "off")
     for role in ("codex", "grok", "cursor"):
-        enabled = ((cfg.get(role) or {}).get("enabled") is True and
-                   refresh.get(f"{role}_enabled", True) is True)
-        print(f"{role + ' reader':15} {'on' if enabled else 'off'}")
+        profile = cfg.get(role) or {}
+        if not profile.get("enabled"):
+            row(role, "off")
+            continue
+        note = profile.get("account", "unknown")
+        if role == "cursor" and not swlib.reading_enabled(role, cfg):
+            note += "  (delegation only: this sign-in cannot read usage)"
+        row(role, note)
 
-    sl_cmd = os.path.join(HERE, "statusline.sh")
-    guard_cmd = os.path.join(HERE, "usage-guard.sh")
+    row("jq", "installed" if swlib.has_jq() else "MISSING")
+    if not swlib.has_jq():
+        faults.append("jq is not on PATH, so the status line and the refresh "
+                      "script are inert.")
+    for role, command in (("codex", "codex"), ("grok", "grok"),
+                          ("cursor", "cursor-agent")):
+        if (cfg.get(role) or {}).get("enabled"):
+            found = shutil.which(command) is not None
+            row(role + " command", "installed" if found else "MISSING")
+            if not found:
+                faults.append("%s is enabled but %s is not on PATH." % (role, command))
+
+    folder = expand((cfg.get("refresh") or {}).get("workdir", ""))
+    row("workdir", "%s%s" % (tilde(folder) or "not set",
+                             "" if folder and os.path.isdir(folder) else "  MISSING"))
+    if not folder or not os.path.isdir(folder):
+        faults.append("the readers' working directory does not exist. Rerun --write.")
+
+    print()
     for role in ("primary", "secondary"):
         profile = cfg.get(role) or {}
         if role == "secondary" and not profile.get("enabled"):
             continue
-        path = settings_path(profile["config_dir"])
-        try:
-            with open(path) as f:
-                settings = json.load(f)
-            status_installed = settings.get("statusLine", {}).get("command") == sl_cmd
-            prompt_hooks = settings.get("hooks", {}).get("UserPromptSubmit", [])
-            guard_installed = any(
-                hook.get("command") == guard_cmd
-                for group in prompt_hooks if isinstance(group, dict)
-                for hook in (group.get("hooks") or []) if isinstance(hook, dict)
-            )
-            print(f"{role + ' status':15} {'installed' if status_installed else 'MISSING'}")
-            print(f"{role + ' guard':15} {'installed' if guard_installed else 'MISSING'}")
-            if not status_installed or not guard_installed:
-                print(f"                Check {tilde(path)} or run --write again.")
-                ok = False
-        except Exception as e:
-            print(f"{role + ' settings':15} UNREADABLE: {tilde(path)}: {e}")
-            ok = False
-
-    usage = os.path.join(SW_HOME, "usage-primary.json")
-    if not os.path.exists(usage):
-        print("reading         NONE YET")
-        print("                Run setup.py --accounts to refresh the prompt-free usage panel.")
-        ok = False
-    else:
-        try:
-            u = json.load(open(usage))
-            age = int(time.time() - u.get("cached_at", 0))
-            fresh = -60 <= age <= 3600
-            five = u.get("five_hour_pct")
-            seven = u.get("seven_day_pct")
-            five_text = f"{number(five):.0f}" if number(five) is not None else "?"
-            seven_text = f"{number(seven):.0f}" if number(seven) is not None else "?"
-            print(f"reading         5h {five_text}%   7d {seven_text}%   "
-                  f"({age // 60}m old{'' if fresh else ', TOO OLD, ignored'})")
-            if not fresh:
-                ok = False
-        except Exception as e:
-            print(f"reading         UNREADABLE: {e}"); ok = False
-
-    for role in ("primary", "secondary", "codex", "grok", "cursor"):
-        status_file = os.path.join(SW_HOME, f"refresh-status-{role}.txt")
-        if not os.path.exists(status_file):
+        data, path = read_settings(profile.get("config_dir", ""))
+        if data is None:
+            row(role + " settings", "UNREADABLE: %s" % tilde(path))
+            faults.append("%s settings.json is not valid JSON." % role)
             continue
-        usage_data, usage_path = load_usage(role)
-        message = effective_status(role, usage_path, int(usage_data.get("cached_at", 0) or 0))
-        if message and not message.upper().startswith("OK"):
-            print(f"{role + ' refresh':15} {message}")
-            if any(marker in message.upper() for marker in
-                   ("LOGIN EXPIRED", "VERSION TOO OLD", "MISSING PROFILE")):
-                ok = False
+        installed = data.get("statusLine", {}).get("command") == statusline_command() \
+            if isinstance(data.get("statusLine"), dict) else False
+        row(role + " statusline", "installed" if installed else "MISSING")
+        if not installed:
+            faults.append("the %s status line is not installed. Rerun --write." % role)
+        events = level["events"] if role == "primary" else \
+            (("UserPromptSubmit",) if "UserPromptSubmit" in level["events"] else ())
+        hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
+        for event in events:
+            command = hook_command(event)
+            wired = any(inner.get("command") == command
+                        for group in hooks.get(event, []) if isinstance(group, dict)
+                        for inner in (group.get("hooks") or [])
+                        if isinstance(inner, dict))
+            present = os.path.exists(command)
+            state = "installed" if wired else "MISSING"
+            if not present:
+                state += ", hook file MISSING"
+            row("%s %s" % (role, event), state)
+            if not wired:
+                faults.append("the %s %s hook is not in settings.json." % (role, event))
+            if not present:
+                faults.append("the hook file %s does not exist on disk."
+                              % HOOK_FILES[event][0])
+        if role == "primary":
+            picker = data.get("modelPicker")
+            ours = isinstance(picker, dict) and picker.get("_second_wind") is True
+            want = (cfg.get("refresh") or {}).get("model_picker") is True
+            row("model picker", "on" if ours else "off")
+            if want and not ours:
+                warnings.append("model_picker is on in the config but the "
+                                "modelPicker key is not in settings.json.")
 
     print()
-    print("ARMED: handover will fire when a threshold is crossed" if ok
-          else "NOT ARMED: fix the failures shown above")
+    if sys.platform == "darwin":
+        loaded = launchd_loaded()
+        exists = os.path.exists(LAUNCHD_PLIST)
+        row("launchd agent", "loaded" if loaded else
+            ("written but NOT LOADED" if exists else "NOT INSTALLED"))
+        if (cfg.get("refresh") or {}).get("launchd") and not loaded:
+            faults.append("the launchd refresh agent is not loaded, so nothing "
+                          "refreshes the readings on a schedule.")
+    else:
+        row("scheduled refresh", "no launchd on this platform, use cron")
+
+    tested = cfg.get("tested_versions") or {}
+    installed_versions = swlib.client_versions()
+    for name, version in installed_versions.items():
+        was = tested.get(name, "")
+        if not version:
+            continue
+        mark = "" if was == version else "  (set up against %s)" % (was or "nothing")
+        row(name + " version", version + mark)
+        if was and was != version:
+            warnings.append("%s is %s now, %s when second-wind was set up. If a "
+                            "reading stops parsing, that is the first thing to "
+                            "check." % (name, version, was))
+
+    print()
+    interval = swlib.interval_minutes(cfg)
+    row("freshness rule", "fresh under %dm, stale after that, dead after 60m"
+        % interval)
+    for role in swlib.enabled_roles(cfg):
+        if not swlib.reading_enabled(role, cfg):
+            row(role + " reading", "not readable for this sign-in")
+            continue
+        state = swlib.freshness(role, cfg=cfg)
+        age = swlib.cache_age(role)
+        kind = swlib.status_kind(role)
+        detail = "%s (%s old)" % (state, swlib.short_age(age)) if age is not None \
+            else "none"
+        if kind != "ok":
+            detail += ", %s" % (swlib.status_phrase(kind) or swlib.status_words(kind))
+        row(role + " reading", detail)
+        if state in ("dead", "none") or kind in ("login", "trust", "parser"):
+            message = "the %s reading is %s." % (
+                role, "missing or over an hour old" if state in ("dead", "none")
+                else swlib.status_phrase(kind))
+            if level["failover"] and role == "primary":
+                faults.append(message + " Automatic handover cannot fire without it.")
+            else:
+                warnings.append(message)
+
+    print()
+    for line in swlib.brief_lines(cfg):
+        row("brief", line)
+
+    if level["failover"]:
+        flag = os.path.join(sw_home(), "no-failover")
+        if os.path.exists(flag):
+            faults.append("%s exists, which turns automatic handover off."
+                          % tilde(flag))
+        if not (cfg.get("failover") or {}).get("enabled"):
+            faults.append("failover.enabled is false in the config.")
+
+    print()
+    faults = list(dict.fromkeys(faults))
+    warnings = [w for w in dict.fromkeys(warnings) if w not in faults]
+    for warning in warnings:
+        print("warning: %s" % warning)
+    verdict_ok = "ARMED: handover will fire when a threshold is crossed" \
+        if level["failover"] else "READY"
+    if faults:
+        print(("NOT ARMED: " if level["failover"] else "NOT READY: ")
+              + faults[0])
+        for fault in faults[1:]:
+            print("            " + fault)
+    else:
+        print(verdict_ok)
+
+
+# ---------------------------------------------------------------- uninstall
+
 
 def cmd_uninstall():
-    if os.path.exists(CONFIG):
-        cfg = load_cfg()
-        for k in ("primary", "secondary", "reader"):
-            d = cfg.get(k, {}).get("config_dir")
-            if d:
-                merge_settings(d, install=False, include_guard=(k != "reader"))
-        print("Removed the installed status lines and usage guards from all profiles.")
-        print(f"Config and logs are still at {tilde(SW_HOME)}; delete that folder to finish.")
-    else:
+    if not swlib.is_configured():
         print("Nothing to uninstall.")
+        return
+    cfg = swlib.load_config()
+    for role in ("primary", "secondary", "reader"):
+        folder = (cfg.get(role) or {}).get("config_dir")
+        if not folder or not os.path.isdir(expand(folder)):
+            continue
+        if merge_settings(folder, model_picker=False) is False:
+            print("  ! could not clean %s. Edit it by hand."
+                  % tilde(settings_path(folder)))
+        else:
+            print("  %s cleaned: hooks, status line and model picker removed"
+                  % folder)
+    if in_temp_home():
+        print("  launchd left alone: SW_HOME points at a temporary directory")
+    else:
+        print("  %s" % launchd_remove())
+    print("Accounts and logins were not touched.")
+    print("Config and logs are still at %s; delete that folder to finish."
+          % tilde(sw_home()))
+
+
+# ---------------------------------------------------------------- main
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--detect", action="store_true",
-                    help="print installed workers, Claude profiles and existing config as JSON")
-    ap.add_argument("--discover", action="store_true")
+                    help="print installed workers, Claude profiles, client "
+                         "versions and existing config as JSON")
     ap.add_argument("--write", action="store_true")
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--accounts", action="store_true",
                     help="show every account sorted by current usage headroom")
+    ap.add_argument("--live", action="store_true",
+                    help="with --accounts, run the readers first")
+    ap.add_argument("--check", action="store_true",
+                    help="say whether second-wind is actually wired up")
     ap.add_argument("--uninstall", action="store_true")
     ap.add_argument("--primary")
     ap.add_argument("--secondary")
+    ap.add_argument("--reader",
+                    help="a third Claude profile used only to read the primary's "
+                         "usage, so a background reader never shares the desktop "
+                         "app's credential")
+    ap.add_argument("--level", choices=sorted(LEVELS))
     ap.add_argument("--codex", choices=["auto", "on", "off"], default="auto")
     ap.add_argument("--grok", choices=["auto", "on", "off"], default="auto")
     ap.add_argument("--cursor", choices=["auto", "on", "off"], default="auto")
     ap.add_argument("--five-hour", type=int, default=90)
     ap.add_argument("--seven-day", type=int, default=80)
-    ap.add_argument("--default-mode", choices=["review", "work"], default="review")
-    ap.add_argument("--no-failover", action="store_true")
-    ap.add_argument("--force", action="store_true",
-                    help="write the config even if a profile is not signed in")
-    ap.add_argument("--check", action="store_true",
-                    help="say whether automatic handover is actually armed")
+    ap.add_argument("--refresh-minutes", type=int, default=15)
+    ap.add_argument("--model-picker", choices=["on", "off"], default="off")
+    ap.add_argument("--no-launchd", action="store_true",
+                    help="do not install the scheduled refresh agent")
     ap.add_argument("--timeout", type=int, default=600,
                     help="seconds before a delegated call is killed (default 600)")
-    ap.add_argument("--refresh-minutes", type=int, default=15,
-                    help="usage refresh interval in minutes (default 15)")
-    ap.add_argument("--codex-harvest", choices=["on", "off"], default="on",
-                    help="read Codex /status without a model prompt (default on)")
+    ap.add_argument("--force", action="store_true",
+                    help="write the config even if a profile is not signed in")
     a = ap.parse_args()
-    if a.detect: return cmd_detect()
-    if a.discover: return cmd_discover()
-    if a.accounts: return cmd_accounts()
-    if a.check: return cmd_check()
-    if a.show: return cmd_show()
-    if a.uninstall: return cmd_uninstall()
+    if a.detect:
+        return cmd_detect()
+    if a.accounts:
+        return cmd_accounts(a)
+    if a.check:
+        return cmd_check()
+    if a.show:
+        return cmd_show()
+    if a.uninstall:
+        return cmd_uninstall()
     if a.write:
         if not a.primary:
             sys.exit("second-wind: --write needs --primary")
+        if not a.level:
+            sys.exit("second-wind: --write needs --level reviewer, worker or relief")
         return cmd_write(a)
     ap.print_help()
+
 
 if __name__ == "__main__":
     main()

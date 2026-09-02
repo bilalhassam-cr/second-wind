@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Find every supported account and worker command on this machine.
 
-Prints JSON on stdout and changes nothing. Grok Build does not expose a passive
-login-status command, so discovery reports its installation state without
-starting the client or guessing about authentication.
+Prints JSON on stdout and changes nothing, and it starts no model prompt.
 
 It reports rather than decides on purpose: which account should be primary is a
 judgement about how someone works, not something a script can infer.
 """
 import base64, json, os, shutil, subprocess, sys, glob
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import swlib
 
 HOME = os.path.expanduser("~")
 
@@ -113,40 +114,61 @@ def codex_info():
     }
 
 def grok_info():
+    """`grok models` is the login check. Grok has no status command, but listing
+    models needs a session, so exit 0 means signed in. It sends no prompt."""
     b = shutil.which("grok")
     if not b:
-        return {"installed": False, "logged_in": None}
+        return {"installed": False, "logged_in": False}
+    try:
+        p = subprocess.run([b, "models"], capture_output=True, text=True,
+                           timeout=25, env=dict(os.environ))
+        logged = p.returncode == 0
+        first = (p.stdout or p.stderr or "").strip().splitlines()
+    except Exception:
+        logged, first = False, []
     return {
         "installed": True,
         "bin": b,
-        "logged_in": None,
-        "status": "not checked: Grok has no passive login-status command",
+        "logged_in": logged,
+        "status": (first[0] if first else
+                   ("signed in" if logged else "not signed in")),
     }
 
 def cursor_info():
+    """Cursor has two kinds of sign-in and they are not interchangeable.
+
+    An interactive login carries a refresh token and an account, and its usage
+    panel can be read. A CURSOR_API_KEY authorises delegation and nothing else:
+    the panel needs a session, so usage stays unknown. Setup enables the reader
+    for the first kind only."""
     b = shutil.which("cursor-agent")
     if not b:
-        return {"installed": False, "logged_in": False}
+        return {"installed": False, "logged_in": False, "auth": "none",
+                "can_read_usage": False}
     try:
         p = subprocess.run(
             [b, "status", "--format", "json"], capture_output=True,
             text=True, timeout=25, env=dict(os.environ),
         )
         data = first_json(p.stdout or p.stderr)
+        rc = p.returncode
     except Exception:
-        p, data = None, {}
+        data, rc = {}, 1
+    info = data.get("userInfo") if isinstance(data.get("userInfo"), dict) else {}
     user = data.get("user") if isinstance(data.get("user"), dict) else {}
     account = (data.get("email") or data.get("account") or
-               user.get("email") or "unknown")
-    logged = bool(p and p.returncode == 0 and data)
-    if os.environ.get("CURSOR_API_KEY"):
-        logged = True
+               info.get("email") or user.get("email") or "")
+    interactive = bool(rc == 0 and data.get("isAuthenticated") is not False
+                       and (data.get("hasRefreshToken") is True or account))
+    api_key = bool(os.environ.get("CURSOR_API_KEY"))
+    auth = "interactive" if interactive else ("api_key" if api_key else "none")
     return {
         "installed": True,
         "bin": b,
-        "logged_in": logged,
-        "account": account,
-        "auth": "interactive login or CURSOR_API_KEY" if logged else "not signed in",
+        "logged_in": interactive or api_key,
+        "account": account or "unknown",
+        "auth": auth,
+        "can_read_usage": interactive,
     }
 
 def main():
@@ -157,6 +179,8 @@ def main():
         "codex": codex_info(),
         "grok": grok_info(),
         "cursor": cursor_info(),
+        "client_versions": swlib.client_versions(),
+        "jq": swlib.has_jq(),
     }, indent=2))
 
 if __name__ == "__main__":

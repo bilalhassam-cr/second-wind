@@ -1,30 +1,41 @@
 {
-  "version": 3,
+  "version": 4,
+  "created": "2026-09-02",
+  "level": "relief",
   "primary": {
     "kind": "claude",
     "label": "primary",
     "config_dir": "~/.claude",
     "account": "redacted",
     "plan": "subscription",
+    "is_default_dir": true,
     "note": "The account this session runs on. Orchestrates, decides, keeps the context."
   },
   "secondary": {
     "kind": "claude",
     "label": "secondary",
+    "enabled": true,
     "config_dir": "~/.claude-secondary",
     "account": "redacted",
     "plan": "subscription",
-    "enabled": true,
+    "is_default_dir": false,
     "note": "A second Claude subscription with its own separate usage allowance."
+  },
+  "reader": {
+    "kind": "claude",
+    "label": "reader",
+    "enabled": false,
+    "config_dir": "",
+    "account": "",
+    "read_for": "primary",
+    "note": "Optional third profile, used only to read the primary's usage so a background reader never shares the desktop app's credential."
   },
   "codex": {
     "kind": "codex",
     "label": "codex",
     "enabled": true,
     "account": "redacted",
-    "plan": "subscription",
-    "can_launch_browser": false,
-    "note": "OpenAI Codex on a ChatGPT subscription. Independent of both Claude allowances."
+    "plan": "subscription"
   },
   "grok": {
     "kind": "grok",
@@ -38,7 +49,8 @@
     "label": "cursor",
     "enabled": true,
     "account": "redacted",
-    "plan": "Cursor Pro"
+    "plan": "Cursor Pro",
+    "auth": "interactive"
   },
   "thresholds": {
     "five_hour_pct": 90,
@@ -46,18 +58,29 @@
   },
   "refresh": {
     "interval_minutes": 15,
-    "working_dir": "~/trusted-project",
-    "codex_enabled": true,
-    "grok_enabled": true,
-    "cursor_enabled": true
+    "workdir": "~/.second-wind/workdir",
+    "launchd": true,
+    "model_picker": false,
+    "cursor": true
   },
   "failover": {
     "enabled": true,
     "announce": true
   },
   "defaults": {
-    "mode": "review"
+    "mode": "work"
   },
-  "log_dir": "~/.second-wind/log",
-  "timeout_seconds": 600
+  "log": {
+    "dir": "~/.second-wind/log",
+    "max_exchange_kb": 200,
+    "prune_days": 30
+  },
+  "timeout_seconds": 600,
+  "tested_versions": {
+    "claude": "2.1.251",
+    "codex": "0.152.1",
+    "grok": "1.0.13",
+    "cursor": "2026.08.31-4057e58"
+  },
+  "skill_dir": "~/.claude/skills/second-wind"
 }
