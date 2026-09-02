@@ -1,113 +1,172 @@
 #!/usr/bin/env python3
 """Read Grok Build's weekly limit from its own /usage panel.
 
-The reader never sends a model prompt and deliberately removes XAI_API_KEY so
-the consumer subscription cannot be replaced by paid developer API billing.
+Grok reports one window, a weekly one, so the five hour figure is always null.
+The reader removes XAI_API_KEY from the child's environment: with that key set
+the CLI can bill the developer API instead of the consumer subscription, which
+is not what a usage reading is for.
+
+  grok-usage.py [--cwd DIR] [--out PATH] [--status PATH] [--budget 60]
+                [--dump PATH]
 """
 import argparse
-import fcntl
-import json
 import os
-import pty
 import re
-import select
-import signal
-import struct
 import sys
-import termios
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ptyreader  # noqa: E402
+import swlib  # noqa: E402
 
-def clean(raw):
-    return re.sub(
-        rb"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[=>]",
-        b"",
-        raw,
-    ).decode(errors="replace")
-
-
-def stop_child(pid, fd):
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
-    try:
-        os.close(fd)
-    except OSError:
-        pass
-    try:
-        os.waitpid(pid, 0)
-    except OSError:
-        pass
-
-
-def read_panel(budget=55):
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.environ["TERM"] = "xterm-256color"
-        os.environ.pop("XAI_API_KEY", None)
-        os.execvp("grok", ["grok"])
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 55, 200, 0, 0))
-    buf = b""
-    started = time.time()
-    step = 0
-    try:
-        while time.time() - started < budget:
-            ready, _, _ = select.select([fd], [], [], 1)
-            if ready:
-                try:
-                    buf += os.read(fd, 200000)
-                except OSError:
-                    break
-            text = clean(buf)
-            elapsed = time.time() - started
-            if step == 0 and elapsed > 8:
-                os.write(fd, b"/usage")
-                step = 1
-            elif step == 1 and elapsed > 11:
-                os.write(fd, b"\r")
-                step = 2
-            elif step == 2 and "Weekly limit" in text and "%" in text and elapsed > 16:
-                break
-            elif step == 2 and elapsed > 30:
-                break
-    finally:
-        stop_child(pid, fd)
-    return re.sub(r"[ \t]{2,}", " ", clean(buf))
+CLIENT = "grok"
+# Markers allow any whitespace between words: the cleaned text keeps a line
+# break wherever the client moved the cursor mid-sentence.
+PROMPT = r"Enter:send|Ctrl\+x:shortcuts|Resume\s+session"
+# Grok 1.0.13 shows no directory trust dialog. These are the wordings its
+# siblings use, so an added one is reported rather than silently answered.
+TRUST = (r"Do\s+you\s+trust|Trust\s+this\s+(?:workspace|folder|directory)|"
+         r"Workspace\s+Trust\s+Required")
+LOGIN = (r"/login\s+to|please\s+(?:sign|log)\s+in|not\s+(?:signed|logged)\s+in|"
+         r"session\s+(?:has\s+)?expired|Invalid\s+API\s+key")
+MENU = r"View\s+usage"
+PANEL = r"Weekly\s+limit"
 
 
 def parse_panel(text):
-    plan_match = re.search(r"Weekly limit\s*\(([^)]*)\)", text)
-    segment = text.split("Weekly limit", 1)[-1] if "Weekly limit" in text else ""
-    percent_match = re.search(r"(\d+)\s*%", segment)
-    # A spinner is painted immediately after the date, so the match is bounded
-    # to characters that can actually form a date and time.
-    reset_match = re.search(r"Resets:\s*([A-Za-z0-9 ,:]{3,32})", segment)
-    return {
-        "worker": "grok",
-        "plan": plan_match.group(1).strip() if plan_match else None,
-        "five_hour_pct": None,
-        "seven_day_pct": int(percent_match.group(1)) if percent_match else None,
-        "seven_day_resets": reset_match.group(1).strip() if reset_match else None,
-    }
+    """Read the Usage limit tab. The plan is in brackets after the label and
+    the figure is the first percentage painted under it."""
+    data = {"plan": None, "seven_day_pct": None, "seven_day_resets": None,
+            "client_version": ""}
+    plan = re.search(PANEL + r"\s*\(([^)]*)\)", text)
+    if plan:
+        data["plan"] = " ".join(plan.group(1).split()) or None
+    for hit in re.finditer(PANEL, text):
+        chunk = text[hit.end():hit.end() + 300]
+        found = re.search(r"(\d+)\s*%", chunk)
+        if not found:
+            continue
+        resets = re.search(r"Resets:?\s+([A-Za-z0-9 ,:]{3,32})", chunk)
+        data["seven_day_pct"] = int(found.group(1))
+        data["seven_day_resets"] = resets.group(1).strip() if resets else None
+    version = re.search(r"Grok\s+Build\s+v?(\d[\w.\-]*)", text)
+    if version:
+        data["client_version"] = version.group(1)
+    return data
+
+
+def read_screen(cwd, budget):
+    """Drive the client. Returns (outcome, screen text)."""
+    screen = ptyreader.Screen(["grok"], cwd=cwd, env_drop=("XAI_API_KEY",))
+    ends = time.time() + budget
+
+    def left(cap):
+        return min(cap, max(1.0, ends - time.time()))
+
+    def type_when_clear(keys):
+        """Send keys only when no dialog is on screen, and name the dialog
+        when it refuses. A client can paint its composer before it paints a
+        trust modal, so being ready once is not enough: the screen is checked
+        again before every keystroke."""
+        text = screen.text
+        for name, pattern in (("trust", TRUST), ("login", LOGIN)):
+            if re.search(pattern, text, re.I):
+                return name
+        screen.send(keys)
+        return None
+
+    try:
+        screen.start()
+        # Trust first: a dialog can sit on top of a composer that looks ready.
+        seen = screen.first_of({"trust": TRUST, "login": LOGIN, "ready": PROMPT},
+                               timeout=left(30))
+        if seen in ("trust", "login"):
+            return seen, screen.text
+        if seen is None:
+            return "no panel", screen.text
+        # Grok animates a spinner for as long as it is open, so a quiet screen
+        # is no signal here. The suggestion list is: it only appears once the
+        # composer has the text, so a missing one means retype, not wait.
+        stop = type_when_clear(b"/usage")
+        if stop:
+            return stop, screen.text
+        if not screen.wait_for(present=[MENU], timeout=left(10)):
+            stop = type_when_clear(b"/usage")
+            if stop:
+                return stop, screen.text
+            if not screen.wait_for(present=[MENU], timeout=left(10)):
+                return "no panel", screen.text
+        stop = type_when_clear(b"\r")
+        if stop:
+            return stop, screen.text
+        if not screen.wait_for(present=[PANEL], timeout=left(20)):
+            return "no panel", screen.text
+        screen.wait_for(present=[PANEL], quiet=1.0, timeout=left(3))
+        return "panel", screen.text
+    finally:
+        screen.close()
+
+
+def note(path, message):
+    swlib.write_text_atomic(path, message.rstrip() + "\n")
+    print(message)
 
 
 def main():
     os.umask(0o077)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output")
-    args = parser.parse_args()
-    data = parse_panel(read_panel())
-    if data["seven_day_pct"] is None:
-        print("grok-usage: could not read the usage panel", file=sys.stderr)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--cwd", default="")
+    ap.add_argument("--out", default="")
+    ap.add_argument("--status", default="")
+    ap.add_argument("--budget", type=float, default=60)
+    ap.add_argument("--dump", default="", help="write the cleaned panel text here")
+    a = ap.parse_args()
+
+    cfg = swlib.load_config()
+    refresh = cfg.get("refresh") or {}
+    cwd = swlib.expand(a.cwd or refresh.get("workdir")
+                       or refresh.get("working_dir") or "~")
+    out = a.out or swlib.usage_path(CLIENT)
+    status = a.status or swlib.status_path(CLIENT)
+    if not os.path.isdir(cwd):
+        note(status, "FAILED: the readers' working directory %s does not exist. "
+                     "Rerun setup.py --write." % swlib.tilde(cwd))
         return 1
-    data["cached_at"] = int(time.time())
-    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-    tmp = f"{args.output}.tmp.{os.getpid()}"
-    with open(tmp, "w") as handle:
-        json.dump(data, handle, indent=2)
-    os.replace(tmp, args.output)
-    print(json.dumps(data, indent=2))
+
+    outcome, text = read_screen(cwd, a.budget)
+    if a.dump:
+        swlib.write_text_atomic(a.dump, text)
+    data = parse_panel(text)
+    if outcome == "trust":
+        note(status, "TRUST PROMPT: open grok once in %s and accept, or rerun "
+                     "setup --write to pre-trust it" % swlib.tilde(cwd))
+        return 3
+    if outcome == "login":
+        note(status, "LOGIN EXPIRED: run grok in a terminal and sign in again.")
+        return 2
+    if outcome == "no panel":
+        note(status, "FAILED: usage panel did not appear. Last of the screen: %s"
+             % " ".join(text.strip()[-300:].split()))
+        return 1
+    if data["seven_day_pct"] is None:
+        note(status, "PARSER MISMATCH: client %s, expected labels not found"
+             % (data["client_version"] or "unknown"))
+        return 1
+
+    record = {
+        "role": CLIENT, "worker": CLIENT,
+        "account": (cfg.get(CLIENT) or {}).get("account") or None,
+        "plan": data["plan"] or (cfg.get(CLIENT) or {}).get("plan") or None,
+        "five_hour_pct": None,
+        "seven_day_pct": data["seven_day_pct"],
+        "five_hour_resets": None,
+        "seven_day_resets": data["seven_day_resets"],
+        "extra": {},
+        "client_version": data["client_version"],
+        "cached_at": int(time.time()),
+    }
+    swlib.write_json_atomic(out, record)
+    note(status, "OK")
     return 0
 
 

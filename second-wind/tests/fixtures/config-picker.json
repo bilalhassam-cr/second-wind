@@ -1,0 +1,23 @@
+{
+  "version": 4,
+  "level": "relief",
+  "primary": {"config_dir": "~/.claude", "label": "Clearoute Claude",
+              "account": "user@example.com", "plan": "team"},
+  "secondary": {"enabled": true, "config_dir": "~/.claude-secondary",
+                "label": "Personal Claude", "account": "user@example.com",
+                "plan": "max"},
+  "reader": {"enabled": false, "config_dir": ""},
+  "codex": {"enabled": true, "account": "user@example.com"},
+  "grok": {"enabled": false},
+  "cursor": {"enabled": false},
+  "thresholds": {"five_hour_pct": 90, "seven_day_pct": 80},
+  "refresh": {"interval_minutes": 15, "workdir": "~/.second-wind/workdir",
+              "launchd": true, "model_picker": true},
+  "failover": {"enabled": true, "announce": true},
+  "defaults": {"mode": "work"},
+  "log": {"dir": "~/.second-wind/log", "max_exchange_kb": 200, "prune_days": 30},
+  "timeout_seconds": 600,
+  "tested_versions": {"claude": "2.1.251", "codex": "0.152.1",
+                      "grok": "1.0.13", "cursor": "2026.08.31-4057e58"},
+  "skill_dir": "~/.claude/skills/second-wind"
+}

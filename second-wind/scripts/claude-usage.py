@@ -1,148 +1,211 @@
 #!/usr/bin/env python3
 """Read one Claude profile's limits from its own /usage panel.
 
-The reader opens the terminal UI, runs the local usage command, parses the
-panel, and exits. It never sends a model prompt.
+The reader opens the terminal UI in the configured working directory, waits for
+the prompt box, runs /usage, parses the panel and exits. It never sends a model
+prompt and it never answers a dialog: a trust prompt is reported, not accepted.
+
+  claude-usage.py [--role primary|secondary] [--config-dir ~/.claude-usage]
+                  [--cwd DIR] [--out PATH] [--status PATH] [--budget 60]
+                  [--dump PATH]
 """
 import argparse
-import fcntl
-import json
 import os
-import pty
 import re
-import select
-import signal
-import struct
 import sys
-import termios
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ptyreader  # noqa: E402
+import swlib  # noqa: E402
 
+CLIENT = "claude"
+# These clients paint a dialog a word at a time, and the cleaned text keeps a
+# line break wherever the cursor moved, so every marker allows any whitespace
+# between its words. \s+ matches a newline; a literal space does not.
+PROMPT = r"for\s+shortcuts|Try\s+\"|Ask\s+Claude"
+# Claude 2.1 asks the safety question; the older wording is kept for older
+# clients. A trust dialog is reported, never answered.
+TRUST = (r"Yes,\s+I\s+trust\s+this\s+folder|Quick\s+safety\s+check|"
+         r"Do\s+you\s+trust\s+the\s+files\s+in\s+this\s+folder")
+LOGIN = (r"Login:\s*Expired|/login\s+to|please\s+(?:sign|log)\s+in|"
+         r"OAuth\s+token\s+(?:has\s+)?expired|credentials\s+(?:have\s+)?expired")
+USED = r"\d+%\s*used"
 RIGHT = b"\x1b[C"
-
-
-def clean(raw):
-    return re.sub(
-        rb"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[=>]",
-        b"",
-        raw,
-    ).decode(errors="replace")
-
-
-def stop_child(pid, fd):
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
-    try:
-        os.close(fd)
-    except OSError:
-        pass
-    try:
-        os.waitpid(pid, 0)
-    except OSError:
-        pass
-
-
-def read_panel(config_dir, budget=60):
-    env_dir = os.path.expanduser(config_dir) if config_dir else None
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.environ["TERM"] = "xterm-256color"
-        if env_dir:
-            os.environ["CLAUDE_CONFIG_DIR"] = env_dir
-        else:
-            os.environ.pop("CLAUDE_CONFIG_DIR", None)
-        # Parent session markers change the behaviour of a nested Claude CLI.
-        for key in (
-            "CLAUDE_CODE_CHILD_SESSION",
-            "CLAUDE_CODE_SESSION_ID",
-            "CLAUDE_CODE_HOST_SESSION_ID",
-            "CLAUDECODE",
-        ):
-            os.environ.pop(key, None)
-        os.execvp("claude", ["claude", "--model", "haiku"])
-
-    # The panel will not render wide enough to parse without a real PTY size.
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 55, 200, 0, 0))
-    buf = b""
-    started = time.time()
-    step = 0
-    presses = 0
-    try:
-        while time.time() - started < budget:
-            ready, _, _ = select.select([fd], [], [], 1)
-            if ready:
-                try:
-                    buf += os.read(fd, 200000)
-                except OSError:
-                    break
-            text = clean(buf)
-            elapsed = time.time() - started
-            if step == 0 and elapsed > 7:
-                os.write(fd, b"/usage\r")
-                step = 1
-            elif step == 1 and elapsed > 11:
-                # /usage opens a tabbed dialog and may not land on Usage.
-                if re.search(r"\d+%\s*used", text):
-                    step = 2
-                elif presses < 5:
-                    os.write(fd, RIGHT)
-                    presses += 1
-                    time.sleep(2)
-                else:
-                    step = 2
-            elif step == 2 and elapsed > 45:
-                break
-    finally:
-        stop_child(pid, fd)
-    return re.sub(r"[ \t]{2,}", " ", clean(buf))
+# Claude's own names for the two windows second-wind reports.
+FIVE_HOUR = r"Current\s+session"
+SEVEN_DAY = r"Current\s+week\s+\(all\s+models\)"
 
 
 def parse_panel(text):
-    """Match each used percentage with the reset line that follows it."""
-    pairs = re.findall(r"(\d+)%\s*used(?:.*?Resets\s*([^\n]{0,40}))?", text, re.S)
-    data = {}
-    if pairs:
-        data["five_hour_pct"] = int(pairs[0][0])
-        data["five_hour_resets"] = (pairs[0][1] or "").strip() or None
-    if len(pairs) >= 2:
-        data["seven_day_pct"] = int(pairs[1][0])
-        data["seven_day_resets"] = (pairs[1][1] or "").strip() or None
-    if re.search(r"Login:\s*Expired", text):
-        data["login_expired"] = True
+    """Pull the two windows out of the panel text, by label.
+
+    The panel repaints while it scans local sessions, so the buffer holds
+    several renders and the later ones can be half drawn. Read every render and
+    keep the last one that carried a figure for that label.
+    """
+    data = {"five_hour_pct": None, "five_hour_resets": None,
+            "seven_day_pct": None, "seven_day_resets": None,
+            "plan": None, "client_version": ""}
+    for key, label in (("five_hour", FIVE_HOUR), ("seven_day", SEVEN_DAY)):
+        for hit in re.finditer(label, text):
+            chunk = text[hit.end():hit.end() + 240]
+            found = re.search(r"(\d+)%\s*used", chunk)
+            if not found:
+                continue
+            resets = re.search(r"Resets\s+([^\n]{1,60})", chunk)
+            data[key + "_pct"] = int(found.group(1))
+            data[key + "_resets"] = resets.group(1).strip() if resets else None
+    plan = re.search(r"·\s*(Claude\s+[A-Za-z]+)", text)
+    if plan:
+        data["plan"] = " ".join(plan.group(1).split())
+    version = re.search(r"Claude\s+Code\s+v?(\d[\w.\-]*)", text)
+    if version:
+        data["client_version"] = version.group(1)
     return data
+
+
+def profile_dir(role, cfg):
+    """Which profile this role's usage is read through. A configured reader
+    profile exists so a background reader never shares the desktop app's
+    credential, and when it is on, the primary is read through it."""
+    reader = cfg.get("reader") or {}
+    if role == "primary" and reader.get("enabled") and reader.get("config_dir"):
+        return reader["config_dir"]
+    return (cfg.get(role) or {}).get("config_dir") or "~/.claude"
+
+
+def read_screen(config_dir, cwd, budget):
+    """Drive the client. Returns (outcome, screen text). Outcome is 'panel',
+    'trust', 'login' or 'no panel'."""
+    resolved = swlib.expand(config_dir)
+    default_dir = resolved == os.path.join(swlib.HOME, ".claude")
+    # Setting CLAUDE_CONFIG_DIR for the default profile breaks its Keychain
+    # lookup, so the default profile is read with the variable unset.
+    screen = ptyreader.Screen(
+        ["claude", "--model", "haiku"], cwd=cwd,
+        env_set={} if default_dir else {"CLAUDE_CONFIG_DIR": resolved},
+        # A nested session inherits markers that change how the CLI behaves.
+        env_drop=("CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID",
+                  "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDECODE") +
+                 (("CLAUDE_CONFIG_DIR",) if default_dir else ()))
+    ends = time.time() + budget
+
+    def type_when_clear(keys):
+        """Send keys only when no dialog is on screen, and name the dialog
+        when it refuses. A client can paint its composer before it paints a
+        trust modal, so being ready once is not enough: the screen is checked
+        again before every keystroke."""
+        text = screen.text
+        for name, pattern in (("trust", TRUST), ("login", LOGIN)):
+            if re.search(pattern, text, re.I):
+                return name
+        screen.send(keys)
+        return None
+
+    try:
+        screen.start()
+        # Order matters: the trust dialog also shows a prompt-like line, so it
+        # is tested first and wins.
+        seen = screen.first_of({"trust": TRUST, "login": LOGIN, "ready": PROMPT},
+                               timeout=min(30, budget))
+        if seen in ("trust", "login"):
+            return seen, screen.text
+        if seen is None:
+            return "no panel", screen.text
+        stop = type_when_clear(b"/usage\r")
+        if stop:
+            return stop, screen.text
+        # Only ever Right, only while no figure is on screen, five at most.
+        for _ in range(5):
+            if screen.wait_for(present=[USED],
+                               timeout=min(6, max(1, ends - time.time()))):
+                break
+            stop = type_when_clear(RIGHT)
+            if stop:
+                return stop, screen.text
+        if not re.search(USED, screen.text):
+            return "no panel", screen.text
+        # The figures move while the panel scans local sessions; let it settle.
+        screen.wait_for(present=[USED], quiet=1.0,
+                        timeout=min(8, max(1, ends - time.time())))
+        return "panel", screen.text
+    finally:
+        screen.close()
+
+
+def note(path, message):
+    swlib.write_text_atomic(path, message.rstrip() + "\n")
+    print(message)
 
 
 def main():
     os.umask(0o077)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output")
-    parser.add_argument("--config-dir", default="")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--role", default="primary", choices=list(swlib.CLAUDE_ROLES))
+    ap.add_argument("--config-dir", default="")
+    ap.add_argument("--cwd", default="")
+    ap.add_argument("--out", default="")
+    ap.add_argument("--status", default="")
+    ap.add_argument("--budget", type=float, default=60)
+    ap.add_argument("--dump", default="", help="write the cleaned panel text here")
+    a = ap.parse_args()
 
-    data = parse_panel(read_panel(args.config_dir))
-    if data.get("login_expired"):
-        print("claude-usage: this profile's terminal login has expired", file=sys.stderr)
-        return 2
-    if "five_hour_pct" not in data:
-        print(
-            "claude-usage: could not read the usage panel. Open a brand-new "
-            "profile once by hand if a first-run dialog is still present.",
-            file=sys.stderr,
-        )
+    cfg = swlib.load_config()
+    config_dir = a.config_dir or profile_dir(a.role, cfg)
+    refresh = cfg.get("refresh") or {}
+    cwd = swlib.expand(a.cwd or refresh.get("workdir")
+                       or refresh.get("working_dir") or "~")
+    out = a.out or swlib.usage_path(a.role)
+    status = a.status or swlib.status_path(a.role)
+    if not os.path.isdir(swlib.expand(config_dir)):
+        note(status, "FAILED: the %s profile directory %s does not exist."
+             % (a.role, swlib.tilde(swlib.expand(config_dir))))
         return 1
-    data.update({
-        "worker": "claude",
-        "config_dir": args.config_dir or "~/.claude",
+    if not os.path.isdir(cwd):
+        note(status, "FAILED: the readers' working directory %s does not exist. "
+                     "Rerun setup.py --write." % swlib.tilde(cwd))
+        return 1
+
+    outcome, text = read_screen(config_dir, cwd, a.budget)
+    if a.dump:
+        swlib.write_text_atomic(a.dump, text)
+    data = parse_panel(text)
+    version = data["client_version"] or ""
+    if outcome == "trust":
+        note(status, "TRUST PROMPT: open claude once in %s and accept, or rerun "
+                     "setup --write to pre-trust it" % swlib.tilde(cwd))
+        return 3
+    if outcome == "login":
+        note(status, "LOGIN EXPIRED: run claude in a terminal for %s and sign in "
+                     "again." % swlib.tilde(swlib.expand(config_dir)))
+        return 2
+    if outcome == "no panel":
+        note(status, "FAILED: usage panel did not appear. A profile that has "
+                     "never been opened shows onboarding first, so run claude "
+                     "in it once by hand. Last of the screen: %s"
+             % " ".join(text.strip()[-300:].split()))
+        return 1
+    if data["five_hour_pct"] is None or data["seven_day_pct"] is None:
+        note(status, "PARSER MISMATCH: client %s, expected labels not found"
+             % (version or "unknown"))
+        return 1
+
+    profile = cfg.get(a.role) or {}
+    record = {
+        "role": a.role, "worker": CLIENT,
+        "account": profile.get("account") or None,
+        "plan": data["plan"] or profile.get("plan") or None,
+        "five_hour_pct": data["five_hour_pct"],
+        "seven_day_pct": data["seven_day_pct"],
+        "five_hour_resets": data["five_hour_resets"],
+        "seven_day_resets": data["seven_day_resets"],
+        "extra": {"config_dir": swlib.tilde(swlib.expand(config_dir))},
+        "client_version": version,
         "cached_at": int(time.time()),
-    })
-    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-    tmp = f"{args.output}.tmp.{os.getpid()}"
-    with open(tmp, "w") as handle:
-        json.dump(data, handle, indent=2)
-    os.replace(tmp, args.output)
-    print(json.dumps(data, indent=2))
+    }
+    swlib.write_json_atomic(out, record)
+    note(status, "OK")
     return 0
 
 

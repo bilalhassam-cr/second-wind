@@ -1,189 +1,217 @@
 #!/usr/bin/env python3
-"""Read Codex plan usage from its status panel without sending a prompt."""
+"""Read Codex plan usage from its own /status panel, without sending a prompt.
+
+Codex needs patience rather than keystrokes. On an untrusted directory it opens
+a trust modal, which this reader reports and never answers. On a trusted one it
+spends ten to forty seconds starting MCP servers, and a /status typed during
+that window is swallowed, so the reader waits for the composer to appear and
+the screen to go quiet before it types anything.
+
+  codex-status.py [--cwd DIR] [--out PATH] [--status PATH] [--budget 85]
+                  [--dump PATH]
+"""
 import argparse
-import fcntl
-import json
 import os
-import pty
 import re
-import select
-import signal
-import struct
 import subprocess
-import termios
+import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ptyreader  # noqa: E402
+import swlib  # noqa: E402
 
-def clean(raw):
-    return re.sub(
-        rb"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[=>]",
-        b"",
-        raw,
-    ).decode(errors="replace")
-
-
-def atomic_note(path, message):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w") as fh:
-        fh.write(message.rstrip() + "\n")
-    os.replace(tmp, path)
-
-
-def percentage_used(text, label):
-    match = re.search(label + r".*?(\d+)%\s*left", text, re.S | re.I)
-    return None if not match else 100 - int(match.group(1))
+CLIENT = "codex"
+# Codex paints this modal a word at a time and the cleaned text keeps a line
+# break wherever the cursor moved, so every marker allows any whitespace
+# between its words. \s+ matches a newline; a literal space does not.
+PROMPT = r"Ask\s+Codex"
+TRUST = r"Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory"
+LOGIN = (r"Not\s+logged\s+in|Sign\s+in\s+with\s+ChatGPT|/login\s+to|"
+         r"session\s+(?:has\s+)?expired")
+STARTING = r"Starting\s+MCP\s+servers"
+PANEL = r"Weekly\s+limit|5h\s+limit"
+MENU = r"show\s+current\s+session\s+configuration"
 
 
-def reset_time(text, label):
-    match = re.search(label + r".*?left\s*\(resets ([^)]+)\)", text, re.S | re.I)
-    return match.group(1).strip() if match else None
+def _limit(text, label):
+    """(percentage used, reset string) for one limit line, or None when the
+    panel has no such line. The panel prints what is left, so 100% left is
+    nothing used, and only a missing line means unknown."""
+    found = None
+    for line in text.splitlines():
+        if not re.search(label, line, re.I):
+            continue
+        left = re.search(r"(\d+)%\s*left", line)
+        if not left:
+            continue
+        resets = re.search(r"resets\s+([^)]+)\)", line, re.I)
+        found = (100 - int(left.group(1)),
+                 resets.group(1).strip() if resets else None)
+    return found
 
 
-def parse_panel(raw):
-    text = re.sub(r"[ \t]{2,}", " ", clean(raw))
-    account = re.search(r"Account:\s*([^\s(]+)", text, re.I)
-    plan = re.search(r"Account:\s*[^\r\n(]*\(([^)]+)\)", text, re.I)
-    credits = re.search(r"([\d,]+ of [\d,]+ credits used)", text, re.I)
+def parse_panel(text):
+    """Read the /status box. Every field is optional except the limits, and the
+    caller decides what a missing limit means."""
+    # The panel is drawn in a box and the verticals belong to no value.
+    text = re.sub(r"[│┃|]", " ", text)
+    account = re.search(r"Account:\s+(\S+)(?:\s+\(([^)]+)\))?\s*$", text, re.M)
+    version = re.search(r"OpenAI\s+Codex\s*\(v?([\d][\w.\-]*)\)", text)
+    five = _limit(text, r"5h\s+limit")
+    week = _limit(text, r"Weekly\s+limit")
+    month = _limit(text, r"Monthly\s+credit\s+limit")
+    credits = re.search(r"Credits:\s+(.+?)\s*$", text, re.M)
+    extra = {}
+    if month:
+        extra["monthly_credit_pct"], extra["monthly_credit_resets"] = month
+    if credits:
+        extra["credits"] = credits.group(1).strip()
     return {
-        "worker": "codex",
         "account": account.group(1) if account else None,
-        "plan": plan.group(1) if plan else None,
-        "five_hour_pct": percentage_used(text, r"5h limit:"),
-        "seven_day_pct": percentage_used(text, r"Weekly limit:"),
-        "monthly_credit_pct": percentage_used(text, r"Monthly credit limit:"),
-        "five_hour_resets": reset_time(text, r"5h limit:"),
-        "seven_day_resets": reset_time(text, r"Weekly limit:"),
-        "monthly_credit_resets": reset_time(text, r"Monthly credit limit:"),
-        "credits_note": credits.group(1) if credits else None,
-        "cached_at": int(time.time()),
+        "plan": account.group(2) if account and account.group(2) else None,
+        "five_hour_pct": five[0] if five else None,
+        "seven_day_pct": week[0] if week else None,
+        "five_hour_resets": five[1] if five else None,
+        "seven_day_resets": week[1] if week else None,
+        "extra": extra,
+        "client_version": version.group(1) if version else "",
     }
 
 
-def stop_child(pid, fd):
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
-    try:
-        os.close(fd)
-    except OSError:
-        pass
-    try:
-        os.waitpid(pid, 0)
-    except OSError:
-        pass
-
-
-def send(fd, value):
-    try:
-        os.write(fd, value)
-        return True
-    except OSError:
-        return False
-
-
 def login_state():
+    """True, False, or None when the CLI will not say. Codex writes this to
+    stderr, so both streams are read."""
     try:
-        result = subprocess.run(
-            ["codex", "login", "status"], capture_output=True, text=True, timeout=10
-        )
-    except (OSError, subprocess.SubprocessError):
+        done = subprocess.run(["codex", "login", "status"], capture_output=True,
+                              text=True, timeout=15)
+    except Exception:
         return None
-    text = f"{result.stdout}\n{result.stderr}".lower()
+    text = ((done.stdout or "") + " " + (done.stderr or "")).lower()
     if "not logged in" in text or "login expired" in text:
         return False
-    if result.returncode == 0 and "logged in" in text:
+    if done.returncode == 0 and "logged in" in text:
         return True
     return None
 
 
+def read_screen(cwd, budget):
+    """Drive the client. Returns (outcome, screen text)."""
+    screen = ptyreader.Screen(["codex"], cwd=cwd)
+    ends = time.time() + budget
+
+    def left(cap):
+        return min(cap, max(1.0, ends - time.time()))
+
+    def type_when_clear(keys):
+        """Send keys only when no dialog is on screen, and name the dialog
+        when it refuses. Codex paints its composer for a moment before it
+        paints the trust modal, so being ready once is not enough: the screen
+        is checked again before every keystroke."""
+        text = screen.text
+        for name, pattern in (("trust", TRUST), ("login", LOGIN)):
+            if re.search(pattern, text, re.I):
+                return name
+        screen.send(keys)
+        return None
+
+    try:
+        screen.start()
+        seen = screen.first_of({"trust": TRUST, "login": LOGIN, "ready": PROMPT},
+                               timeout=left(40))
+        if seen in ("trust", "login"):
+            return seen, screen.text
+        if seen is None:
+            return "no panel", screen.text
+        # The composer appears before the MCP servers finish and a slash
+        # command typed in that window is dropped. Wait for both.
+        screen.wait_for(present=[PROMPT], absent=[STARTING], quiet=1.2,
+                        timeout=left(35))
+        stop = type_when_clear(b"/status")
+        if stop:
+            return stop, screen.text
+        if not screen.wait_for(present=[MENU], timeout=left(10)):
+            return "no panel", screen.text
+        stop = type_when_clear(b"\r")
+        if stop:
+            return stop, screen.text
+        if not screen.wait_for(present=[PANEL], timeout=left(20)):
+            # One retry, and only while the panel is still not on screen: the
+            # first Enter can land on a completion list rather than the input.
+            stop = type_when_clear(b"\r")
+            if stop:
+                return stop, screen.text
+            if not screen.wait_for(present=[PANEL], timeout=left(20)):
+                return "no panel", screen.text
+        screen.wait_for(present=[PANEL], quiet=1.0, timeout=left(6))
+        return "panel", screen.text
+    finally:
+        screen.close()
+
+
+def note(path, message):
+    swlib.write_text_atomic(path, message.rstrip() + "\n")
+    print(message)
+
+
 def main():
     os.umask(0o077)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output")
-    parser.add_argument("--status", required=True)
-    parser.add_argument("--cwd", required=True)
-    args = parser.parse_args()
-    if not os.path.isdir(args.cwd):
-        atomic_note(args.status, "FAILED: the trusted working directory no longer exists.")
-        return 1
-    logged_in = login_state()
-    if logged_in is False:
-        try:
-            os.unlink(args.output)
-        except FileNotFoundError:
-            pass
-        atomic_note(args.status, "LOGIN EXPIRED: sign in to the Codex CLI, then rerun --accounts.")
-        return 1
-    if logged_in is None:
-        atomic_note(args.status, "FAILED: Codex login status could not be confirmed.")
-        return 1
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--cwd", default="")
+    ap.add_argument("--out", default="")
+    ap.add_argument("--status", default="")
+    ap.add_argument("--budget", type=float, default=85)
+    ap.add_argument("--dump", default="", help="write the cleaned panel text here")
+    a = ap.parse_args()
 
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.environ["TERM"] = "xterm-256color"
-        os.chdir(args.cwd)
-        os.execvp("codex", ["codex"])
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 60, 220, 0, 0))
+    cfg = swlib.load_config()
+    refresh = cfg.get("refresh") or {}
+    cwd = swlib.expand(a.cwd or refresh.get("workdir")
+                       or refresh.get("working_dir") or "~")
+    out = a.out or swlib.usage_path(CLIENT)
+    status = a.status or swlib.status_path(CLIENT)
+    if not os.path.isdir(cwd):
+        note(status, "FAILED: the readers' working directory %s does not exist. "
+                     "Rerun setup.py --write." % swlib.tilde(cwd))
+        return 1
+    if login_state() is False:
+        note(status, "LOGIN EXPIRED: run codex in a terminal and sign in again.")
+        return 2
 
-    buf = b""
-    started = time.time()
-    step = 0
-    try:
-        while time.time() - started < 75:
-            ready, _, _ = select.select([fd], [], [], 1)
-            if ready:
-                try:
-                    buf += os.read(fd, 200000)
-                except OSError:
-                    break
-            elapsed = time.time() - started
-            panel = "Weekly limit" in clean(buf) and "5h limit" in clean(buf)
-            if panel and elapsed > 18:
-                break
-            if step == 0 and elapsed > 8:
-                if not send(fd, b"\x1b"):
-                    break
-                step = 1
-            elif step == 1 and elapsed > 9:
-                if not send(fd, b"/status"):
-                    break
-                step = 2
-            elif step == 2 and elapsed > 12:
-                if not send(fd, b"\r"):
-                    break
-                step = 3
-            elif step == 3 and elapsed > 28:
-                if not send(fd, b"\x1b"):
-                    break
-                step = 4
-            elif step == 4 and elapsed > 30:
-                if not send(fd, b"/status"):
-                    break
-                step = 5
-            elif step == 5 and elapsed > 33:
-                if not send(fd, b"\r"):
-                    break
-                step = 6
-    finally:
-        stop_child(pid, fd)
-
-    data = parse_panel(buf)
+    outcome, text = read_screen(cwd, a.budget)
+    if a.dump:
+        swlib.write_text_atomic(a.dump, text)
+    data = parse_panel(text)
+    if outcome == "trust":
+        note(status, "TRUST PROMPT: open codex once in %s and accept, or rerun "
+                     "setup --write to pre-trust it" % swlib.tilde(cwd))
+        return 3
+    if outcome == "login":
+        note(status, "LOGIN EXPIRED: run codex in a terminal and sign in again.")
+        return 2
+    if outcome == "no panel":
+        note(status, "FAILED: status panel did not appear. Last of the screen: %s"
+             % " ".join(text.strip()[-300:].split()))
+        return 1
     if data["five_hour_pct"] is None and data["seven_day_pct"] is None:
-        atomic_note(
-            args.status,
-            "FAILED: the Codex status panel did not appear after Escape and one retry. "
-            "A startup modal is the likely cause. Open Codex once by hand, clear any prompt it shows, then try again.",
-        )
+        note(status, "PARSER MISMATCH: client %s, expected labels not found"
+             % (data["client_version"] or "unknown"))
         return 1
-    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
-    tmp = f"{args.output}.tmp.{os.getpid()}"
-    with open(tmp, "w") as fh:
-        json.dump(data, fh, indent=2)
-    os.replace(tmp, args.output)
-    atomic_note(args.status, "OK")
-    print(json.dumps(data, indent=2))
+
+    record = {
+        "role": CLIENT, "worker": CLIENT,
+        "account": data["account"] or (cfg.get(CLIENT) or {}).get("account") or None,
+        "plan": data["plan"] or (cfg.get(CLIENT) or {}).get("plan") or None,
+        "five_hour_pct": data["five_hour_pct"],
+        "seven_day_pct": data["seven_day_pct"],
+        "five_hour_resets": data["five_hour_resets"],
+        "seven_day_resets": data["seven_day_resets"],
+        "extra": data["extra"],
+        "client_version": data["client_version"],
+        "cached_at": int(time.time()),
+    }
+    swlib.write_json_atomic(out, record)
+    note(status, "OK")
     return 0
 
 

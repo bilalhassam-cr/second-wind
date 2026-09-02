@@ -1,0 +1,109 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.152.1)            │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
+ 
+ 
+› Ask Codex to do anything
+ 
+  ? for shortcuts
+
+╭
+
+
+╭
+
+
+╭
+
+
+╭
+
+
+╭
+
+
+╭
+
+
+╭
+
+─────╮
+     │
+     │
+     │
+/private/tmp/sw-untrusted-probe │
+─────╯
+
+╭
+
+
+╭
+
+
+╭
+
+
+╭
+
+
+╭
+
+
+╭
+
+
+
+>
+You are in /private/tmp/sw-untrusted-probe
+Do
+you
+trust
+the
+contents
+of
+this
+directory?
+Working
+with
+untrusted
+contents
+comes
+with
+higher
+risk
+of
+prompt
+injection.
+Trusting
+the
+directory
+allows
+project-local
+config,
+hooks,
+and
+exec
+policies
+to
+load.
+› 1. Yes, continue
+2.
+No,
+quit
+Press enter to continue

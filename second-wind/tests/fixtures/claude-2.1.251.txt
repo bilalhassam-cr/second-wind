@@ -1,0 +1,149 @@
+ ▐▛███▛█ Claude Code v2.1.251
+
+▝▜██████▀ Haiku 4.5 · Claude Team
+
+  ▝▝ ▝▝ ~/Documents/MycodeProjects/DhikrCircle_FromRork
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+❯ Try "fix lint errors"
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+
+  
+
+
+  
+⏸ manual mode on · ← for agents                                                                                                                              auto mode unavailable for this model
+
+  
+
+
+  
+reader ·  Haiku 4.5             
+
+  ⏸ manual mode on · ← for agents
+
+  
+
+
+⚠ 1 MCP server needs authentication · run /mcp
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "fix lint errors"
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  
+reader ·  Haiku 4.5                                                                                                                                              auto mode unavailable for this model
+
+  ⏸ manual mode on · ← for agents
+
+  
+
+
+❯ /usage                                                                                                                                                                                                
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  
+Settings  Status     Config   Usage   Stats                                                                                                                       
+  
+
+
+  Session
+
+
+
+  Total cost:            $0.0000
+
+  Total duration (API):  0s
+
+  Total duration (wall): 1s
+
+  Total code changes:    0 lines added, 0 lines removed
+
+  Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+
+
+
+  Current session
+
+  ███████████▌                                       23% used
+
+  Resets 3:19am (Africa/Johannesburg)
+
+
+
+  Current week (all models)
+
+  █████████████████▌                                 35% used
+
+  Resets Sep 7 at 2:59am (Africa/Johannesburg)
+
+  +50% weekly limits promo through Sep 13 · clau.de/cc-50-promo
+
+
+
+  Current week (Fable)
+
+  █████████████████████                              42% used
+
+  Resets Sep 7 at 2:59am (Africa/Johannesburg)
+
+
+
+  What's contributing to your limits usage?
+
+  Approximate, based on local sessions on this machine - does not include other devices or claude.ai
+
+
+
+  Scanning local sessions…
+
+
+
+  Refreshing…
+
+
+
+  Esc to cancel
+
+                              
+
+
+
+
+
+ 
+
+  
+Refreshing…
+  
+
+  
+Esc to cancel
+
+
+
+
+
+                              
+
+
+ 
+
+             
+█████▌                                   3
+                   
+█▌                                                7
+                       
+▌                                                   3
+  
+Esc to cancel
+
+
+                              
