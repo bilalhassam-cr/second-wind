@@ -75,7 +75,7 @@ version second-wind was set up against.
 ## Install
 
 ```bash
-git clone REPOSITORY_URL second-wind
+git clone https://github.com/bilalhassam-cr/second-wind second-wind
 cd second-wind && ./install.sh
 ```
 
