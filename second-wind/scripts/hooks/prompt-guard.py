@@ -16,6 +16,8 @@ Switch off:  touch ~/.second-wind/no-failover   (or set failover.enabled false)
 """
 import json
 import os
+import re
+import subprocess
 import sys
 import time
 
@@ -52,6 +54,48 @@ already running here. And if the user tells you to keep the work on this account
 without arguing: they can see the same numbers you can."""
 
 
+PENDING_MAX_AGE = 6 * 3600
+
+
+def notify_detached(title, body, key, window_seconds=3600):
+    """One notification per key per window, without ever waiting for it.
+
+    ``swlib.notify`` runs osascript with a ten second timeout, which is fine in
+    a background script and wrong here: this is the one hook a person is sitting
+    in front of, waiting for their prompt to go. So the dedupe stamp is written
+    first and osascript is started detached, exactly like the refresh wrapper.
+    """
+    stamp = os.path.join(swlib.sw_home(),
+                         "notify-%s.stamp" % re.sub(r"[^A-Za-z0-9_.-]", "-", key))
+    try:
+        if os.path.exists(stamp):
+            with open(stamp) as handle:
+                seen = handle.read()
+            if seen == body and time.time() - os.path.getmtime(stamp) < window_seconds:
+                return False
+    except Exception:
+        pass
+    try:
+        swlib.write_text_atomic(stamp, body)
+    except Exception:
+        pass
+    if sys.platform != "darwin":
+        return False
+
+    def quote(text):
+        return str(text).replace("\\", "\\\\").replace('"', '\\"')
+
+    script = 'display notification "%s" with title "%s"' % (quote(body), quote(title))
+    try:
+        subprocess.Popen(["osascript", "-e", script],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True,
+                         cwd="/")
+    except Exception:
+        return False
+    return True
+
+
 def emit(message):
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "UserPromptSubmit",
@@ -79,6 +123,29 @@ def reset_text(usage):
     if isinstance(shown, str) and shown.strip():
         return " The 5-hour window resets at %s." % shown.strip()
     return ""
+
+
+def pending_age(path):
+    """Seconds since the rate limit that wrote this note. The file holds an
+    epoch; a hand-made or truncated one falls back to its mtime."""
+    try:
+        with open(path) as handle:
+            stamped = int(handle.read().strip())
+    except Exception:
+        stamped = 0
+    if stamped <= 0:
+        try:
+            stamped = int(os.path.getmtime(path))
+        except OSError:
+            return 0
+    return int(time.time()) - stamped
+
+
+def drop(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def worker_list(cfg):
@@ -151,15 +218,19 @@ def main():
     # it may well be stale, and the fact of the limit is the stronger evidence.
     pending = os.path.join(home, "handover-pending")
     if os.path.exists(pending):
-        try:
-            os.unlink(pending)
-        except OSError:
-            pass
-        workers = worker_list(cfg)
-        if workers:
+        if pending_age(pending) > PENDING_MAX_AGE:
+            # Six hours on, the window it described has come and gone. Drop the
+            # note rather than announce a limit that no longer exists.
+            drop(pending)
+        else:
+            workers = worker_list(cfg)
+            if not workers:
+                # Nowhere to hand to. Leave the note where it is, so it still
+                # fires if a worker is switched on before it expires.
+                return 0
+            drop(pending)
             return emit("[second-wind] This account hit its usage limit and the last "
                         "turn stopped there." + ROUTING % workers)
-        return 0
 
     # A mode file is an explicit task-boundary override, so it is handled before
     # any usage reading. It still honours the master switches above, and
@@ -226,7 +297,7 @@ def main():
             window = max(300, due)
     except (TypeError, ValueError):
         window = 3600
-    swlib.notify("second-wind", body, "handover-primary", window_seconds=window)
+    notify_detached("second-wind", body, "handover-primary", window_seconds=window)
 
     return emit("[second-wind] This account is running low: %s.%s%s"
                 % (" and ".join(hits), resets,

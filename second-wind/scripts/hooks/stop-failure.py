@@ -41,7 +41,10 @@ def level(cfg):
     named = cfg.get("level")
     if named in ("reviewer", "worker", "relief"):
         return named
-    return "relief" if (cfg.get("failover") or {}).get("enabled") is True else "worker"
+    # Absent means enabled, the same reading the prompt guard takes. The config
+    # writer always writes the key, so a missing one is an old or hand-edited
+    # config rather than somebody switching handover off.
+    return "worker" if (cfg.get("failover") or {}).get("enabled") is False else "relief"
 
 
 def main():

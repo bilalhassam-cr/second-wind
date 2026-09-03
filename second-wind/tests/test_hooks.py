@@ -35,6 +35,13 @@ OSASCRIPT_STUB = """#!/bin/sh
 printf '%s\\n' "$*" >> "$SW_HOME/osascript-args.txt"
 """
 
+# The guard must never wait on a notification. This stub takes three seconds,
+# so a hook that waits for it cannot come back inside the test's one second.
+SLOW_OSASCRIPT_STUB = """#!/bin/sh
+sleep 3
+printf '%s\\n' "$*" >> "$SW_HOME/osascript-args.txt"
+"""
+
 INSTRUCTION_START = "Present these as the session brief before anything else."
 INSTRUCTION_END = ("If this message already contains a task, keep the brief to "
                    "one line and start the task.")
@@ -56,6 +63,12 @@ def setUpModule():
     stub = os.path.join(binaries, "osascript")
     with open(stub, "w") as handle:
         handle.write(OSASCRIPT_STUB)
+    os.chmod(stub, 0o755)
+    slow = os.path.join(STAGE, "bin-slow")
+    os.makedirs(slow)
+    stub = os.path.join(slow, "osascript")
+    with open(stub, "w") as handle:
+        handle.write(SLOW_OSASCRIPT_STUB)
     os.chmod(stub, 0o755)
 
 
@@ -133,11 +146,12 @@ class Base(unittest.TestCase):
 
     # ------------------------------------------------------------ running
 
-    def run_hook(self, name, payload=None, profile="primary", env=None):
+    def run_hook(self, name, payload=None, profile="primary", env=None,
+                 binaries="bin"):
         path = os.path.join(STAGE, "scripts", "hooks", name)
         environment = dict(os.environ)
         environment["SW_HOME"] = self.home
-        environment["PATH"] = os.path.join(STAGE, "bin") + os.pathsep + \
+        environment["PATH"] = os.path.join(STAGE, binaries) + os.pathsep + \
             environment.get("PATH", "")
         if profile == "primary":
             environment["CLAUDE_CONFIG_DIR"] = self.primary_dir
@@ -311,9 +325,26 @@ class PromptGuard(Base):
         self.assertIn("display notification", first)
         self.assertIn("second-wind", first)
         self.context(self.prompt(), "UserPromptSubmit")
-        time.sleep(0.5)
+        time.sleep(1.0)
         with open(os.path.join(self.home, "osascript-args.txt")) as handle:
             self.assertEqual(len(handle.read().strip().splitlines()), 1)
+        self.assertTrue(os.path.exists(
+            os.path.join(self.home, "notify-handover-primary.stamp")))
+
+    def test_does_not_wait_for_the_notification(self):
+        # The prompt is the one moment a person is watching the cursor. The
+        # notification goes out detached, so a three second osascript costs the
+        # hook nothing.
+        self.write_config()
+        self.write_usage("primary", five=93, week=40, age=60)
+        started = time.time()
+        text = self.context(self.prompt(binaries="bin-slow"), "UserPromptSubmit")
+        elapsed = time.time() - started
+        self.assertIn("This account is running low", text)
+        self.assertLess(elapsed, 1.0,
+                        "the guard waited %.2fs on the notification" % elapsed)
+        # It still deduped, which is the stamp being written by the hook itself
+        # rather than by whatever osascript does later.
         self.assertTrue(os.path.exists(
             os.path.join(self.home, "notify-handover-primary.stamp")))
 
@@ -389,6 +420,24 @@ class PromptGuard(Base):
             "the pending note should be consumed once")
         self.assertEqual(self.prompt().strip(), "")
 
+    def test_stale_handover_pending_is_dropped(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.touch("handover-pending", "%d\n" % (self.now - 7 * 3600))
+        self.assertEqual(self.prompt().strip(), "")
+        self.assertFalse(os.path.exists(
+            os.path.join(self.home, "handover-pending")),
+            "a note past its window should be dropped, not kept")
+
+    def test_handover_pending_waits_for_a_worker(self):
+        self.write_config(secondary={"enabled": False}, codex={"enabled": False})
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.touch("handover-pending", "%d\n" % self.now)
+        self.assertEqual(self.prompt().strip(), "")
+        # Nowhere to hand to yet, so the note survives for when there is.
+        self.assertTrue(os.path.exists(
+            os.path.join(self.home, "handover-pending")))
+
 
 class StopFailure(Base):
     def fire(self, error="rate_limit", **kwargs):
@@ -423,6 +472,17 @@ class StopFailure(Base):
                "failover": {"enabled": True},
                "refresh": {"interval_minutes": 15,
                            "working_dir": self.home}}
+        self.write_json(os.path.join(self.home, "config.json"), cfg)
+        self.fire()
+        self.wait_for("refresh-args.txt")
+        self.assertTrue(os.path.exists(os.path.join(self.home, "handover-pending")))
+
+    def test_config_without_failover_at_all_is_relief(self):
+        # Absent means enabled, which is how the prompt guard reads it too.
+        cfg = {"version": 2,
+               "primary": {"config_dir": self.primary_dir},
+               "secondary": {"enabled": True, "config_dir": self.secondary_dir},
+               "refresh": {"interval_minutes": 15}}
         self.write_json(os.path.join(self.home, "config.json"), cfg)
         self.fire()
         self.wait_for("refresh-args.txt")
@@ -482,6 +542,114 @@ class ModelSwitch(Base):
         self.write_usage("primary", five=12, week=20, age=3000)
         self.assertEqual(self.fire().strip(), "")
         self.assertEqual(self.wait_for("refresh-args.txt").strip(), "")
+
+
+class StatusLine(Base):
+    """The status line is the only place the real 5-hour and 7-day figures can
+    be had, so what it writes into the cache is load bearing for every other
+    part of the tool."""
+
+    def setUp(self):
+        super(StatusLine, self).setUp()
+        if shutil.which("jq") is None:
+            self.skipTest("jq is not installed")
+        self.write_config(primary={"plan": "Claude Team"})
+        # A profile the config names keeps its own sign-in file. Writing one
+        # here keeps the test off the real ~/.claude.json.
+        self.write_json(os.path.join(self.primary_dir, ".claude.json"),
+                        {"oauthAccount": {"emailAddress": "one@example.com"}})
+
+    def run_statusline(self, payload, profile="primary"):
+        environment = dict(os.environ)
+        environment["SW_HOME"] = self.home
+        environment["CLAUDE_CONFIG_DIR"] = (self.primary_dir if profile == "primary"
+                                            else self.secondary_dir)
+        done = subprocess.run(["/bin/sh",
+                               os.path.join(STAGE, "scripts", "statusline.sh")],
+                              input=payload, text=True, capture_output=True,
+                              timeout=20, env=environment)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout
+
+    def payload(self):
+        return json.dumps({
+            "version": "2.1.251",
+            "model": {"display_name": "Opus 5"},
+            "effort": {"level": "high"},
+            "context_window": {"remaining_percentage": 72.4},
+            "rate_limits": {
+                "five_hour": {"used_percentage": 93.2,
+                              "resets_at": self.now + 3600},
+                "seven_day": {"used_percentage": 38.9,
+                              "resets_at": self.now + 300000}}})
+
+    def test_cache_matches_the_shared_schema(self):
+        bar = self.run_statusline(self.payload())
+        self.assertIn("work Claude", bar)
+        self.assertIn("5h 93%", bar)
+        self.assertIn("7d 39%", bar)
+
+        with open(os.path.join(self.home, "usage-primary.json")) as handle:
+            cache = json.load(handle)
+        self.assertEqual(cache["role"], "primary")
+        self.assertEqual(cache["worker"], "claude")
+        self.assertEqual(cache["account"], "one@example.com")
+        self.assertEqual(cache["plan"], "Claude Team")
+        # Integers, not the quoted strings this used to write.
+        self.assertEqual(cache["five_hour_pct"], 93)
+        self.assertEqual(cache["seven_day_pct"], 39)
+        self.assertIsInstance(cache["five_hour_pct"], int)
+        self.assertIsInstance(cache["seven_day_pct"], int)
+        self.assertEqual(cache["five_hour_resets_at"], self.now + 3600)
+        self.assertEqual(cache["seven_day_resets_at"], self.now + 300000)
+        self.assertTrue(cache["five_hour_resets"])
+        self.assertTrue(cache["seven_day_resets"])
+        self.assertEqual(cache["client_version"], "2.1.251")
+        self.assertEqual(cache["extra"], {"model": "Opus 5", "effort": "high"})
+        self.assertGreaterEqual(cache["cached_at"], self.now)
+
+        with open(os.path.join(self.home,
+                               "refresh-status-primary.txt")) as handle:
+            self.assertTrue(handle.readline().startswith("OK"))
+
+    def test_the_reading_is_usable_by_the_library(self):
+        self.run_statusline(self.payload())
+        environment = dict(os.environ)
+        environment["SW_HOME"] = self.home
+        done = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, sys.argv[1]); import swlib;"
+             "print(swlib.freshness('primary'));"
+             "print(swlib.headroom('primary', swlib.load_usage('primary')))",
+             SCRIPTS],
+            capture_output=True, text=True, timeout=20, env=environment,
+            cwd=self.home)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        # A quoted percentage used to make headroom unreadable.
+        self.assertEqual(done.stdout.split(), ["fresh", "7"])
+
+    def test_the_role_comes_from_the_config_dir(self):
+        self.write_json(os.path.join(self.secondary_dir, ".claude.json"),
+                        {"oauthAccount": {"emailAddress": "two@example.com"}})
+        self.run_statusline(self.payload(), profile="secondary")
+        self.assertTrue(os.path.exists(
+            os.path.join(self.home, "usage-secondary.json")))
+        self.assertFalse(os.path.exists(
+            os.path.join(self.home, "usage-primary.json")))
+
+    def test_unreadable_payload_writes_no_ok(self):
+        self.write_status("primary", "FAILED: the usage reader stopped without "
+                                     "saying why.")
+        bar = self.run_statusline("this is not JSON at all")
+        # The label still comes from the config; no figure is invented.
+        self.assertNotIn("%", bar)
+        self.assertNotIn("5h", bar)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.home, "usage-primary.json")),
+            "a payload it could not read must not be cached as a reading")
+        with open(os.path.join(self.home,
+                               "refresh-status-primary.txt")) as handle:
+            self.assertFalse(handle.readline().startswith("OK"))
 
 
 class Installed(unittest.TestCase):
