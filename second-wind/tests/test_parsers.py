@@ -436,7 +436,7 @@ class PickerTests(unittest.TestCase):
         block = data["modelPicker"]
         self.assertIs(block["_second_wind"], True)
         self.assertIs(block["replaceBuiltInOptions"], True)
-        self.assertEqual([row["value"] for row in block["options"]],
+        self.assertEqual([row["model"] for row in block["options"]],
                          ["fable", "opus", "sonnet", "haiku"])
         self.assertEqual([row["label"] for row in block["options"]],
                          ["Fable", "Opus", "Sonnet", "Haiku"])
@@ -460,7 +460,7 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(data["theme"], "dark")
 
     def test_off_leaves_someone_elses_picker_alone(self):
-        theirs = {"options": [{"value": "opus", "label": "Their own"}]}
+        theirs = {"options": [{"model": "opus", "label": "Their own"}]}
         swlib.write_json_atomic(self.settings, {"modelPicker": theirs})
         picker.apply(self.cfg, on=False)
         with open(self.settings) as handle:

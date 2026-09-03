@@ -81,7 +81,7 @@ def picker_block(description):
     return {
         "_second_wind": True,
         "replaceBuiltInOptions": True,
-        "options": [{"value": alias, "label": alias.capitalize(),
+        "options": [{"model": alias, "label": alias.capitalize(),
                      "description": description} for alias in ALIASES],
     }
 
