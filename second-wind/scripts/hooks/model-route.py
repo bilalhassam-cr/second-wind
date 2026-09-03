@@ -16,7 +16,6 @@ starting. A real model is never blocked, whatever else is going on.
 import json
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import swlib  # noqa: E402
@@ -62,7 +61,7 @@ def main():
         return 0
 
     cfg = swlib.load_config()
-    mode = os.path.join(swlib.sw_home(), "mode")
+    mode = swlib.mode_path()
     route = swlib.parse_route(target, cfg)
 
     if not route:
@@ -81,13 +80,7 @@ def main():
     if route["worker"] not in swlib.enabled_roles(cfg):
         return block("second-wind: that worker is not connected; run setup.")
 
-    swlib.write_json_atomic(mode, {
-        "worker": route["worker"],
-        "model": route["model"],
-        "effort": route["effort"],
-        "set_at": int(time.time()),
-        "label": route["label"],
-    })
+    swlib.write_mode(route)
     detail = ""
     if route["model"]:
         detail += ", model %s" % route["model"]

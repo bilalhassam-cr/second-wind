@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "scripts")
@@ -546,6 +547,155 @@ class Routing(Base):
             self.assertEqual(
                 swlib.parse_route(swlib.route_id(worker), self.cfg)["worker"],
                 worker)
+
+
+class DesktopStore(Base):
+    """desktop_session_model reads the desktop app's session files, which is the
+    only signal that a routing name was typed into its model menu. It reads and
+    never writes, and it has to answer at a prompt, so the scan is bounded and
+    the match is cached."""
+
+    SESSION = "0eaa1111-2222-3333-4444-555566667777"
+
+    def setUp(self):
+        super().setUp()
+        self.store = os.path.join(self.home, "desktop-store")
+        self.previous_store = os.environ.get("SW_DESKTOP_STORE")
+        os.environ["SW_DESKTOP_STORE"] = self.store
+
+    def tearDown(self):
+        if self.previous_store is None:
+            os.environ.pop("SW_DESKTOP_STORE", None)
+        else:
+            os.environ["SW_DESKTOP_STORE"] = self.previous_store
+        super().tearDown()
+
+    def entry(self, name, data, raw=None):
+        folder = os.path.join(self.store, "%s-outer" % name, "%s-inner" % name)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "local_%s.json" % name)
+        with open(path, "w") as handle:
+            handle.write(raw if raw is not None else json.dumps(data))
+        return path
+
+    def test_the_matching_entry_decides(self):
+        self.entry("other", {"cliSessionId": "another", "model": "claude-opus-5"})
+        self.entry("mine", {"cliSessionId": self.SESSION,
+                            "model": "claude-personal"})
+        self.assertEqual(swlib.desktop_session_model(self.SESSION),
+                         "claude-personal")
+
+    def test_no_entry_no_answer(self):
+        self.entry("other", {"cliSessionId": "another", "model": "claude-opus-5"})
+        self.assertIsNone(swlib.desktop_session_model(self.SESSION))
+        self.assertFalse(os.path.exists(swlib.session_map_path()))
+
+    def test_an_entry_without_a_model_is_not_a_model(self):
+        for data in ({"cliSessionId": self.SESSION},
+                     {"cliSessionId": self.SESSION, "model": ""},
+                     {"cliSessionId": self.SESSION, "model": None},
+                     {"cliSessionId": self.SESSION, "model": 7}):
+            self.entry("mine", data)
+            self.assertIsNone(swlib.desktop_session_model(self.SESSION),
+                              repr(data))
+
+    def test_rubbish_in_the_store_is_skipped(self):
+        # The app writes these files while it runs, so a half-written or
+        # rewritten one is ordinary. One unreadable file must not hide the
+        # entry that matters.
+        self.entry("half", None, raw='{"cliSessionId": "%s", "mod' % self.SESSION)
+        self.entry("list", None, raw='["%s"]' % self.SESSION)
+        self.entry("empty", None, raw="")
+        self.entry("mine", {"cliSessionId": self.SESSION, "model": "codex"})
+        self.assertEqual(swlib.desktop_session_model(self.SESSION), "codex")
+
+    def test_a_session_id_inside_another_field_is_not_a_match(self):
+        self.entry("mine", {"cliSessionId": "another", "model": "claude-personal",
+                            "bridgeSessionIds": [self.SESSION]})
+        self.assertIsNone(swlib.desktop_session_model(self.SESSION))
+
+    def test_no_store_and_no_session_id(self):
+        self.assertIsNone(swlib.desktop_session_model(self.SESSION))
+        self.assertIsNone(swlib.desktop_session_model(""))
+        self.assertIsNone(swlib.desktop_session_model(None))
+
+    def test_off_macos_it_never_looks(self):
+        # The store is an app on one platform. Elsewhere the whole path is a
+        # waste of a prompt, so it answers without reading anything.
+        self.entry("mine", {"cliSessionId": self.SESSION,
+                            "model": "claude-personal"})
+        os.environ.pop("SW_DESKTOP_STORE")
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.object(swlib, "DESKTOP_STORE", self.store):
+            self.assertIsNone(swlib.desktop_session_model(self.SESSION))
+            with mock.patch.object(sys, "platform", "darwin"):
+                self.assertEqual(swlib.desktop_session_model(self.SESSION),
+                                 "claude-personal")
+
+    def test_the_cache_keeps_the_newest_entries_only(self):
+        self.entry("mine", {"cliSessionId": self.SESSION, "model": "codex"})
+        swlib.write_json_atomic(swlib.session_map_path(), dict(
+            ("session-%03d" % index, "/gone/%d.json" % index)
+            for index in range(swlib.DESKTOP_MAP_MAX + 10)))
+        self.assertEqual(swlib.desktop_session_model(self.SESSION), "codex")
+        with open(swlib.session_map_path()) as handle:
+            known = json.load(handle)
+        self.assertEqual(len(known), swlib.DESKTOP_MAP_MAX)
+        self.assertIn(self.SESSION, known)
+        self.assertNotIn("session-000", known)
+
+    def test_a_broken_cache_file_is_ignored(self):
+        self.entry("mine", {"cliSessionId": self.SESSION, "model": "codex"})
+        for raw in ("{not json", "[]", '{"%s": 7}' % self.SESSION, ""):
+            with open(swlib.session_map_path(), "w") as handle:
+                handle.write(raw)
+            self.assertEqual(swlib.desktop_session_model(self.SESSION), "codex",
+                             raw)
+
+    def test_the_scan_is_bounded(self):
+        # A store that has grown for years cannot make a prompt wait. Only the
+        # newest files are read, and a live session's file is one of them
+        # because the app rewrites it as the session goes.
+        old = self.entry("mine", {"cliSessionId": self.SESSION,
+                                  "model": "claude-personal"})
+        os.utime(old, (1_600_000_000, 1_600_000_000))
+        for index in range(swlib.DESKTOP_SCAN_MAX + 5):
+            self.entry("filler-%03d" % index,
+                       {"cliSessionId": "filler-%03d" % index,
+                        "model": "claude-opus-5"})
+        self.assertIsNone(swlib.desktop_session_model(self.SESSION))
+
+
+class ModeFile(Base):
+    """One writer for the routing override, because two hooks write it now."""
+
+    def route(self, **fields):
+        found = {"worker": "codex", "model": None, "effort": None,
+                 "label": "Codex"}
+        found.update(fields)
+        return found
+
+    def test_the_five_keys_and_nothing_else(self):
+        swlib.write_mode(self.route())
+        written = read_json(swlib.mode_path())
+        self.assertEqual(set(written), {"worker", "model", "effort", "set_at",
+                                        "label"})
+        self.assertEqual(written["worker"], "codex")
+        self.assertEqual(written["label"], "Codex")
+        self.assertIsNone(written["model"])
+        self.assertIsNone(written["effort"])
+
+    def test_a_source_is_recorded_when_there_is_one(self):
+        swlib.write_mode(self.route(model="gpt-5.6", effort="high"),
+                         source="desktop")
+        written = read_json(swlib.mode_path())
+        self.assertEqual(written["source"], "desktop")
+        self.assertEqual((written["model"], written["effort"]),
+                         ("gpt-5.6", "high"))
+
+    def test_it_is_written_where_every_reader_looks(self):
+        self.assertEqual(swlib.mode_path(),
+                         os.path.join(self.home, "mode"))
 
 
 class InstalledSettings(Base):

@@ -160,8 +160,11 @@ to that worker, with that model and effort, through the runner. Picking any
 normal model deletes the record and hands control back to the usage figures. This
 works in the terminal only. The desktop app's model menu shows no custom rows and
 runs no hook for a typed id, so a typed id there becomes a model that does not
-exist and every prompt fails until you pick a real one. In the desktop app, ask in
-chat to route: the skill offers a picker and writes the same record.
+exist and every prompt fails until you pick a real one. The desktop app is covered
+the other way round: at level relief the prompt guard finds the typed name in the
+app's own session file, arms the route anyway, and refuses that prompt with a line
+asking you to pick a normal model and send it again. In the desktop app you can
+also ask in chat to route: the skill offers a picker and writes the same record.
 
 Review what has been delegated, and produce a shareable copy:
 

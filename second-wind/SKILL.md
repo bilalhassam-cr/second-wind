@@ -158,23 +158,23 @@ boundary**, never part-way through a job already running. Say in one line that
 you are handing over and which account is taking it, so the user can stop you. If
 the user says keep it here, keep it here.
 
-Writing `secondary`, `codex`, `grok`, `cursor`, `both` or `all` to
-`~/.second-wind/mode` forces routing whatever the figures say, and
-`touch ~/.second-wind/no-failover` turns handover off.
+Writing `secondary`, `codex`, `grok`, `cursor`, `both` or `all` to `~/.second-wind/mode`
+forces routing whatever the figures say, and `no-failover` beside it turns handover off.
 
 ## Routing from the model picker
 
 Type `/model second-wind/personal`, or `/model second-wind/codex/gpt-5.6/high` to
 name a model and an effort too. The switch is **refused on purpose**: the session
 keeps the model it has and the next tasks go to that worker instead, through the
-runner. Picking any normal model stops it. With `--model-picker on` these are
-rows in the picker, and `--picker-routes` adds parameterised ones.
+runner. Picking any normal model stops it. `--model-picker on` adds picker rows.
 
-The desktop app runs no hook for a typed id, so never type these ids there: ask in chat.
-Asked in chat, offer an **AskUserQuestion** picker of worker, then model, then
-effort, then write `~/.second-wind/mode` in the shape the hook writes, model and
-effort null when not chosen: `{"worker": "codex", "model": "gpt-5.6", "effort":
-"high", "set_at": <epoch seconds>, "label": "Codex"}`. Delete it to stop.
+The desktop app fires no hook for a typed id, so the name becomes the session
+model and the API rejects it. At level relief the prompt guard catches that on the
+next prompt, arms the route and asks for a real model. Asked in chat, offer an
+**AskUserQuestion** picker of worker, then model, then effort, then write
+`~/.second-wind/mode` in the shape the hook writes, model and effort null when not
+chosen: `{"worker": "codex", "model": "gpt-5.6", "effort": "high", "set_at":
+<epoch seconds>, "label": "Codex"}`. Delete it to stop.
 
 `references/setup.md`, `references/config.md` and
 `references/troubleshooting.md` carry the rest.

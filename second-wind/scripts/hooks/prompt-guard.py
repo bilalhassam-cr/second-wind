@@ -8,6 +8,12 @@ work to their own second subscription between tasks is ordinary use, whereas
 silent mid-request rotation is the shape that looks like defeating per-account
 limits. It is also simply more useful to know which account did the work.
 
+It has one other job, because it is the only hook the desktop app runs before a
+prompt. A routing name typed into that app's model menu never reaches the
+PreModelSwitch hook, so the guard reads the app's own session file, arms the
+route and refuses the prompt with an instruction, rather than letting the request
+fail on a model that does not exist.
+
 This hook never starts a reader. A prompt is the worst moment to spend a second
 or two on a subprocess, and the session-start hook, the refresh timer and the
 runner already keep the cache warm.
@@ -62,6 +68,14 @@ def emit(message):
         "hookEventName": "UserPromptSubmit",
         "additionalContext": message,
     }}))
+    return 0
+
+
+def deny(reason):
+    """UserPromptSubmit's documented refusal: a top-level block decision, whose
+    reason is the line the user is shown. The prompt is not sent, so this is
+    only ever used where sending it would fail anyway."""
+    print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 
 
@@ -237,6 +251,26 @@ def main():
     # Do not fire on the session's own machinery.
     if any(marker in text for marker in MACHINERY):
         return 0
+
+    # A name typed into the desktop app's model menu becomes the session model
+    # without firing PreModelSwitch, so a routing name lands there as a model
+    # the API has never heard of and every prompt fails. The app's own session
+    # file is the only place that shows up. Arm the route the picker would have
+    # armed, and say what to do, because the prompt cannot succeed either way.
+    session = payload.get("session_id") if isinstance(payload, dict) else None
+    typed = swlib.desktop_session_model(session)
+    route = swlib.parse_route(typed, cfg) if typed else None
+    if route:
+        if route["worker"] not in swlib.enabled_roles(cfg):
+            return deny("second-wind: %s is not connected, so it cannot take "
+                        "the work. Run setup, and pick any normal model from "
+                        "the menu to get this session working again."
+                        % route["label"])
+        swlib.write_mode(route, source="desktop")
+        return deny("second-wind: routing to %s is armed for your next tasks. "
+                    "This session's model is a routing name, not a real model, "
+                    "so pick any normal model from the menu and send your "
+                    "message again." % route["label"])
 
     # A rate limit already stopped a turn on this account. Say so on the next
     # prompt whatever the cache looks like, then forget it: the reading behind

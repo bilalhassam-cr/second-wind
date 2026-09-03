@@ -192,7 +192,9 @@ nothing. It never runs on the secondary profile.
 To force it regardless, write `secondary`, `codex`, `grok`, `cursor`, `both` or
 `all` to `~/.second-wind/mode`. Remove the file to go back to usage-based
 handover. The model picker writes the same file as JSON, which can also carry a
-model and an effort; both forms are read.
+model and an effort; both forms are read. A route armed from the desktop app
+writes the same JSON with `"source": "desktop"`, and stays until a real model is
+picked in a terminal or the file is deleted.
 
 ## "Model isn't available" after picking a route
 
@@ -204,17 +206,28 @@ because settings are read at session start.
 
 From the desktop app the message means something else: its model menu runs no
 PreModelSwitch hook for a typed id, so a typed `second-wind/...` or
-`claude-personal` becomes the session's model and every prompt fails. Recover by
-picking a real model from the menu. Route from the desktop app by asking in chat
-instead. A route that is refused with "the next tasks route to ..." is the hook
-working: the block is the mechanism, not a fault.
+`claude-personal` becomes the session's model. At level relief the prompt guard
+catches that at the next prompt. It finds the typed name in the app's own session
+file, arms the route, and refuses the prompt with "routing to ... is armed for
+your next tasks", which asks you to pick any normal model from the menu and send
+the message again. The route stays armed once you do.
+
+If the old API error appears instead, the guard is not there to catch it.
+`setup.py --check` lists a `primary UserPromptSubmit` line, which says `MISSING`
+when the hook is not in `settings.json`, and is absent altogether at the reviewer
+and worker levels, which do not install it. Rerun `--write` and restart.
+
+A route that is refused with "the next tasks route to ..." is the hook working:
+the block is the mechanism, not a fault.
 
 ## A route says the worker is not connected
 
 The hook only writes a routing override for a worker the config has enabled, so
 picking `second-wind/grok` with Grok off is refused rather than recorded. Turn
 the worker on with `--write --grok on`, or pick a different route. `--check`
-lists every worker and its state.
+lists every worker and its state. Typed into the desktop app the same case reads
+"... is not connected, so it cannot take the work", and the prompt is refused
+because it could not have been answered on that model either.
 
 ## The model picker rows are wrong or stale
 

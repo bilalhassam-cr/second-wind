@@ -18,6 +18,7 @@ scripts/:
   osascript          records the notification, so the suite proves notify() was
                      called without popping a real one on the machine running it
 """
+import glob
 import json
 import os
 import shutil
@@ -783,6 +784,222 @@ class ModelRoute(Base):
         self.write_config()
         started = time.time()
         self.blocked(self.switch("second-wind/codex"))
+        self.assertLess(time.time() - started, 5.0)
+
+
+class DesktopRoute(Base):
+    """The desktop app's model menu takes a typed name and fires no
+    PreModelSwitch hook, so the prompt guard reads the app's own session file
+    and refuses the prompt that would otherwise fail on a model the API has
+    never heard of.
+
+    SW_DESKTOP_STORE points every test here at a fixture store. It is always
+    set, including in the "no store" case, so no test can read the store of
+    whoever is running the suite.
+    """
+
+    SESSION = "0eaa1111-2222-3333-4444-555566667777"
+
+    # ------------------------------------------------------------ fixtures
+
+    def entry(self, root, name, data):
+        """One store file, in the app's two-level layout."""
+        folder = os.path.join(root, "%s-outer" % name, "%s-inner" % name)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "local_%s.json" % name)
+        self.write_json(path, data)
+        return path
+
+    def store(self, model, session=None):
+        """Three files, one of them this session's, as the real store holds
+        every session the app has ever opened."""
+        root = os.path.join(self.home, "desktop-store")
+        self.others = [
+            self.entry(root, "other-one",
+                       {"cliSessionId": "aaaa1111-0000-0000-0000-000000000000",
+                        "model": "claude-opus-5", "cwd": self.home}),
+            self.entry(root, "other-two",
+                       {"cliSessionId": "bbbb2222-0000-0000-0000-000000000000",
+                        "model": "second-wind/codex", "cwd": self.home}),
+        ]
+        self.match = self.entry(root, "mine", {
+            "sessionId": "local_cccc3333-0000-0000-0000-000000000000",
+            "cliSessionId": session or self.SESSION, "model": model,
+            "cwd": self.home, "lastActivityAt": self.now})
+        return root
+
+    def prompt(self, store=None, session=None, text="Write the report", **kwargs):
+        return self.run_hook("prompt-guard.py", {
+            "hook_event_name": "UserPromptSubmit", "prompt": text,
+            "session_id": session or self.SESSION},
+            env={"SW_DESKTOP_STORE": store or os.path.join(self.home, "gone")},
+            **kwargs)
+
+    def mode(self):
+        with open(os.path.join(self.home, "mode")) as handle:
+            return json.load(handle)
+
+    def denied(self, stdout):
+        self.assertTrue(stdout.strip(), "expected a refusal, got nothing")
+        data = json.loads(stdout)
+        self.assertEqual(data["decision"], "block")
+        self.assertNotIn("hookSpecificOutput", data)
+        return data["reason"]
+
+    # ------------------------------------------------------------ tests
+
+    def test_a_typed_routing_name_arms_the_route_and_refuses_the_prompt(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        reason = self.denied(self.prompt(self.store("claude-personal")))
+        self.assertIn("routing to spare Claude is armed for your next tasks",
+                      reason)
+        self.assertIn("pick any normal model from the menu and send your "
+                      "message again", reason)
+        written = self.mode()
+        self.assertEqual(written["worker"], "secondary")
+        self.assertEqual(written["label"], "spare Claude")
+        self.assertIsNone(written["model"])
+        self.assertIsNone(written["effort"])
+        self.assertEqual(written["source"], "desktop")
+
+    def test_a_typed_picker_id_carries_its_model_and_effort(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        reason = self.denied(
+            self.prompt(self.store("second-wind/codex/gpt-5.6/high")))
+        self.assertIn("routing to Codex is armed", reason)
+        written = self.mode()
+        self.assertEqual((written["worker"], written["model"], written["effort"]),
+                         ("codex", "gpt-5.6", "high"))
+
+    def test_a_real_model_is_left_alone(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.assertEqual(self.prompt(self.store("claude-fable-5-1")).strip(), "")
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+
+    def test_a_missing_store_is_silent(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.assertEqual(self.prompt().strip(), "")
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+        self.assertFalse(os.path.exists(
+            os.path.join(self.home, "session-map.json")))
+
+    def test_another_session_in_the_store_is_not_this_one(self):
+        # The second fixture file holds a routing name against a different
+        # session. Matching on anything looser than cliSessionId would refuse
+        # a prompt in a session nobody had touched.
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        root = self.store("claude-fable-5-1")
+        self.assertEqual(self.prompt(root).strip(), "")
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+
+    def snapshot(self, root):
+        """Every store file, its mtime and its contents."""
+        state = []
+        for path in sorted(glob.glob(
+                os.path.join(root, "*", "*", "local_*.json"))):
+            with open(path) as handle:
+                state.append((path, os.path.getmtime(path), handle.read()))
+        return state
+
+    def test_the_store_is_never_written_to(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        root = self.store("claude-personal")
+        before = self.snapshot(root)
+        self.denied(self.prompt(root))
+        self.assertEqual(before, self.snapshot(root))
+
+    def test_the_session_map_is_written_and_then_reused(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        root = self.store("claude-personal")
+        self.denied(self.prompt(root))
+        with open(os.path.join(self.home, "session-map.json")) as handle:
+            self.assertEqual(json.load(handle), {self.SESSION: self.match})
+        # Point the scan at an empty store and delete every other file. A rescan
+        # would find nothing; the cached path still resolves, so a second
+        # refusal proves the cache was read instead of the store.
+        for path in self.others:
+            os.unlink(path)
+        empty = os.path.join(self.home, "empty-store")
+        os.makedirs(empty)
+        self.assertIn("routing to spare Claude is armed",
+                      self.denied(self.prompt(empty)))
+
+    def test_a_stale_cache_entry_falls_back_to_a_rescan(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        root = self.store("claude-personal")
+        self.write_json(os.path.join(self.home, "session-map.json"),
+                        {self.SESSION: os.path.join(self.home, "went-away.json")})
+        self.assertIn("routing to spare Claude is armed",
+                      self.denied(self.prompt(root)))
+        with open(os.path.join(self.home, "session-map.json")) as handle:
+            self.assertEqual(json.load(handle)[self.SESSION], self.match)
+
+    def test_a_cached_file_that_now_holds_another_session_is_rescanned(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        root = self.store("claude-personal")
+        self.write_json(os.path.join(self.home, "session-map.json"),
+                        {self.SESSION: self.others[0]})
+        self.assertIn("routing to spare Claude is armed",
+                      self.denied(self.prompt(root)))
+
+    def test_a_worker_that_is_not_connected_is_refused_and_writes_nothing(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        reason = self.denied(self.prompt(self.store("cursor")))
+        self.assertIn("Cursor Agent is not connected", reason)
+        self.assertIn("pick any normal model from the menu", reason)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+
+    def test_the_refusal_comes_before_the_usage_reading(self):
+        # A spent account and a broken model at once: the prompt cannot be sent
+        # either way, so the refusal wins and the handover line waits.
+        self.write_config()
+        self.write_usage("primary", five=97, week=90, age=60)
+        reason = self.denied(self.prompt(self.store("claude-personal")))
+        self.assertIn("routing to spare Claude is armed", reason)
+
+    def test_the_master_switch_still_wins(self):
+        # no-failover means this account's work stays here. Arming a route
+        # against it would be second-wind overruling the one file that says no.
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.touch("no-failover")
+        self.assertEqual(self.prompt(self.store("claude-personal")).strip(), "")
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+
+    def test_machinery_prompts_are_left_alone(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        root = self.store("claude-personal")
+        self.assertEqual(
+            self.prompt(root, text="<system-reminder>x</system-reminder>").strip(),
+            "")
+
+    def test_an_armed_desktop_route_announces_itself_on_the_next_prompt(self):
+        # Once a real model is chosen the guard's own mode file path takes over,
+        # so the route the desktop arming wrote is what the next prompt reads.
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.denied(self.prompt(self.store("claude-personal")))
+        text = self.context(self.prompt(self.store("claude-fable-5-1")),
+                            "UserPromptSubmit").replace("\n", " ")
+        self.assertIn("routing the heavy work to spare Claude", text)
+
+    def test_it_comes_back_quickly(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        root = self.store("claude-personal")
+        started = time.time()
+        self.denied(self.prompt(root))
         self.assertLess(time.time() - started, 5.0)
 
 

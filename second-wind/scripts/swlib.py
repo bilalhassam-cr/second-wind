@@ -17,6 +17,7 @@ or from ``scripts/hooks/``:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import swlib
 """
+import glob
 import json
 import os
 import re
@@ -296,6 +297,158 @@ def backup_once(path):
     stamped = "%s.second-wind-backup-%s" % (path, time.strftime("%Y%m%d-%H%M%S"))
     shutil.copy2(path, stamped)
     return made_original, stamped
+
+
+# ---------------------------------------------------------------- mode file
+
+
+def mode_path():
+    return os.path.join(sw_home(), "mode")
+
+
+def write_mode(route, source=None):
+    """The routing override, in the one shape every reader expects.
+
+    Two hooks write it now, the picker one and the prompt guard's desktop path,
+    so the five keys live here rather than in each of them. ``source`` records
+    which path armed the route, because the desktop one cannot be turned off by
+    picking a model in a menu that runs no hook.
+    """
+    data = {"worker": route["worker"],
+            "model": route["model"],
+            "effort": route["effort"],
+            "set_at": int(time.time()),
+            "label": route["label"]}
+    if source:
+        data["source"] = source
+    return write_json_atomic(mode_path(), data)
+
+
+# ---------------------------------------------------------------- desktop store
+
+# The desktop app keeps one JSON file per session in here, and the `cliSessionId`
+# in it is the session id a hook is handed. It is the only place a name typed
+# into the app's model menu shows up: that route fires no PreModelSwitch hook, so
+# the prompt guard reads this instead of being told. Read only, always. Nothing
+# in second-wind writes into the app's own store.
+DESKTOP_STORE = os.path.join(HOME, "Library", "Application Support", "Claude",
+                             "claude-code-sessions")
+# How many sessions the path cache keeps. A machine that is never restarted
+# would otherwise grow the file for ever, and only the current session matters.
+DESKTOP_MAP_MAX = 40
+# How many store files a scan reads, newest first. The store grows for ever and
+# this runs at a prompt, so the work has to be bounded by something. A live
+# session is among the newest by definition: the app rewrites its file as the
+# session goes, and it had just written the typed model when this hook ran.
+DESKTOP_SCAN_MAX = 200
+
+
+def desktop_store():
+    """SW_DESKTOP_STORE is read every call, so a test points the scanner at a
+    fixture store and never at the real one."""
+    return os.environ.get("SW_DESKTOP_STORE") or DESKTOP_STORE
+
+
+def session_map_path():
+    """Where the session id to store file match is remembered."""
+    return os.path.join(sw_home(), "session-map.json")
+
+
+def _desktop_files(store):
+    """Store files, most recently written first. The session asking is the one
+    that just did something, so the match is usually among the first read."""
+    def when(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+    paths = glob.glob(os.path.join(store, "*", "*", "local_*.json"))
+    return sorted(paths, key=when, reverse=True)[:DESKTOP_SCAN_MAX]
+
+
+def _desktop_entry(path, session_id):
+    """(True, model) when this file is that session's, else (False, None).
+
+    The raw substring test comes first on purpose. The store holds hundreds of
+    files and tens of megabytes; reading the bytes costs a fraction of a second
+    and parsing all of them costs several times that, at the one moment a person
+    is watching the cursor. An unreadable or half-written file is skipped.
+    """
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        return False, None
+    if ('"%s"' % session_id).encode("utf-8", "replace") not in raw:
+        return False, None
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return False, None
+    if not isinstance(data, dict) or data.get("cliSessionId") != session_id:
+        return False, None
+    model = data.get("model")
+    if isinstance(model, str) and model.strip():
+        return True, model.strip()
+    return True, None
+
+
+def _remember_session(session_id, path):
+    """Cache the match so the next prompt reads one file instead of the store.
+    A failure here is not worth a word: the scan simply happens again."""
+    known = {}
+    try:
+        with open(session_map_path()) as handle:
+            loaded = json.load(handle)
+        if isinstance(loaded, dict):
+            known = {key: value for key, value in loaded.items()
+                     if isinstance(value, str)}
+    except Exception:
+        known = {}
+    known.pop(session_id, None)
+    entries = list(known.items())[-(DESKTOP_MAP_MAX - 1):] + [(session_id, path)]
+    try:
+        write_json_atomic(session_map_path(), dict(entries))
+    except Exception:
+        pass
+
+
+def desktop_session_model(session_id):
+    """The model the desktop app has on this session, or None.
+
+    Typing a name into the app's model menu sets it as the session model without
+    firing PreModelSwitch, so this file is the only sign that a routing name is
+    sitting where a real model should be. None means no answer, whatever the
+    reason: another platform, no store, no entry for this session.
+    """
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        return None
+    if not os.environ.get("SW_DESKTOP_STORE") and sys.platform != "darwin":
+        return None
+    store = desktop_store()
+    if not os.path.isdir(store):
+        return None
+    cached = None
+    try:
+        with open(session_map_path()) as handle:
+            loaded = json.load(handle)
+        if isinstance(loaded, dict):
+            cached = loaded.get(session_id)
+    except Exception:
+        cached = None
+    if isinstance(cached, str) and cached:
+        mine, model = _desktop_entry(cached, session_id)
+        if mine:
+            return model
+        # The cached file is gone, or the app has reused it for another session.
+        # Either way it is no longer evidence, so fall through to a rescan.
+    for path in _desktop_files(store):
+        mine, model = _desktop_entry(path, session_id)
+        if mine:
+            _remember_session(session_id, path)
+            return model
+    return None
 
 
 # ---------------------------------------------------------------- runtime mirror
