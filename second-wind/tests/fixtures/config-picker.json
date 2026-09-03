@@ -1,7 +1,7 @@
 {
   "version": 4,
   "level": "relief",
-  "primary": {"config_dir": "~/.claude", "label": "Clearoute Claude",
+  "primary": {"config_dir": "~/.claude", "label": "Work Claude",
               "account": "user@example.com", "plan": "team"},
   "secondary": {"enabled": true, "config_dir": "~/.claude-secondary",
                 "label": "Personal Claude", "account": "user@example.com",

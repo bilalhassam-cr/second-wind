@@ -39,13 +39,25 @@ is_int() { case "${1:-}" in ''|*[!0-9]*) return 1;; *) return 0;; esac; }
 # the sharpest case: its CLI prefers OPENAI_API_KEY over the ChatGPT login when
 # the variable is set. One list in one place, because three lists in three
 # branches is how one of them goes stale.
+#
+# Cursor is the exception. It has two sign-ins and an API key is one of them, so
+# clearing the key unconditionally broke every API-key delegation. The key is
+# kept when the config records that sign-in, and when the config says nothing at
+# all, because an unrecorded auth is more likely an old config than a bill.
 creds_cleared=""
+creds_kept=""
 isolate_credentials() {
+  creds_kept=""
   case "$1" in
     secondary) creds_cleared="ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN" ;;
     codex)     creds_cleared="OPENAI_API_KEY" ;;
     grok)      creds_cleared="XAI_API_KEY" ;;
-    cursor)    creds_cleared="CURSOR_API_KEY" ;;
+    cursor)
+      case "$(cfg '.cursor.auth')" in
+        api_key|"") creds_cleared=""; creds_kept="CURSOR_API_KEY" ;;
+        *)          creds_cleared="CURSOR_API_KEY" ;;
+      esac
+      ;;
     *)         creds_cleared="" ;;
   esac
   for name in $creds_cleared; do unset "$name"; done
@@ -304,7 +316,8 @@ is_int "$reply_bytes" || reply_bytes=0
   printf -- '- Model: %s\n' "${model:-default}"
   printf -- '- Effort: %s\n' "${effort:-default}"
   printf -- '- Browser guard applied: %s\n' "$([ -n "$guard" ] && echo yes || echo no)"
-  printf -- '- Credentials isolated: %s\n' "${creds_cleared:-none}"
+  printf -- '- Credentials isolated: %s%s\n' "${creds_cleared:-none}" \
+    "$([ -n "$creds_kept" ] && echo " (kept $creds_kept, it is this worker's sign-in)")"
   printf -- '- Exit code: %s%s\n\n' "$rc" "$([ "$rc" = 124 ] && echo ' (killed on timeout)')"
   printf '## Prompt sent\n\n```\n'; cat "$sendfile"; printf '\n```\n\n'
   printf '## Reply\n\n'; cat "$bodyf"

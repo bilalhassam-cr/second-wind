@@ -17,7 +17,7 @@ in the repository is a complete sample.
 | `codex.enabled` | Whether Codex is available as a worker. |
 | `grok.enabled` | Whether Grok Build is available as a worker. Setup checks the login by running `grok models`, which needs a session and sends no prompt. |
 | `cursor.enabled` | Whether Cursor Agent is available as a worker. |
-| `cursor.auth` | `interactive` or `api_key`. An API key authorises delegation only: the usage panel needs a session, so `refresh.cursor` stays false. |
+| `cursor.auth` | `interactive` or `api_key`. An API key authorises delegation only: the usage panel needs a session, so `refresh.cursor` stays false. The runner reads this key to decide what to do with `CURSOR_API_KEY` in the environment: it keeps the variable on an `api_key` sign-in, or when the field is missing, and clears it on an `interactive` one so the browser session pays. |
 | `thresholds.five_hour_pct` | Handover trigger for the 5-hour window. Default 90. |
 | `thresholds.seven_day_pct` | Handover trigger for the weekly window. Default 80. |
 | `refresh.interval_minutes` | How old a reading may be before it counts as stale. Default 15. Also the launchd interval. |

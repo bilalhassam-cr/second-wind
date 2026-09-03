@@ -32,6 +32,15 @@ jobs:
              | grep -viE '/Users/<|/home/<|youruser|yourname'; then
             echo "absolute home path found; use ~ or \$HOME"; fail=1
           fi
+          # Names that once appeared in an example label and must not come back.
+          # A placeholder such as "Work Claude" carries the same meaning without
+          # naming anyone. Add to this list, do not edit an entry out of it.
+          # This file is excluded because it has to spell the words out to look
+          # for them, and would otherwise match itself.
+          if grep -rniE 'clearoute|humaniti|bilal' \
+               --exclude-dir=.git --exclude=checks.yml .; then
+            echo "author or employer name found; use a neutral placeholder"; fail=1
+          fi
           # An em dash is easy to reintroduce in prose and violates the public
           # writing convention even though it is not personal data.
           emdash=$(printf '\342\200\224')

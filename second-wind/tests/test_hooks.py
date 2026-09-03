@@ -458,6 +458,21 @@ class StopFailure(Base):
         with open(pending) as handle:
             self.assertGreaterEqual(int(handle.read().strip()), self.now)
 
+    def test_does_not_wait_for_the_notification(self):
+        # The notification is a side effect, so this hook has no reason to sit
+        # waiting for osascript any more than the prompt guard does. The slow
+        # stub takes three seconds; the hook must be back well inside one.
+        self.write_config()
+        self.write_usage("primary", five=99, week=40, age=60)
+        started = time.time()
+        self.fire(binaries="bin-slow")
+        elapsed = time.time() - started
+        self.assertLess(elapsed, 1.0,
+                        "stop-failure waited %.2fs on the notification" % elapsed)
+        # Stamped by the hook itself, not by whatever osascript does later.
+        self.assertTrue(os.path.exists(
+            os.path.join(self.home, "notify-rate-limit-primary.stamp")))
+
     def test_worker_level_leaves_no_note(self):
         self.write_config(level="worker", failover={"enabled": False})
         self.fire()
@@ -636,6 +651,45 @@ class StatusLine(Base):
             os.path.join(self.home, "usage-secondary.json")))
         self.assertFalse(os.path.exists(
             os.path.join(self.home, "usage-primary.json")))
+
+    def test_the_reader_profile_caches_under_primary(self):
+        # The reader profile is a second credential store for the same account,
+        # so its figures are the primary's. A usage-reader.json would be read by
+        # nothing at all.
+        reader_dir = os.path.join(self.home, "profiles", "reader")
+        os.makedirs(reader_dir)
+        self.write_config(reader={"enabled": True, "config_dir": reader_dir})
+        self.write_json(os.path.join(reader_dir, ".claude.json"),
+                        {"oauthAccount": {"emailAddress": "one@example.com"}})
+        environment = dict(os.environ)
+        environment["SW_HOME"] = self.home
+        environment["CLAUDE_CONFIG_DIR"] = reader_dir
+        done = subprocess.run(["/bin/sh",
+                               os.path.join(STAGE, "scripts", "statusline.sh")],
+                              input=self.payload(), text=True,
+                              capture_output=True, timeout=20, env=environment)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assert_absent("usage-reader.json", settle=0)
+        self.assert_absent("refresh-status-reader.txt", settle=0)
+        with open(os.path.join(self.home, "usage-primary.json")) as handle:
+            cache = json.load(handle)
+        self.assertEqual(cache["role"], "primary")
+        self.assertEqual(cache["five_hour_pct"], 93)
+        with open(os.path.join(self.home,
+                               "refresh-status-primary.txt")) as handle:
+            self.assertTrue(handle.readline().startswith("OK"))
+
+    def test_the_status_file_is_renamed_into_place(self):
+        # Written to a temp name and moved, so a hook reading it never sees a
+        # half-written line. No stray temp file may be left behind either.
+        self.run_statusline(self.payload())
+        leftovers = [name for name in os.listdir(self.home)
+                     if name.startswith("refresh-status-primary.txt.tmp")]
+        self.assertEqual(leftovers, [])
+        with open(os.path.join(self.home,
+                               "refresh-status-primary.txt")) as handle:
+            self.assertEqual(handle.read(),
+                             "OK: interactive status line wrote this reading.\n")
 
     def test_unreadable_payload_writes_no_ok(self):
         self.write_status("primary", "FAILED: the usage reader stopped without "

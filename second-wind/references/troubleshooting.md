@@ -18,6 +18,12 @@ pressing anything. No reader ever answers a dialog: answering one on your behalf
 is a decision it has no business making, and a keystroke sent at a modal it does
 not understand can do anything.
 
+`TRUST PROMPT` and `LOGIN EXPIRED` are the only two dialogs a reader names, and
+it names them by matching their wording. Any other dialog is not recognised as a
+dialog at all: it just sits where the panel should be, and the reading ends as
+`FAILED: usage panel did not appear` with the last of the screen attached. So
+read the screen tail in the status file before assuming a parser fault.
+
 The cure is the pre-trust setup writes. Check it:
 
 ```bash

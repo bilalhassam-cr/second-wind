@@ -96,9 +96,16 @@ day() { [ -n "${1:-}" ] || return 0
   { date -r "$1" '+%H:%M on %e %b' 2>/dev/null || date -d "@$1" '+%H:%M on %e %b' 2>/dev/null \
     || printf ''; } | tr -s ' '; }
 
+# The reader profile is a second credential store for the same account as the
+# primary, so its figures are the primary's figures. Cache them under the role
+# they describe: a usage-reader.json is read by no hook and no guard, so a
+# reader-profile terminal session used to refresh nothing at all.
+cache_role=$role
+[ "$role" = reader ] && cache_role=primary
+
 mkdir -p "$SW_HOME" 2>/dev/null
-f="$SW_HOME/usage-$role.json"
-jq -nc --arg a "$acct" --arg r "$role" --arg p "$plan" --arg v "$version" \
+f="$SW_HOME/usage-$cache_role.json"
+jq -nc --arg a "$acct" --arg r "$cache_role" --arg p "$plan" --arg v "$version" \
       --arg m "$model" --arg e "$effort" \
       --arg r5 "$(clock "$five_r")" --arg r7 "$(day "$week_r")" \
       --argjson f5 "$(asnum "$five")" --argjson f7 "$(asnum "$week")" \
@@ -113,6 +120,10 @@ jq -nc --arg a "$acct" --arg r "$role" --arg p "$plan" --arg v "$version" \
   > "$f.tmp.$$" 2>/dev/null && mv "$f.tmp.$$" "$f" 2>/dev/null
 rm -f "$f.tmp.$$" 2>/dev/null
 chmod 600 "$f" 2>/dev/null || true
+# Same temp-then-rename as the cache above: a hook that reads this file while it
+# is being written must see the old line, never a half-written one.
+sf="$SW_HOME/refresh-status-$cache_role.txt"
 printf '%s\n' "OK: interactive status line wrote this reading." \
-  > "$SW_HOME/refresh-status-$role.txt" 2>/dev/null || true
+  > "$sf.tmp.$$" 2>/dev/null && mv "$sf.tmp.$$" "$sf" 2>/dev/null
+rm -f "$sf.tmp.$$" 2>/dev/null
 exit 0

@@ -229,6 +229,63 @@ class BudgetTests(unittest.TestCase):
         self.assertIsNone(ptyreader.budget_left(now - 30, 6, now) or None)
 
 
+class ProviderKeyTests(unittest.TestCase):
+    """No reader may leave a provider API key in its client's environment.
+
+    A key that is set makes the client bill the key rather than the
+    subscription the reading is supposed to measure, and the reading then
+    describes an allowance nobody is spending. Screen is replaced by a recorder,
+    so nothing is started and no client is driven.
+    """
+
+    STOP = RuntimeError("recorded")
+
+    def setUp(self):
+        self.real = ptyreader.Screen
+        self.seen = {}
+        recorder = self.seen
+        stop = self.STOP
+
+        class Recorder:
+            def __init__(self, argv, **kwargs):
+                recorder["argv"] = list(argv)
+                recorder["env_drop"] = tuple(kwargs.get("env_drop") or ())
+                raise stop
+
+        ptyreader.Screen = Recorder
+
+    def tearDown(self):
+        ptyreader.Screen = self.real
+
+    def drops(self, module):
+        folder = tempfile.mkdtemp(prefix="second-wind-env-")
+        try:
+            with contextlib.suppress(type(self.STOP)):
+                module.read_screen(folder, 30)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        self.assertIn("env_drop", self.seen, "read_screen built no Screen")
+        return self.seen["env_drop"]
+
+    def test_codex_drops_its_api_key(self):
+        self.assertIn("OPENAI_API_KEY", self.drops(codex))
+
+    def test_grok_drops_its_api_key(self):
+        self.assertIn("XAI_API_KEY", self.drops(grok))
+
+    def test_cursor_drops_its_api_key(self):
+        self.assertIn("CURSOR_API_KEY", self.drops(cursor))
+
+    def test_the_claude_reader_drops_its_nested_session_markers(self):
+        folder = tempfile.mkdtemp(prefix="second-wind-env-")
+        try:
+            with contextlib.suppress(type(self.STOP)):
+                claude.read_screen(folder, folder, 30)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        self.assertIn("CLAUDECODE", self.seen["env_drop"])
+
+
 class ReaderMainTests(unittest.TestCase):
     """What each reader leaves behind when the screen never gets read. The
     client is not started: read_screen is replaced, because these are tests of
@@ -322,19 +379,19 @@ class PickerTests(unittest.TestCase):
         self.reading("secondary", 1, 10)
         self.reading("codex", None, 7)
         self.assertEqual(picker.describe(self.cfg),
-                         "Clearoute 5h 2% · 7d 16% | Personal 5h 1% · 7d 10% "
+                         "Work 5h 2% · 7d 16% | Personal 5h 1% · 7d 10% "
                          "| Codex 7d 7%")
 
     def test_a_missing_reading_says_so_rather_than_showing_a_figure(self):
         self.reading("primary", 2, 16)
         self.reading("codex", None, 7)
         self.assertEqual(picker.describe(self.cfg),
-                         "Clearoute 5h 2% · 7d 16% | Personal no reading "
+                         "Work 5h 2% · 7d 16% | Personal no reading "
                          "| Codex 7d 7%")
 
     def test_the_description_is_capped(self):
         long_cfg = json.loads(json.dumps(self.cfg))
-        long_cfg["primary"]["label"] = "Clearoute-with-a-very-long-name Claude"
+        long_cfg["primary"]["label"] = "Work-with-a-very-long-name Claude"
         long_cfg["secondary"]["label"] = "Personal-with-a-long-name-too Claude"
         for role in ("primary", "secondary"):
             self.reading(role, 22, 33)

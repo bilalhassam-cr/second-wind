@@ -13,6 +13,7 @@ issue, describing what this machine is running and what the last few
 delegations did. Email addresses become `<account>` and the home directory
 becomes `~`, so the file says what went wrong without saying who you are.
 """
+import calendar
 import glob
 import json
 import os
@@ -61,8 +62,12 @@ def log_dir():
 
 
 def parse_ts(ts):
+    """The log stamps UTC, so convert as UTC. mktime treats the fields as local
+    and time.timezone is the standard-time offset, so subtracting it was an hour
+    out on every row logged during summer time, which quietly moved rows across
+    the cutoff."""
     try:
-        return time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+        return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
     except Exception:
         return 0
 

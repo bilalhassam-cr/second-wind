@@ -172,9 +172,12 @@ touches a token or calls a usage endpoint.
 That choice has a price, and it is worth being honest about it. Driving a
 terminal UI is slower than one HTTP call, it takes tens of seconds per account,
 and it breaks whenever a client renames a label or adds a dialog. The readers are
-built for that: every keystroke waits for a matched string on screen, an
-unrecognised dialog stops the reader and reports `TRUST PROMPT`, and a panel
-whose labels have moved reports `PARSER MISMATCH` rather than a wrong number.
+built for that: every keystroke waits for a matched string on screen, a dialog
+whose wording the reader recognises as a trust or login screen is reported as
+`TRUST PROMPT` or `LOGIN EXPIRED`, any other dialog simply keeps the panel from
+appearing and the reading ends as `FAILED: usage panel did not appear`, and a
+panel whose labels have moved reports `PARSER MISMATCH` rather than a wrong
+number.
 Faults are named per account in `~/.second-wind/refresh-status-<role>.txt`, so
 one working account cannot hide another one's failure.
 

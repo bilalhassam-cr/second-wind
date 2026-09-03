@@ -4,6 +4,8 @@
 Every test points SW_HOME at a temporary directory, so nothing here reads or
 writes the real ~/.second-wind.
 """
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -636,6 +638,103 @@ class SetupDecisions(Base):
         self.assertTrue(sw_setup.in_temp_home())
         os.environ["SW_HOME"] = os.path.join(swlib.HOME, ".second-wind")
         self.assertFalse(sw_setup.in_temp_home())
+
+
+class WriteRerun(Base):
+    """A second --write must not undo the first one.
+
+    cmd_write is driven through the real parser, so the argparse defaults are
+    part of what is under test. Discovery and the version probe are stubbed:
+    neither belongs in a unit test, and both would reach for real clients.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.primary_dir = os.path.join(self.home, "profile-primary")
+        self.secondary_dir = os.path.join(self.home, "profile-secondary")
+        for folder in (self.primary_dir, self.secondary_dir):
+            os.makedirs(folder, exist_ok=True)
+        self.real_discover = sw_setup.discover
+        self.real_versions = swlib.client_versions
+        sw_setup.discover = lambda: {
+            "claude_bin": "/usr/local/bin/claude",
+            "claude_profiles": [
+                {"config_dir": self.primary_dir, "logged_in": True,
+                 "account": "user@example.com", "plan": "max"},
+                {"config_dir": self.secondary_dir, "logged_in": True,
+                 "account": "user@example.com", "plan": "max"},
+            ],
+            "codex": {"installed": False, "logged_in": False},
+            "grok": {"installed": False, "logged_in": False},
+            "cursor": {"installed": False, "logged_in": False},
+        }
+        swlib.client_versions = lambda: {"claude": "2.1.251"}
+
+    def tearDown(self):
+        sw_setup.discover = self.real_discover
+        swlib.client_versions = self.real_versions
+        super().tearDown()
+
+    def write(self, *extra):
+        argv = ["--write", "--primary", self.primary_dir,
+                "--secondary", self.secondary_dir, "--level", "relief",
+                "--no-launchd", "--force"] + list(extra)
+        args = sw_setup.build_parser().parse_args(argv)
+        out = io.StringIO()
+        errors = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errors):
+            sw_setup.cmd_write(args)
+        return out.getvalue()
+
+    def config(self):
+        return read_json(swlib.config_path())
+
+    def settings(self):
+        return read_json(os.path.join(self.primary_dir, "settings.json"))
+
+    def test_a_rerun_keeps_the_values_it_was_not_given(self):
+        self.write("--timeout", "2400", "--five-hour", "70", "--seven-day", "60",
+                   "--refresh-minutes", "45", "--model-picker", "on")
+        self.write()
+        cfg = self.config()
+        self.assertEqual(cfg["timeout_seconds"], 2400)
+        self.assertEqual(cfg["thresholds"]["five_hour_pct"], 70)
+        self.assertEqual(cfg["thresholds"]["seven_day_pct"], 60)
+        self.assertEqual(cfg["refresh"]["interval_minutes"], 45)
+        self.assertTrue(cfg["refresh"]["model_picker"])
+
+    def test_a_first_write_still_takes_the_documented_defaults(self):
+        self.write()
+        cfg = self.config()
+        self.assertEqual(cfg["timeout_seconds"], 600)
+        self.assertEqual(cfg["thresholds"], {"five_hour_pct": 90,
+                                             "seven_day_pct": 80})
+        self.assertEqual(cfg["refresh"]["interval_minutes"], 15)
+        self.assertFalse(cfg["refresh"]["model_picker"])
+
+    def test_a_changed_value_is_reported_and_an_explicit_one_still_wins(self):
+        self.write("--timeout", "2400")
+        text = self.write("--timeout", "900")
+        self.assertEqual(self.config()["timeout_seconds"], 900)
+        self.assertIn("timeout 2400 to 900", text)
+
+    def test_model_picker_off_removes_a_marked_key(self):
+        swlib.write_json_atomic(
+            os.path.join(self.primary_dir, "settings.json"),
+            {"modelPicker": {"_second_wind": True, "labels": {"opus": "5h 2%"}},
+             "theme": "dark"})
+        self.write("--model-picker", "off")
+        settings = self.settings()
+        self.assertNotIn("modelPicker", settings)
+        self.assertEqual(settings["theme"], "dark")
+        self.assertFalse(self.config()["refresh"]["model_picker"])
+
+    def test_model_picker_off_leaves_someone_elses_key_alone(self):
+        mine = {"labels": {"opus": "my own row"}}
+        swlib.write_json_atomic(
+            os.path.join(self.primary_dir, "settings.json"), {"modelPicker": mine})
+        self.write("--model-picker", "off")
+        self.assertEqual(self.settings()["modelPicker"], mine)
 
 
 if __name__ == "__main__":

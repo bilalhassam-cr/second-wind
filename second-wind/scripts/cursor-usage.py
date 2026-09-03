@@ -62,7 +62,11 @@ def parse_panel(text):
 
 def read_screen(cwd, budget):
     """Drive the client. Returns (outcome, screen text)."""
-    screen = ptyreader.Screen(["cursor-agent"], cwd=cwd)
+    # Only an interactive sign-in can render the panel, so a key in the
+    # environment could not help here and could only be billed instead of the
+    # subscription being measured.
+    screen = ptyreader.Screen(["cursor-agent"], cwd=cwd,
+                              env_drop=("CURSOR_API_KEY",))
     ends = time.time() + budget
 
     def left(cap):

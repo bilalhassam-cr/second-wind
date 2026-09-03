@@ -44,7 +44,7 @@ def short_phrase(rest):
 def compact(lines):
     """Squeeze the session brief into one line, at most LIMIT characters.
 
-    A brief line reads `Clearoute Claude: 5h 2%, 7d 16% (3m ago)`. The picker
+    A brief line reads `Work Claude: 5h 2%, 7d 16% (3m ago)`. The picker
     has room for the account and its figures, nothing else, so this keeps the
     first word of the label and the percentages.
     """

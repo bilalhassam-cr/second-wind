@@ -467,13 +467,43 @@ def cmd_write(a):
             return {}
         return by_dir.get(tilde(expand(d))) or by_dir.get(d) or {}
 
+    # A second --write used to reset every tuning value to its argparse default,
+    # so re-running the command to change one profile quietly moved the timeout
+    # and both thresholds back. Anything not passed on the command line now
+    # carries over from the config that is already there.
+    settings_changed = []
+
+    def carry(attr, previous_value, constant, label):
+        chosen = getattr(a, attr)
+        if chosen is None:
+            chosen = previous_value if previous_value is not None else constant
+        setattr(a, attr, chosen)
+        if previous_value is not None and chosen != previous_value:
+            settings_changed.append("%s %s to %s" % (label, previous_value, chosen))
+
+    prev_thresholds = previous.get("thresholds") if isinstance(
+        previous.get("thresholds"), dict) else {}
+    prev_refresh = previous.get("refresh") if isinstance(
+        previous.get("refresh"), dict) else {}
+    prev_picker = prev_refresh.get("model_picker")
+    carry("five_hour", prev_thresholds.get("five_hour_pct"), 90, "five-hour threshold")
+    carry("seven_day", prev_thresholds.get("seven_day_pct"), 80, "seven-day threshold")
+    carry("refresh_minutes", prev_refresh.get("interval_minutes"), 15,
+          "refresh interval")
+    carry("timeout", previous.get("timeout_seconds"), 600, "timeout")
+    carry("model_picker",
+          ("on" if prev_picker else "off") if isinstance(prev_picker, bool) else None,
+          "off", "model picker")
+
     for name, value in (("--five-hour", a.five_hour), ("--seven-day", a.seven_day)):
-        if not 1 <= value <= 100:
+        if not isinstance(value, int) or not 1 <= value <= 100:
             sys.exit("second-wind: %s must be between 1 and 100" % name)
-    if a.timeout < 30:
+    if not isinstance(a.timeout, int) or a.timeout < 30:
         sys.exit("second-wind: --timeout must be at least 30 seconds")
-    if not 1 <= a.refresh_minutes <= 1440:
+    if not isinstance(a.refresh_minutes, int) or not 1 <= a.refresh_minutes <= 1440:
         sys.exit("second-wind: --refresh-minutes must be between 1 and 1440")
+    if a.model_picker not in ("on", "off"):
+        sys.exit("second-wind: --model-picker must be on or off")
 
     dirs = {"primary": a.primary, "secondary": a.secondary, "reader": a.reader}
     for role, folder in dirs.items():
@@ -611,6 +641,8 @@ def cmd_write(a):
     swlib.write_json_atomic(config_file(), cfg)
 
     print("\nWrote %s" % tilde(config_file()))
+    if settings_changed:
+        print("  changed   %s" % "; ".join(settings_changed))
     print("  level     %s (mode %s, automatic handover %s)"
           % (a.level, level["mode"], "on" if level["failover"] else "off"))
     print("  primary   %s   (%s)" % (cfg["primary"]["account"],
@@ -645,8 +677,12 @@ def cmd_write(a):
         print("  codex: %s" % trust_codex(folder))
 
     print("\nProfile settings:")
+    # model_picker is passed on every write, not only when it is on: --model-picker
+    # off has to take a marked modelPicker key back out again, and omitting the
+    # argument left the row in place for as long as the profile existed.
     result = merge_settings(cfg["primary"]["config_dir"], events=level["events"],
-                           statusline=True)
+                           statusline=True,
+                           model_picker=(a.model_picker == "on"))
     if result is False:
         sys.exit("second-wind: could not install the primary hooks and status "
                  "line. Fix its settings.json and run --write again.")
@@ -1087,7 +1123,9 @@ def cmd_uninstall():
 # ---------------------------------------------------------------- main
 
 
-def main():
+def build_parser():
+    """Separated from main so a test can parse a real command line rather than
+    hand-building a namespace and missing the defaults being tested."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--detect", action="store_true",
                     help="print installed workers, Claude profiles, client "
@@ -1111,16 +1149,23 @@ def main():
     ap.add_argument("--codex", choices=["auto", "on", "off"], default="auto")
     ap.add_argument("--grok", choices=["auto", "on", "off"], default="auto")
     ap.add_argument("--cursor", choices=["auto", "on", "off"], default="auto")
-    ap.add_argument("--five-hour", type=int, default=90)
-    ap.add_argument("--seven-day", type=int, default=80)
-    ap.add_argument("--refresh-minutes", type=int, default=15)
-    ap.add_argument("--model-picker", choices=["on", "off"], default="off")
+    # These five default to None so --write can tell "not passed" from "passed
+    # the same value as last time", and carry the previous config forward.
+    ap.add_argument("--five-hour", type=int, default=None)
+    ap.add_argument("--seven-day", type=int, default=None)
+    ap.add_argument("--refresh-minutes", type=int, default=None)
+    ap.add_argument("--model-picker", choices=["on", "off"], default=None)
     ap.add_argument("--no-launchd", action="store_true",
                     help="do not install the scheduled refresh agent")
-    ap.add_argument("--timeout", type=int, default=600,
+    ap.add_argument("--timeout", type=int, default=None,
                     help="seconds before a delegated call is killed (default 600)")
     ap.add_argument("--force", action="store_true",
                     help="write the config even if a profile is not signed in")
+    return ap
+
+
+def main():
+    ap = build_parser()
     a = ap.parse_args()
     if a.detect:
         return cmd_detect()

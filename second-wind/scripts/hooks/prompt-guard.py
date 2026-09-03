@@ -16,8 +16,6 @@ Switch off:  touch ~/.second-wind/no-failover   (or set failover.enabled false)
 """
 import json
 import os
-import re
-import subprocess
 import sys
 import time
 
@@ -55,45 +53,6 @@ without arguing: they can see the same numbers you can."""
 
 
 PENDING_MAX_AGE = 6 * 3600
-
-
-def notify_detached(title, body, key, window_seconds=3600):
-    """One notification per key per window, without ever waiting for it.
-
-    ``swlib.notify`` runs osascript with a ten second timeout, which is fine in
-    a background script and wrong here: this is the one hook a person is sitting
-    in front of, waiting for their prompt to go. So the dedupe stamp is written
-    first and osascript is started detached, exactly like the refresh wrapper.
-    """
-    stamp = os.path.join(swlib.sw_home(),
-                         "notify-%s.stamp" % re.sub(r"[^A-Za-z0-9_.-]", "-", key))
-    try:
-        if os.path.exists(stamp):
-            with open(stamp) as handle:
-                seen = handle.read()
-            if seen == body and time.time() - os.path.getmtime(stamp) < window_seconds:
-                return False
-    except Exception:
-        pass
-    try:
-        swlib.write_text_atomic(stamp, body)
-    except Exception:
-        pass
-    if sys.platform != "darwin":
-        return False
-
-    def quote(text):
-        return str(text).replace("\\", "\\\\").replace('"', '\\"')
-
-    script = 'display notification "%s" with title "%s"' % (quote(body), quote(title))
-    try:
-        subprocess.Popen(["osascript", "-e", script],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True,
-                         cwd="/")
-    except Exception:
-        return False
-    return True
 
 
 def emit(message):
@@ -297,7 +256,7 @@ def main():
             window = max(300, due)
     except (TypeError, ValueError):
         window = 3600
-    notify_detached("second-wind", body, "handover-primary", window_seconds=window)
+    swlib.notify("second-wind", body, "handover-primary", window_seconds=window)
 
     return emit("[second-wind] This account is running low: %s.%s%s"
                 % (" and ".join(hits), resets,

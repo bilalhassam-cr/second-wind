@@ -25,6 +25,16 @@ set_exec() {
 }
 
 mkdir -p "$DEST"
+# Resolve the destination before deleting anything. Installing into the checkout,
+# or into its parent, makes the target the source, and the rm below would then
+# delete the thing being installed. Refuse instead: there is nothing to recover
+# from afterwards.
+DEST=$(CDPATH= cd "$DEST" && pwd)
+if [ "$DEST/second-wind" = "$SRC/second-wind" ] || [ "$DEST/second-wind" = "$SRC" ]; then
+  echo "install.sh: $DEST/second-wind is this checkout. Pick a skills directory" >&2
+  echo "outside it, such as ~/.claude/skills, and nothing is deleted." >&2
+  exit 1
+fi
 rm -rf "$DEST/second-wind"
 if [ "$LINK" = yes ]; then
   ln -s "$SRC/second-wind" "$DEST/second-wind"

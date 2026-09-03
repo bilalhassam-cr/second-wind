@@ -97,7 +97,11 @@ def login_state():
 
 def read_screen(cwd, budget):
     """Drive the client. Returns (outcome, screen text)."""
-    screen = ptyreader.Screen(["codex"], cwd=cwd)
+    # A key left in the environment makes the CLI bill it rather than the
+    # ChatGPT subscription this reader exists to measure. Codex prefers
+    # OPENAI_API_KEY over the login whenever it is set, so it goes.
+    screen = ptyreader.Screen(["codex"], cwd=cwd,
+                              env_drop=("OPENAI_API_KEY",))
     ends = time.time() + budget
 
     def left(cap):

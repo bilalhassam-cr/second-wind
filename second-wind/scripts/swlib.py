@@ -457,12 +457,17 @@ def is_primary_session():
         return False
 
 
-def notify(title, body, key, window_seconds=3600):
+def notify(title, body, key, window_seconds=3600, detached=True):
     """Send one macOS notification per key per window. Returns True when it was
-    sent. No-op off macOS, and never raises: a failed notification must not take
-    a hook down with it."""
-    if sys.platform != "darwin":
-        return False
+    started. No-op off macOS, and never raises: a failed notification must not
+    take a hook down with it.
+
+    Detached is the default because every caller is a hook, and a hook is in the
+    way of somebody's prompt. So the dedupe stamp is written first and osascript
+    is started with no wait at all: a slow notification centre then costs the
+    session nothing. Pass detached=False only where the caller genuinely needs
+    to know osascript finished.
+    """
     stamp = os.path.join(sw_home(), "notify-%s.stamp" % re.sub(r"[^A-Za-z0-9_.-]", "-", key))
     try:
         if os.path.exists(stamp):
@@ -473,12 +478,28 @@ def notify(title, body, key, window_seconds=3600):
                 return False
     except Exception:
         pass
+    if detached:
+        # Stamp before starting, so the dedupe holds even though nothing is
+        # waiting to see whether osascript worked.
+        try:
+            os.makedirs(sw_home(), exist_ok=True)
+            write_text_atomic(stamp, body)
+        except Exception:
+            pass
+    if sys.platform != "darwin":
+        return False
 
     def quote(text):
         return str(text).replace("\\", "\\\\").replace('"', '\\"')
 
     script = 'display notification "%s" with title "%s"' % (quote(body), quote(title))
     try:
+        if detached:
+            subprocess.Popen(["osascript", "-e", script],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True,
+                             cwd="/")
+            return True
         subprocess.run(["osascript", "-e", script], timeout=10,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:

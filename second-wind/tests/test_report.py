@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -99,6 +100,45 @@ class LimitArithmetic(unittest.TestCase):
         for value in ("", None, "abc", 0, -5):
             self.assertEqual(truncate.limit_bytes(value),
                              truncate.DEFAULT_MAX_KB * 1024)
+
+
+class Timestamps(unittest.TestCase):
+    """The log stamps UTC. Parsing it as local time put every summer row an
+    hour out, which is enough to move one across a day cutoff."""
+
+    def setUp(self):
+        self.previous = os.environ.get("TZ")
+
+    def tearDown(self):
+        if self.previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self.previous
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+    def test_a_stamp_round_trips_on_both_sides_of_a_dst_boundary(self):
+        if not hasattr(time, "tzset"):
+            self.skipTest("this platform cannot switch TZ in process")
+        for zone in ("Europe/London", "America/New_York", "UTC"):
+            os.environ["TZ"] = zone
+            time.tzset()
+            for stamp in ("2026-07-15T12:00:00Z", "2026-01-15T12:00:00Z"):
+                parsed = report.parse_ts(stamp)
+                self.assertEqual(
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(parsed)),
+                    stamp, "%s in %s" % (stamp, zone))
+
+    def test_summer_and_winter_stamps_are_exactly_half_a_year_apart(self):
+        # The old arithmetic used the standard-time offset for both, so the
+        # summer stamp came out an hour adrift of the winter one.
+        summer = report.parse_ts("2026-07-01T00:00:00Z")
+        winter = report.parse_ts("2026-01-01T00:00:00Z")
+        self.assertEqual(summer - winter, 181 * 86400)
+
+    def test_nonsense_is_zero_rather_than_an_exception(self):
+        for value in ("", "not a date", None, "2026-07-15 12:00:00"):
+            self.assertEqual(report.parse_ts(value), 0)
 
 
 class Truncation(unittest.TestCase):
