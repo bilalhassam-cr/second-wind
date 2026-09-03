@@ -26,6 +26,7 @@ in the repository is a complete sample.
 | `refresh.model_picker` | Whether the `/model` rows are relabelled with the live figures. Setup only records the choice; the refresh writes the `modelPicker` key itself, marked as ours so uninstall can remove it. |
 | `refresh.cursor` | Whether the Cursor usage reader runs. False for an API-key sign-in. |
 | `picker.routes` | Extra routing ids to show in the model picker, as a list. Default empty. Every connected worker already gets a row; this is for parameterised ones such as `second-wind/codex/gpt-5.6/high`, which route and choose a model and an effort in one pick. Set with `--picker-routes id,id`. An id naming a worker that is not connected is dropped from the picker rather than shown. |
+| `picker.models` | The model and effort presets `/second-wind` offers per worker, as `{"codex": ["gpt-5.6/high", "gpt-5.6/low"]}`. A worker the block does not name keeps the built-in presets: secondary `opus/high`, `opus/medium`, `sonnet/medium`, `sonnet/low`, `haiku/low`; codex `gpt-5.6/high`, `gpt-5.6/medium`, `gpt-5.6/low`; grok `default/high`, `default/medium`; cursor `default`. `default` in the model position means pass no model. Codex accepts `minimal`, `low`, `medium`, `high` and `xhigh`; Grok's effort goes out as `--reasoning-effort`; Cursor takes no effort flag. Set with `--picker-models worker=model/effort,...`, repeating a worker to add rows. A row that cannot be parsed is dropped rather than shown. |
 | `failover.enabled` | Master switch for automatic handover. True at level `relief` only. |
 | `failover.announce` | Handover always says so. Kept as a key because silence is never the default. |
 | `defaults.mode` | `review` (read-only) or `work` (full access) when no mode is passed. |
@@ -99,7 +100,7 @@ On-demand availability is context and does not override those pools. Unknown sor
 │                              TRUST PROMPT, PARSER MISMATCH or FAILED
 ├── replaced-statusline.json   any status line we replaced, restored on uninstall
 ├── no-failover                present = automatic handover off
-├── mode                       optional manual worker override
+├── mode                       the route: where the next tasks go
 └── log/
     ├── YYYY-MM.jsonl          one line per delegated call
     └── <ts>-<pid>-<worker>-<folder>.md   full prompt and reply
@@ -107,6 +108,27 @@ On-demand availability is context and does not override those pools. Unknown sor
 
 A status file newer than its reading wins: it describes the attempt that came after
 the cached figures.
+
+## The route file
+
+`mode` is written by `scripts/route.py` and by the two routing hooks, and read by
+the prompt guard and the session brief. Never write it by hand.
+
+| Field | Meaning |
+|---|---|
+| `worker` | `secondary`, `codex`, `grok` or `cursor`. |
+| `model` | Passed to the runner as `--model`. Null means pass none. |
+| `effort` | Passed as `--effort`. Null means pass none. |
+| `mode` | `review` or `work`, passed as that flag. Absent means `defaults.mode`. |
+| `set_at` | Epoch seconds. A route older than 12 hours is ignored and deleted. |
+| `label` | What the brief and the guard call the destination. |
+| `source` | `chat`, `desktop`, or absent for the model picker. |
+| `session_id` | The session the route applies to. `"*"` means every session, and an older file naming no session is read the same way. |
+
+A route applies only in the session that armed it, which is what stops a
+destination picked in one chat from telling every other session to send its work
+away. A bare word in the file, such as `codex` on its own, stays global.
+`references/routing.md` carries the rest.
 
 ## Files it edits, and the backups it leaves
 

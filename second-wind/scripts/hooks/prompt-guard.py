@@ -123,68 +123,45 @@ def drop(path):
         pass
 
 
-def named_worker(word, cfg):
-    """A worker named the way the config and the mode file name it, in the shape
-    parse_route returns. parse_route takes the picker ids and the aliases
-    somebody types; this is the other spelling, the plain role name."""
-    worker = swlib.ROUTE_WORKERS.get(str(word or "").strip().lower())
-    if not worker:
-        return None
-    return {"worker": worker, "model": None, "effort": None,
-            "label": swlib.route_label(worker, cfg)}
-
-
-def runner_note(model, effort):
+def runner_note(route):
     """What to tell the session to pass on to the runner."""
     flags = []
-    for value, flag in ((model, "--model"), (effort, "--effort")):
+    for value, flag in ((route.get("model"), "--model"),
+                        (route.get("effort"), "--effort")):
         if isinstance(value, str) and value.strip():
             flags.append("%s %s" % (flag, value.strip()))
-    return ", passing %s to the runner" % " and ".join(flags) if flags else ""
+    mode = route.get("mode")
+    if mode in ("review", "work"):
+        flags.append("--%s" % mode)
+    if not flags:
+        return ""
+    named = " and ".join([", ".join(flags[:-1]), flags[-1]]) if len(flags) > 2 \
+        else " and ".join(flags)
+    return ", passing %s to the runner" % named
 
 
-def read_mode(home, cfg=None):
+def read_mode(cfg=None, session_id=None):
     """The routing override, as (word, worker name, runner note), or None.
 
-    Two forms, both live. The routing hook writes JSON, which can also carry a
-    model and an effort for the runner. A person, or an older version of this
-    tool, writes one bare word. Either way the worker and its name come from
-    swlib, so this hook cannot disagree with the one that wrote the file.
-    Anything else is not an instruction we can honour, so it returns None and
-    the guard falls through to the readings rather than routing work somewhere
-    nobody named.
+    Three forms, all live. The picker hook and the chat command write JSON,
+    which carries a model, an effort and the session it was armed in. A person,
+    or an older version of this tool, writes one bare word, which is global.
+    Either way the worker, its name and the scope rule come from swlib, so this
+    hook cannot disagree with whatever wrote the file. Anything else is not an
+    instruction we can honour, so it returns None and the guard falls through to
+    the readings rather than routing work somewhere nobody named.
     """
-    try:
-        with open(os.path.join(home, "mode")) as handle:
-            raw = handle.read()
-    except Exception:
-        return None
-    text = raw.strip()
+    text = swlib.mode_text()
     if not text:
         return None
     if not text.startswith("{"):
         word = "".join(text.split())
         if word in GROUP_WORDS:
             return word, GROUP_WORDS[word], ""
-        route = swlib.parse_route(word, cfg) or named_worker(word, cfg)
-        if not route:
-            return None
-        return (route["worker"], route["label"],
-                runner_note(route["model"], route["effort"]))
-    try:
-        data = json.loads(text)
-    except Exception:
-        return None
-    if not isinstance(data, dict):
-        return None
-    route = named_worker(data.get("worker"), cfg)
+    route = swlib.active_route(session_id, cfg)
     if not route:
         return None
-    label = data.get("label")
-    name = label.strip() if isinstance(label, str) and label.strip() \
-        else route["label"]
-    return route["worker"], name, runner_note(data.get("model"),
-                                              data.get("effort"))
+    return route["word"], route["label"], runner_note(route)
 
 
 def worker_list(cfg):
@@ -259,6 +236,12 @@ def main():
     # armed, and say what to do, because the prompt cannot succeed either way.
     session = payload.get("session_id") if isinstance(payload, dict) else None
     typed = swlib.desktop_session_model(session)
+    if str(typed or "").strip().lower() in ("second-wind", "second wind"):
+        # The skill's own name, typed where a model goes. It is the picker
+        # somebody wanted, and the picker is a command, not a model.
+        return deny("second-wind: type /second-wind as a command to open the "
+                    "picker. Pick any real model from the menu first, then "
+                    "send /second-wind.")
     route = swlib.parse_route(typed, cfg) if typed else None
     if route:
         if route["worker"] not in swlib.enabled_roles(cfg):
@@ -266,7 +249,7 @@ def main():
                         "the work. Run setup, and pick any normal model from "
                         "the menu to get this session working again."
                         % route["label"])
-        swlib.write_mode(route, source="desktop")
+        swlib.write_mode(route, source="desktop", session_id=session)
         return deny("second-wind: routing to %s is armed for your next tasks. "
                     "This session's model is a routing name, not a real model, "
                     "so pick any normal model from the menu and send your "
@@ -295,7 +278,7 @@ def main():
     # any usage reading. It still honours the master switches above, and
     # unrecognised contents stay silent rather than routing work somewhere the
     # user did not name.
-    manual = read_mode(home, cfg)
+    manual = read_mode(cfg, session)
     if manual:
         word, name, runner = manual
         return emit(
@@ -310,8 +293,8 @@ def main():
             "Hand over at this task boundary, never part-way through a job already "
             "running here. If\n"
             "the user tells you to keep the work on this account, do that without "
-            "arguing. Remove\n"
-            "%s to return to usage-based handover."
+            "arguing. Run\n"
+            "/second-wind off, or remove %s, to return to usage-based handover."
             % (word, name, runner, swlib.tilde(os.path.join(home, "mode"))))
 
     # A failed or blocked refresh means the figures below describe nothing, and

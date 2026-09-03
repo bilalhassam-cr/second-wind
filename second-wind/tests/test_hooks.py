@@ -270,6 +270,38 @@ class SessionStart(Base):
         self.assertEqual(self.run_hook("session-start.py",
                                        {"source": "startup"}).strip(), "")
 
+    def test_the_brief_offers_the_picker_when_nothing_is_routed(self):
+        self.fresh_house()
+        text = self.context(self.run_hook("session-start.py", {
+            "source": "startup"}), "SessionStart")
+        self.assertIn("Type /second-wind to pick where the next tasks run.",
+                      text)
+
+    def test_the_brief_names_a_route_armed_in_this_session(self):
+        self.fresh_house()
+        session = "5555aaaa-1111-2222-3333-444455556666"
+        self.write_json(os.path.join(self.home, "mode"),
+                        {"worker": "codex", "label": "Codex", "model": None,
+                         "effort": None, "set_at": self.now,
+                         "session_id": session})
+        text = self.context(self.run_hook("session-start.py", {
+            "source": "startup", "session_id": session}), "SessionStart")
+        self.assertIn("Routing to Codex is on for this session; /second-wind "
+                      "off stops it.", text)
+        self.assertNotIn("Type /second-wind to pick", text)
+
+    def test_a_route_armed_elsewhere_is_not_announced_here(self):
+        self.fresh_house()
+        self.write_json(os.path.join(self.home, "mode"),
+                        {"worker": "codex", "label": "Codex", "model": None,
+                         "effort": None, "set_at": self.now,
+                         "session_id": "somebody-elses-session"})
+        text = self.context(self.run_hook("session-start.py", {
+            "source": "startup", "session_id": "mine"}), "SessionStart")
+        self.assertIn("Type /second-wind to pick where the next tasks run.",
+                      text)
+        self.assertNotIn("Routing to", text)
+
     def test_unconfigured_machine_stays_quiet(self):
         self.assertEqual(self.run_hook("session-start.py",
                                        {"source": "startup"}).strip(), "")
@@ -475,6 +507,70 @@ class PromptGuard(Base):
         self.assertIn("passing --model gpt-5.6 and --effort high to the runner",
                       text)
 
+    SESSION = "7777aaaa-1111-2222-3333-444455556666"
+
+    def scoped_prompt(self, session=None, **kwargs):
+        """A prompt carrying a session id. SW_DESKTOP_STORE points nowhere, so
+        no test can read the store of whoever is running the suite."""
+        return self.run_hook("prompt-guard.py", {
+            "hook_event_name": "UserPromptSubmit", "prompt": "Write the report",
+            "session_id": session or self.SESSION},
+            env={"SW_DESKTOP_STORE": os.path.join(self.home, "gone")}, **kwargs)
+
+    def write_route(self, **fields):
+        data = {"worker": "codex", "model": None, "effort": None,
+                "set_at": self.now, "label": "Codex"}
+        data.update(fields)
+        self.write_json(os.path.join(self.home, "mode"), data)
+
+    def test_a_route_armed_in_this_session_applies(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.write_route(session_id=self.SESSION)
+        text = self.context(self.scoped_prompt(), "UserPromptSubmit")
+        self.assertIn("routing the heavy work to Codex", text.replace("\n", " "))
+
+    def test_a_route_armed_in_another_session_is_ignored_and_kept(self):
+        # The fault this scoping exists for: a route armed in a test chat told
+        # every other session to send its work away.
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.write_route(session_id="somebody-elses-session")
+        self.assertEqual(self.scoped_prompt().strip(), "")
+        self.assertTrue(os.path.exists(os.path.join(self.home, "mode")))
+
+    def test_a_route_marked_for_every_session_applies_anywhere(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.write_route(session_id="*")
+        for session in (self.SESSION, "another-session"):
+            text = self.context(self.scoped_prompt(session), "UserPromptSubmit")
+            self.assertIn("routing the heavy work to Codex",
+                          text.replace("\n", " "), session)
+
+    def test_a_route_naming_no_session_still_applies(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.write_route()
+        text = self.context(self.scoped_prompt("any-session"),
+                            "UserPromptSubmit")
+        self.assertIn("routing the heavy work to Codex", text.replace("\n", " "))
+
+    def test_a_route_past_twelve_hours_is_ignored_and_deleted(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.write_route(session_id=self.SESSION, set_at=self.now - 13 * 3600)
+        self.assertEqual(self.scoped_prompt().strip(), "")
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")),
+                         "a route nobody remembers arming should be dropped")
+
+    def test_a_route_carrying_a_mode_names_the_flag(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.write_route(session_id="*", mode="review")
+        text = self.context(self.scoped_prompt(), "UserPromptSubmit")
+        self.assertIn("passing --review to the runner", text.replace("\n", " "))
+
     def test_a_malformed_mode_file_is_silent(self):
         self.write_config()
         self.write_usage("primary", five=2, week=3, age=60)
@@ -668,6 +764,20 @@ class ModelRoute(Base):
         self.assertIsNone(written["effort"])
         self.assertEqual(written["label"], "spare Claude")
         self.assertGreaterEqual(written["set_at"], self.now)
+
+    def test_the_route_is_scoped_to_the_session_that_picked_it(self):
+        self.write_config()
+        self.blocked(self.run_hook("model-route.py", {
+            "hook_event_name": "PreModelSwitch", "to_model": "second-wind/codex",
+            "requested_model": "second-wind/codex", "source": "picker",
+            "session_id": "3333aaaa-1111-2222-3333-444455556666"}))
+        self.assertEqual(self.mode()["session_id"],
+                         "3333aaaa-1111-2222-3333-444455556666")
+
+    def test_an_event_with_no_session_id_arms_a_route_for_every_session(self):
+        self.write_config()
+        self.blocked(self.switch("second-wind/codex"))
+        self.assertNotIn("session_id", self.mode())
 
     def test_a_model_and_effort_row_records_both(self):
         self.write_config()
@@ -993,6 +1103,27 @@ class DesktopRoute(Base):
         text = self.context(self.prompt(self.store("claude-fable-5-1")),
                             "UserPromptSubmit").replace("\n", " ")
         self.assertIn("routing the heavy work to spare Claude", text)
+
+    def test_the_armed_route_is_scoped_to_this_session(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.denied(self.prompt(self.store("claude-personal")))
+        self.assertEqual(self.mode()["session_id"], self.SESSION)
+        # Another session sees nothing, whatever is armed here.
+        self.assertEqual(self.prompt(
+            self.store("claude-fable-5-1", session="another-session"),
+            session="another-session").strip(), "")
+
+    def test_the_skills_own_name_typed_as_a_model_asks_for_the_command(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        for typed in ("second-wind", "second wind", "Second-Wind"):
+            reason = self.denied(self.prompt(self.store(typed)))
+            self.assertIn("type /second-wind as a command to open the picker",
+                          reason, typed)
+            self.assertIn("Pick any real model from the menu first", reason)
+            self.assertFalse(os.path.exists(os.path.join(self.home, "mode")),
+                             typed)
 
     def test_it_comes_back_quickly(self):
         self.write_config()

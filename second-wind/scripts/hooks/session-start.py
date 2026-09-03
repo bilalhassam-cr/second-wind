@@ -83,6 +83,19 @@ def main():
     lines = swlib.brief_lines(cfg)
     if not lines:
         return 0
+    # Where the next tasks are going, and how to change it. The route is read
+    # for this session only, so a route armed in another window is not
+    # announced here as though it applied.
+    route = None
+    try:
+        route = swlib.active_route(payload.get("session_id"), cfg)
+    except Exception:
+        route = None
+    if route:
+        lines.append("Routing to %s is on for this session; /second-wind off "
+                     "stops it." % route["label"])
+    else:
+        lines.append("Type /second-wind to pick where the next tasks run.")
     context = "\n".join(lines) + "\n\n" + INSTRUCTION
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "SessionStart",

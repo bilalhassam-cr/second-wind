@@ -191,6 +191,39 @@ ROUTE_LABELS = {
 # through to a vendor client, and this is not the place to hold a list of every
 # model name four vendors will ship next month.
 _ROUTE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+# How long a route armed from a picker or a chat command stays in force. A
+# route is a decision about the next few tasks, not a setting, and a stale one
+# found the next morning would send work somewhere nobody remembers choosing.
+ROUTE_MAX_AGE = 12 * 3600
+# The model and effort presets the /second-wind picker offers per worker, before
+# config overrides them. `default` means send no model, so the client uses the
+# account's own. Kept here rather than in the skill text so the picker, the
+# config and setup cannot disagree about what a worker can be asked for.
+# Cursor takes no effort flag; Grok's is --reasoning-effort; Codex accepts
+# minimal, low, medium, high and xhigh.
+PICKER_MODELS = {
+    "secondary": ("opus/high", "opus/medium", "sonnet/medium", "sonnet/low",
+                  "haiku/low"),
+    "codex": ("gpt-5.6/high", "gpt-5.6/medium", "gpt-5.6/low"),
+    "grok": ("default/high", "default/medium"),
+    "cursor": ("default",),
+}
+# One line per preset, so a picker row says what it costs rather than making
+# somebody guess from a model name. A preset nobody wrote a line for gets a
+# plain description built from its own words.
+MODEL_NOTES = {
+    "opus/high": "Opus 5, high effort: the hardest work, spends the most",
+    "opus/medium": "Opus 5, medium: long jobs at a lower rate",
+    "sonnet/medium": "Sonnet 5, medium: everyday tasks, light on the allowance",
+    "sonnet/low": "Sonnet 5, low: quick reads and checks",
+    "haiku/low": "Haiku 4.5, low: the cheapest pass",
+    "gpt-5.6/high": "GPT-5.6, high effort: the hardest work, slowest",
+    "gpt-5.6/medium": "GPT-5.6, medium: everyday tasks",
+    "gpt-5.6/low": "GPT-5.6, low: quick reads and checks",
+    "default/high": "The account's own model, high reasoning effort",
+    "default/medium": "The account's own model, medium reasoning effort",
+    "default": "The account's own model and effort; neither is passed",
+}
 
 
 def route_id(worker):
@@ -235,6 +268,77 @@ def parse_route(target, cfg=None):
             "model": parts[0] if parts else None,
             "effort": parts[1] if len(parts) == 2 else None,
             "label": route_label(worker, cfg)}
+
+
+def model_menu(worker, cfg=None):
+    """The model and effort rows to offer for this worker, newest choice first.
+
+    Each row is ``{model, effort, text}``, with model and effort None on the
+    ``default`` row. ``picker.models`` in the config replaces the defaults for a
+    worker it names; a row it cannot parse is dropped rather than shown, because
+    a picker row that fails at the runner is worse than a shorter menu.
+    """
+    cfg = load_config() if cfg is None else cfg
+    configured = ((cfg.get("picker") or {}).get("models") or {}).get(worker)
+    entries = configured if isinstance(configured, list) and configured \
+        else PICKER_MODELS.get(worker, ("default",))
+    rows = []
+    for entry in entries:
+        row = parse_model_entry(entry)
+        if row and row not in rows:
+            rows.append(row)
+    return rows
+
+
+def parse_model_entry(entry):
+    """``model/effort``, ``model``, ``default`` or ``default/effort`` as a
+    preset row, or None. ``default`` in the model position means pass no model.
+    """
+    if not isinstance(entry, str):
+        return None
+    text = entry.strip().strip("/")
+    if not text:
+        return None
+    parts = text.split("/")
+    if len(parts) > 2 or any(not _ROUTE_TOKEN.match(part) for part in parts):
+        return None
+    model = None if parts[0].lower() == "default" else parts[0]
+    effort = parts[1] if len(parts) == 2 else None
+    if model:
+        shown = " ".join(part for part in (model, effort) if part)
+    else:
+        shown = "%s effort" % effort if effort else "default"
+    key = "%s/%s" % (model or "default", effort) if effort else (model or "default")
+    note = MODEL_NOTES.get(key)
+    if not note:
+        note = ("%s, %s effort" % (model, effort) if model and effort
+                else model or ("%s reasoning effort" % effort if effort
+                               else "the account's own model and effort"))
+    return {"model": model, "effort": effort, "text": shown, "note": note}
+
+
+def destinations(cfg=None, now=None):
+    """Every worker this machine can send the next tasks to, for the picker.
+
+    One row per enabled worker: its label, the same usage wording the brief
+    uses, its headroom for sorting and a model menu. The primary is not in the
+    list, because keeping the work here is not a destination.
+    """
+    cfg = load_config() if cfg is None else cfg
+    rows = []
+    for worker in ("secondary", "codex", "grok", "cursor"):
+        if worker not in enabled_roles(cfg):
+            continue
+        usage = load_usage(worker)
+        live = (freshness(worker, now=now, cfg=cfg) in ("fresh", "stale")
+                and status_kind(worker) not in ("login", "trust", "parser"))
+        rows.append({"worker": worker,
+                     "label": route_label(worker, cfg),
+                     "usage": usage_summary(worker, cfg=cfg, now=now),
+                     "headroom": headroom(worker, usage) if live else None,
+                     "models": model_menu(worker, cfg)})
+    rows.sort(key=lambda row: (row["headroom"] is None, -(row["headroom"] or 0)))
+    return rows
 
 
 # ---------------------------------------------------------------- writing
@@ -306,22 +410,128 @@ def mode_path():
     return os.path.join(sw_home(), "mode")
 
 
-def write_mode(route, source=None):
+def write_mode(route, source=None, session_id=None):
     """The routing override, in the one shape every reader expects.
 
-    Two hooks write it now, the picker one and the prompt guard's desktop path,
-    so the five keys live here rather than in each of them. ``source`` records
-    which path armed the route, because the desktop one cannot be turned off by
-    picking a model in a menu that runs no hook.
+    Two hooks and the chat command write it now, so the keys live here rather
+    than in each of them. ``source`` records which path armed the route, because
+    the desktop one cannot be turned off by picking a model in a menu that runs
+    no hook. ``session_id`` scopes the route to the session that armed it: a
+    route armed in a test chat used to tell every other session to route its
+    work away. ``"*"`` means every session, on purpose.
     """
     data = {"worker": route["worker"],
             "model": route["model"],
             "effort": route["effort"],
             "set_at": int(time.time()),
             "label": route["label"]}
+    if route.get("mode"):
+        data["mode"] = route["mode"]
     if source:
         data["source"] = source
+    if session_id:
+        data["session_id"] = str(session_id)
     return write_json_atomic(mode_path(), data)
+
+
+def mode_text():
+    """The routing override as written, stripped, or an empty string."""
+    try:
+        with open(mode_path()) as handle:
+            return handle.read().strip()
+    except Exception:
+        return ""
+
+
+def drop_mode():
+    """Remove the routing override. Absent is the same as removed."""
+    try:
+        os.unlink(mode_path())
+    except OSError:
+        pass
+
+
+def route_age(data, now=None):
+    """Seconds since this route was armed, or None when it does not say. The
+    file's own mtime stands in for a hand-written route with no timestamp."""
+    now = int(time.time()) if now is None else int(now)
+    try:
+        stamped = int(data.get("set_at"))
+    except (TypeError, ValueError):
+        stamped = 0
+    if stamped <= 0:
+        try:
+            stamped = int(os.path.getmtime(mode_path()))
+        except OSError:
+            return None
+    return now - stamped
+
+
+def active_route(session_id=None, cfg=None, now=None):
+    """The route in force for this session, or None.
+
+    Three shapes reach this. A bare word is global, which is the old behaviour
+    and what somebody echoing into the file expects. A JSON route carries the
+    session that armed it and applies only there, unless it says ``"*"`` or is
+    an older file that names no session. A JSON route past ROUTE_MAX_AGE is
+    deleted, because it is nobody's current decision.
+
+    Returns ``{word, worker, model, effort, mode, label, session_id, source}``.
+    ``word`` is what the file named, for a message that quotes it back.
+    """
+    cfg = load_config() if cfg is None else cfg
+    text = mode_text()
+    if not text:
+        return None
+    if not text.startswith("{"):
+        route = parse_route("".join(text.split()), cfg) or \
+            role_route("".join(text.split()), cfg)
+        if not route:
+            return None
+        route.update({"word": route["worker"], "mode": None,
+                      "session_id": None, "source": None})
+        return route
+    try:
+        data = json.loads(text)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    route = role_route(data.get("worker"), cfg)
+    if not route:
+        return None
+    age = route_age(data, now=now)
+    if age is not None and age > ROUTE_MAX_AGE:
+        drop_mode()
+        return None
+    scope = data.get("session_id")
+    scope = scope.strip() if isinstance(scope, str) and scope.strip() else None
+    if scope and scope != "*" and scope != str(session_id or "").strip():
+        # Somebody else's route. Left where it is: it is still their decision,
+        # and this session simply is not the one it was armed for.
+        return None
+    label = data.get("label")
+    for key in ("model", "effort", "mode"):
+        value = data.get(key)
+        route[key] = value.strip() if isinstance(value, str) and value.strip() \
+            else None
+    route.update({"word": route["worker"],
+                  "label": label.strip() if isinstance(label, str)
+                  and label.strip() else route["label"],
+                  "session_id": scope,
+                  "source": data.get("source")})
+    return route
+
+
+def role_route(word, cfg=None):
+    """A worker named the way the config and the mode file name it, in the shape
+    parse_route returns. parse_route takes the picker ids and the aliases
+    somebody types; this is the other spelling, the plain role name."""
+    worker = ROUTE_WORKERS.get(str(word or "").strip().lower())
+    if not worker:
+        return None
+    return {"worker": worker, "model": None, "effort": None, "mode": None,
+            "label": route_label(worker, cfg)}
 
 
 # ---------------------------------------------------------------- desktop store
@@ -449,6 +659,75 @@ def desktop_session_model(session_id):
             _remember_session(session_id, path)
             return model
     return None
+
+
+def _desktop_record(path):
+    """One store file parsed, or None. No substring shortcut here: the caller is
+    looking for a record it cannot name in advance."""
+    try:
+        with open(path, "rb") as handle:
+            data = json.loads(handle.read().decode("utf-8", "replace"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _activity(record, path):
+    """When this session was last active, as a sortable number. The store's own
+    field decides; a record without one falls back to the file's mtime."""
+    stamp = record.get("lastActivityAt")
+    if isinstance(stamp, (int, float)):
+        return float(stamp)
+    if isinstance(stamp, str):
+        try:
+            return float(stamp.strip())
+        except ValueError:
+            pass
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def desktop_session_here(cwd=None, now=None):
+    """The desktop app's record for the session running in this directory.
+
+    A chat command has no way to ask Claude Code for its own session id, and a
+    route has to be scoped to a session or it applies to all of them. The store
+    is the only place the id is written down, so the record whose ``cwd`` is
+    this directory and whose activity is the most recent is taken as this
+    session. None means no answer, whatever the reason, and the caller says so
+    rather than guessing.
+    """
+    if not os.environ.get("SW_DESKTOP_STORE") and sys.platform != "darwin":
+        return None
+    store = desktop_store()
+    if not os.path.isdir(store):
+        return None
+    try:
+        here = os.path.realpath(cwd or os.getcwd())
+    except OSError:
+        return None
+    best, latest = None, None
+    for path in _desktop_files(store):
+        record = _desktop_record(path)
+        if not record:
+            continue
+        session = record.get("cliSessionId")
+        folder = record.get("cwd")
+        if not isinstance(session, str) or not session.strip():
+            continue
+        if not isinstance(folder, str) or not folder.strip():
+            continue
+        try:
+            if os.path.realpath(expand(folder)) != here:
+                continue
+        except OSError:
+            continue
+        when = _activity(record, path)
+        if latest is None or when > latest:
+            best, latest = record, when
+    return best
 
 
 # ---------------------------------------------------------------- runtime mirror
@@ -731,33 +1010,34 @@ def _windows_text(role, usage):
     return ", ".join(parts)
 
 
-def brief_lines(cfg=None, now=None):
-    """One honest line per enabled account, for the session brief.
+def usage_summary(role, cfg=None, now=None):
+    """What the brief says about one account, after its name.
 
     Fresh or stale readings show the figures and their age. A dead or missing
     reading says so and says a refresh is coming, because a stale percentage
-    read as current is the failure this whole tool exists to avoid.
+    read as current is the failure this whole tool exists to avoid. The picker's
+    destination rows use the same wording, so a person reads one phrasing.
     """
     cfg = load_config() if cfg is None else cfg
-    lines = []
-    for role in enabled_roles(cfg):
-        label = role_label(role, cfg)
-        if not reading_enabled(role, cfg):
-            lines.append("%s: no usage reading available for this sign-in" % label)
-            continue
-        usage = load_usage(role)
-        state = freshness(role, now=now, cfg=cfg)
-        kind = status_kind(role)
-        phrase = status_phrase(kind)
-        figures = _windows_text(role, usage) if state in ("fresh", "stale") else ""
-        if not figures:
-            lines.append("%s: %s" % (label, phrase or "no current reading, refreshing"))
-            continue
-        line = "%s: %s (%s ago)" % (label, figures, short_age(cache_age(role, now=now)))
-        if phrase:
-            line += ", " + phrase
-        lines.append(line)
-    return lines
+    if not reading_enabled(role, cfg):
+        return "no usage reading available for this sign-in"
+    usage = load_usage(role)
+    state = freshness(role, now=now, cfg=cfg)
+    phrase = status_phrase(status_kind(role))
+    figures = _windows_text(role, usage) if state in ("fresh", "stale") else ""
+    if not figures:
+        return phrase or "no current reading, refreshing"
+    line = "%s (%s ago)" % (figures, short_age(cache_age(role, now=now)))
+    if phrase:
+        line += ", " + phrase
+    return line
+
+
+def brief_lines(cfg=None, now=None):
+    """One honest line per enabled account, for the session brief."""
+    cfg = load_config() if cfg is None else cfg
+    return ["%s: %s" % (role_label(role, cfg), usage_summary(role, cfg=cfg, now=now))
+            for role in enabled_roles(cfg)]
 
 
 # ---------------------------------------------------------------- session

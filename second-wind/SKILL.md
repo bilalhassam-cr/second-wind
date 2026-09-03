@@ -7,8 +7,8 @@ description: Run work on a second Claude Code account, OpenAI Codex, Grok Build 
 
 Routes work to a second Claude subscription, Codex, Grok Build or Cursor Agent.
 Two reasons, kept apart. **Independence**, because a reviewer that watched you
-build the thing is not independent. **Not waiting**, because each plan has its
-own window, so a job can start elsewhere rather than at the next reset.
+build the thing is not independent. **Not waiting**, because each plan has its own
+window, so a job can start elsewhere rather than at the next reset.
 
 ## First, resolve $SW
 
@@ -22,70 +22,79 @@ SW=${SW/#\~/$HOME}
 python3 "$SW/scripts/setup.py" --accounts
 ```
 
-`--accounts` prints cached figures and spawns nothing; add `--live` to run the
-readers first. It sorts the accounts by headroom and says where work goes now.
-`--check` says whether the chain is wired up and what is blocking it. Both print
-`NOT SET UP` and exit 0 when nothing is configured, so read the output, not the
-exit code, and **offer to set it up in one line before getting on with what the
-user asked for.** A missing optional tool never blocks a task.
+`--accounts` prints cached figures and spawns nothing, sorted by headroom; add
+`--live` to run the readers first, and only when the table says the readings are
+stale. `--check` says whether the chain is wired up. Both print `NOT SET UP` and
+exit 0 when nothing is configured, so read the output, not the exit code, and
+**offer to set it up in one line before getting on with what the user asked
+for.** A missing optional tool never blocks a task.
+
+## The command surface
+
+**`/second-wind` with no arguments is the picker.** In the desktop app this is
+the only way to route, since its model menu takes no rows of ours.
+
+1. `setup.py --accounts` for the figures, then
+   `python3 "$SW/scripts/route.py" --destinations` for each destination, its
+   headroom and its presets with a line each.
+2. Show them before asking. If a widget or inline HTML rendering tool is
+   available, render one compact card: a row per destination with its label, two
+   small bars (5h and weekly, or the Cursor pools), a **most headroom** mark on
+   the recommended row and the preset names under each. Otherwise print a tidy
+   aligned table. Then one line of advice, such as "the personal account has the
+   most headroom; Codex if you want a different model's read".
+3. **AskUserQuestion**, "Where should the next tasks run?". Labels stay short,
+   the destination name only, with the usage and the recommendation in the
+   description. "Keep it here" is one of the options, recommended when this
+   account's headroom is above 40%.
+4. **AskUserQuestion** again: the presets for whatever was chosen, each option
+   labelled with the preset and described by its own line.
+5. And a third: "Review only (read, no edits)" or "Full access (does the work)".
+6. `python3 "$SW/scripts/route.py" --set <worker> --model M --effort E --mode
+   review|work --here`. Confirm in one line naming the destination, model,
+   effort and mode, and say `/second-wind off` stops it.
+
+On **Keep it here**, still ask the preset question, then say plainly that you
+cannot change this session's model yourself and give the exact `/model` and
+`/effort` lines to type. `references/routing.md` carries both preset tables.
+
+**`/second-wind off`** runs `python3 "$SW/scripts/route.py" --clear`.
+
+**`/second-wind <text>`** does the job now and asks nothing. Take the worker from
+the words (personal, codex, grok, cursor, else the one with the most headroom)
+and the mode from them too: review, second opinion or check means `--review`;
+build, fix, write or do means `--work`. Write the prompt to a file, call the
+runner, report as below.
 
 ## Setting it up
 
-Invoking this skill with no arguments is an interactive first run. One question
-at a time, one command at a time.
+Only when `--accounts` prints `NOT SET UP`. One question at a time, one command
+at a time. **Read `references/setup.md` before starting**: it carries the wizard
+in full, the install and sign-in command for each client, and every trap worth
+naming in the conversation.
 
-1. Detect before asking anything: `python3 "$SW/scripts/setup.py" --detect`. The
-   JSON names the Claude profiles and their sign-in state, whether `codex`,
-   `grok` and `cursor-agent` are on PATH, the client versions and any config.
+The shape of it. Run `setup.py --detect` before asking anything. State the cost,
+because nothing here is free: a second Claude worker needs a second Claude
+subscription, Codex a ChatGPT plan, Grok Build SuperGrok or X Premium+, Cursor
+Agent Cursor Pro. Ask with **AskUserQuestion, multi-select** which to connect,
+then sign them in one at a time, re-running `--detect` between each. Ask which
+Claude profile is primary and which level to run at: **reviewer** is read-only
+delegation with no automatic handover, **worker** is full access plus the hooks
+that notice a limit, **relief** adds handover at a task boundary when the primary
+crosses its thresholds. Then write everything with one command:
 
-2. State the cost before the choice. A second Claude worker needs a second Claude
-   subscription, Codex needs a ChatGPT plan, Grok Build spends SuperGrok or X
-   Premium+, Cursor Agent spends Cursor Pro. Nothing here is free.
+```bash
+python3 "$SW/scripts/setup.py" --write --level relief \
+  --primary ~/.claude --secondary ~/.claude-secondary \
+  --codex on --grok off --cursor off
+```
 
-3. Ask with **AskUserQuestion, multi-select**: second Claude account, Codex, Grok
-   Build, Cursor. Any combination is valid. `references/setup.md` carries the
-   install and sign-in command for each, and two warnings belong in the
-   conversation: never set `XAI_API_KEY` for Grok Build, since `api.x.ai` is a
-   separate paid developer product, and always call the clients `grok` and
-   `cursor-agent`, since Cursor's installer takes the generic name `agent` and
-   can delete Grok's alias.
-
-4. Walk the chosen workers **one at a time**, giving only the command that is
-   missing, waiting for it, then re-running `--detect` before the next one. A
-   Claude sign-in lands on whichever account the browser already holds and
-   ignores the `--email` hint, so say which browser profile to open the printed
-   URL in. Never set `CLAUDE_CONFIG_DIR` for `~/.claude` itself: it breaks a
-   working sign-in.
-
-5. Ask which Claude profile is primary if more than one is signed in. Primary is
-   where the user works day to day, keeps their history and orchestrates from.
-   `~/.claude` is usually it, because the desktop app and every plain `claude`
-   command already use that profile.
-
-6. Ask with **AskUserQuestion, single select**, for the level:
-
-   - **Reviewer**: read-only delegation, no automatic handover, session brief only.
-   - **Worker**: full-access delegation, plus the hooks that notice a limit.
-   - **Relief**: full access, and handover at a task boundary when the primary
-     crosses its thresholds.
-
-7. Write the config with **one command**, workers `on` or `off` as chosen:
-
-   ```bash
-   python3 "$SW/scripts/setup.py" --write --level relief \
-     --primary ~/.claude --secondary ~/.claude-secondary \
-     --codex on --grok off --cursor off
-   ```
-
-   Other options: `--reader ~/.claude-usage`, `--five-hour 85`, `--seven-day 75`,
-   `--refresh-minutes 30`, `--model-picker on`, `--picker-routes id,id`,
-   `--no-launchd`, `--timeout 900`, `--force`. It writes the config, creates and
-   pre-trusts `~/.second-wind/workdir` for each Claude profile and for Codex,
-   installs the hooks and status line after a backup, and schedules the refresh.
-
-8. Tell the user to **restart Claude Code**, then run `--check` and `--accounts`.
-   The restart matters twice: settings are read at session start, and a running
-   session can write the project list back over the workdir trust when it exits.
+Other options: `--reader ~/.claude-usage`, `--five-hour 85`, `--seven-day 75`,
+`--refresh-minutes 30`, `--model-picker on`, `--picker-routes id,id`,
+`--picker-models codex=gpt-5.6/high,...`, `--no-launchd`, `--timeout 900`,
+`--force`. Finally, tell the user to **restart Claude Code**, then run `--check`
+and `--accounts`: settings are read at session start, and a running session can
+write the project list back over the workdir trust when it exits.
 
 ## Running work on another account
 
@@ -101,37 +110,33 @@ command inline turns quoting into the hard part of the job.
 **`--review` blocks file edits and shell work.** Claude loses its edit, write and
 shell tools and loads no MCP servers, Codex runs in a read-only sandbox, Grok
 drops Write, Edit and Bash, and Cursor adds `--mode ask`, since `--trust` alone
-is not read-only and wrote a file in testing. Use review mode to have work
-challenged, and whenever you are still editing the same files.
+is not read-only and wrote a file in testing. Use it to have work challenged, and
+whenever you are still editing the same files.
 
-**`--work` gives the worker read and write access** to the current directory. A
-Claude, Grok or Cursor worker runs with the same reach you have. A Codex worker
-does not: work mode passes `--approve-for-me`, which puts it in the
-workspace-write sandbox, so it edits files in the directory but cannot write
-outside it and **cannot launch a browser**, which is why browser QA, screenshot
-checks and any CDP, puppeteer or playwright step stay on this session.
-`references/troubleshooting.md` says why. Use work mode to build or fix
-something, and when the point is to spend the other allowance. The config sets
-the default mode. Say which mode you used when reporting back.
+**`--work` gives the worker read and write access** to the current directory,
+with the same reach you have, except Codex: work mode puts it in the
+workspace-write sandbox, so it cannot write outside the directory and **cannot
+launch a browser**. Browser QA, screenshots and any CDP, puppeteer or playwright
+step stay on this session. Use work mode to build or fix something, and when the
+point is to spend the other allowance. Say which mode you used.
 
 **Writing the prompt.** The worker starts blind. Put the question, the relevant
 file contents, the constraint that matters and what finished looks like into the
 prompt, and never point it at skill definitions written for another system. Open
 a review with: you are reviewing work you did not produce, be direct and
-specific, lead with the single biggest problem, no compliments and no summary of
-what the work does, and where something is wrong say what it should be instead.
+specific, lead with the single biggest problem, no compliments, and where
+something is wrong say what it should be instead.
 
 **In parallel.** Each call writes its own exchange file and appends one ledger
 line, so parallel calls are safe: background each one and `wait`. Subagents
-inherit this session's login and always bill the primary account, whatever they
-are told, so the runner is the only thing that shifts the load.
+inherit this session's login and always bill the primary account, so the runner
+is the only thing that shifts the load.
 
 ## Reporting back, and the record
 
 **First check whether it worked.** A non-zero exit means the delegation failed
 and the text is an error, not an opinion. Exit 124 is the timeout, and an empty
-reply with a zero exit is also a failure. Say so and do the work yourself rather
-than quoting a failure back as judgement.
+reply with a zero exit is also a failure. Say so and do the work yourself.
 
 1. Show the answer **verbatim**, in a quoted block, labelled with the account
    that produced it. Do not summarise it and do not soften it.
@@ -148,33 +153,28 @@ user's memory or a project file. Review the last week with
 ## The session brief and handover
 
 At every level a SessionStart hook puts one line per account in front of the
-session: the windows, their age, and any reader fault. The desktop app runs no
-status line, so the brief is the only surface there.
+session: the windows, their age, any reader fault, and whether a route is on for
+this session. The desktop app runs no status line, so the brief is the only
+surface there.
 
-At level relief the guard adds a line when the primary crosses its thresholds.
-The line is a request, not a dispatch: it asks this session to send the next task
-to another account, and the session has to act on it. It arrives **at a task
+At level relief the guard adds a line when the primary crosses its thresholds. It
+is a request, not a dispatch: this session has to act on it, **at a task
 boundary**, never part-way through a job already running. Say in one line that
 you are handing over and which account is taking it, so the user can stop you. If
-the user says keep it here, keep it here.
-
-Writing `secondary`, `codex`, `grok`, `cursor`, `both` or `all` to `~/.second-wind/mode`
-forces routing whatever the figures say, and `no-failover` beside it turns handover off.
+the user says keep it here, keep it here. `~/.second-wind/no-failover` turns
+automatic handover off altogether.
 
 ## Routing from the model picker
 
-Type `/model second-wind/personal`, or `/model second-wind/codex/gpt-5.6/high` to
-name a model and an effort too. The switch is **refused on purpose**: the session
-keeps the model it has and the next tasks go to that worker instead, through the
-runner. Picking any normal model stops it. `--model-picker on` adds picker rows.
+In a terminal, `/model second-wind/personal` or
+`/model second-wind/codex/gpt-5.6/high` routes too. The switch is **refused on
+purpose**: the session keeps its model and the next tasks go to that worker
+through the runner, for this session only. Picking any normal model stops it.
 
-The desktop app fires no hook for a typed id, so the name becomes the session
-model and the API rejects it. At level relief the prompt guard catches that on the
-next prompt, arms the route and asks for a real model. Asked in chat, offer an
-**AskUserQuestion** picker of worker, then model, then effort, then write
-`~/.second-wind/mode` in the shape the hook writes, model and effort null when not
-chosen: `{"worker": "codex", "model": "gpt-5.6", "effort": "high", "set_at":
-<epoch seconds>, "label": "Codex"}`. Delete it to stop.
+The desktop app fires no hook for a typed id, so a routing name there becomes a
+model the API rejects; at level relief the guard arms the route anyway and asks
+for a real model. In the desktop app, `/second-wind` is the way to pick.
 
-`references/setup.md`, `references/config.md` and
-`references/troubleshooting.md` carry the rest.
+Never write `~/.second-wind/mode` by hand: `route.py` writes it, scoped to the
+session that asked. `references/routing.md`, `references/setup.md`,
+`references/config.md` and `references/troubleshooting.md` carry the rest.

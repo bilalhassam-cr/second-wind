@@ -153,6 +153,14 @@ startup inside the sandbox and the user sees a "quit unexpectedly" dialog with n
 explanation. The runner tells the worker so in the prompt. Keep browser QA on
 your own session.
 
+Type **`/second-wind`** and press Enter to be shown every destination with its
+current usage and a recommendation, then pick: the account first, then a model
+and effort preset for it, then review only or full access. It arms the route for
+that session and tells you that **`/second-wind off`** stops it. Say what you
+want in the same breath, as in `/second-wind get codex to review the migration`,
+and it skips the questions and does the job now. In the desktop app the picker is
+the only way to route, because its model menu shows no rows of ours.
+
 You can also route from the model picker. Typing `/model second-wind/personal`,
 or `/model second-wind/codex/gpt-5.6/high`, is refused on purpose: the session
 keeps the model it has, and a PreModelSwitch hook records that the next tasks go

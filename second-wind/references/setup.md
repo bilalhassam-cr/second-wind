@@ -3,6 +3,48 @@
 Config version 4. `references/config.md` describes every key; this file covers the
 accounts themselves and the traps that cost time.
 
+## The wizard, step by step
+
+Run it only when `setup.py --accounts` prints `NOT SET UP`. One question at a
+time, one command at a time.
+
+1. **Detect before asking anything**: `python3 "$SW/scripts/setup.py" --detect`.
+   The JSON names the Claude profiles and their sign-in state, whether `codex`,
+   `grok` and `cursor-agent` are on PATH, the client versions and any config.
+
+2. **State the cost before the choice.** A second Claude worker needs a second
+   Claude subscription, Codex needs a ChatGPT plan, Grok Build spends SuperGrok
+   or X Premium+, Cursor Agent spends Cursor Pro. Nothing here is free.
+
+3. **Ask with AskUserQuestion, multi-select**: second Claude account, Codex, Grok
+   Build, Cursor. Any combination is valid. Two warnings belong in the
+   conversation: never set `XAI_API_KEY` for Grok Build, since `api.x.ai` is a
+   separate paid developer product, and always call the clients `grok` and
+   `cursor-agent`, since Cursor's installer takes the generic name `agent` and
+   can delete Grok's alias.
+
+4. **Walk the chosen workers one at a time**, giving only the command that is
+   missing, waiting for it, then re-running `--detect` before the next one. A
+   Claude sign-in lands on whichever account the browser already holds and
+   ignores the `--email` hint, so say which browser profile to open the printed
+   URL in. Never set `CLAUDE_CONFIG_DIR` for `~/.claude` itself: it breaks a
+   working sign-in.
+
+5. **Ask which Claude profile is primary** if more than one is signed in. Primary
+   is where the user works day to day, keeps their history and orchestrates from.
+   `~/.claude` is usually it, because the desktop app and every plain `claude`
+   command already use that profile.
+
+6. **Ask for the level**, single select. Reviewer: read-only delegation, no
+   automatic handover, session brief only. Worker: full-access delegation, plus
+   the hooks that notice a limit. Relief: full access, and handover at a task
+   boundary when the primary crosses its thresholds.
+
+7. **Write the config with one command**, workers `on` or `off` as chosen, then
+   tell the user to restart Claude Code and run `--check` and `--accounts`. The
+   restart matters twice: settings are read at session start, and a running
+   session can write the project list back over the workdir trust when it exits.
+
 ## Creating a second Claude profile
 
 A Claude Code profile is a config directory. `CLAUDE_CONFIG_DIR` is documented and

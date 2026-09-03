@@ -12,7 +12,8 @@ backwards silently sends their main work to the wrong subscription.
       [--primary-label TEXT] [--secondary-label TEXT]
       [--codex on|off] [--grok on|off] [--cursor on|off]
       [--five-hour N] [--seven-day N] [--refresh-minutes N]
-      [--model-picker on|off] [--picker-routes id,id] [--no-launchd]
+      [--model-picker on|off] [--picker-routes id,id]
+      [--picker-models worker=model/effort,...] [--no-launchd]
       [--timeout N] [--force]
   setup.py --accounts [--live]
   setup.py --check
@@ -476,6 +477,50 @@ def cmd_show():
 
 # ---------------------------------------------------------------- write
 
+PICKER_WORKERS = ("secondary", "codex", "grok", "cursor")
+
+
+def picker_models_text(models):
+    """A `picker.models` block back as the command line spells it, so a rerun
+    can compare what was passed with what is already there."""
+    if not isinstance(models, dict):
+        return None
+    parts = []
+    for worker in PICKER_WORKERS:
+        entries = models.get(worker)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, str) and entry.strip():
+                parts.append("%s=%s" % (worker, entry.strip()))
+    return ",".join(parts) if parts else None
+
+
+def picker_models_block(text):
+    """`worker=model/effort,...` as the config block, or an error string.
+
+    Repeating a worker adds a row to its menu, in the order given. `default`
+    is a row too: it means send no model and no effort and let the client
+    choose.
+    """
+    models = {}
+    for entry in [part.strip() for part in (text or "").split(",") if part.strip()]:
+        if "=" not in entry:
+            return None, ("--picker-models takes worker=model/effort. %s is not "
+                          "one." % entry)
+        worker, row = [half.strip() for half in entry.split("=", 1)]
+        worker = swlib.ROUTE_WORKERS.get(worker.lower())
+        if worker not in PICKER_WORKERS:
+            return None, ("--picker-models names personal, codex, grok or "
+                          "cursor. %s is not one." % entry)
+        if not swlib.parse_model_entry(row):
+            return None, ("--picker-models takes model/effort or default. %s is "
+                          "not one." % row)
+        rows = models.setdefault(worker, [])
+        if row not in rows:
+            rows.append(row)
+    return models, ""
+
 
 def cmd_write(a):
     if not swlib.has_jq():
@@ -535,6 +580,13 @@ def cmd_write(a):
     carry("picker_routes",
           ",".join(prev_routes) if isinstance(prev_routes, list) else None,
           "", "picker routes")
+    if a.picker_models is not None:
+        a.picker_models = ",".join(entry.strip()
+                                   for entry in a.picker_models.split(",")
+                                   if entry.strip())
+    carry("picker_models",
+          picker_models_text((previous.get("picker") or {}).get("models")),
+          "", "picker models")
 
     for name, value in (("--five-hour", a.five_hour), ("--seven-day", a.seven_day)):
         if not isinstance(value, int) or not 1 <= value <= 100:
@@ -551,6 +603,9 @@ def cmd_write(a):
         if not swlib.parse_route(entry):
             sys.exit("second-wind: --picker-routes takes ids like "
                      "second-wind/codex/gpt-5.6/high. %s is not one." % entry)
+    picker_models, problem = picker_models_block(a.picker_models)
+    if problem:
+        sys.exit("second-wind: " + problem)
 
     dirs = {"primary": a.primary, "secondary": a.secondary, "reader": a.reader}
     for role, folder in dirs.items():
@@ -675,7 +730,7 @@ def cmd_write(a):
             "model_picker": a.model_picker == "on",
             "cursor": cursor_reads,
         },
-        "picker": {"routes": routes},
+        "picker": {"routes": routes, "models": picker_models},
         "failover": {"enabled": level["failover"], "announce": True},
         "defaults": {"mode": level["mode"]},
         "log": {
@@ -1292,6 +1347,10 @@ def build_parser():
     ap.add_argument("--picker-routes", default=None,
                     help="comma-separated routing ids to add to the model "
                          "picker, such as second-wind/codex/gpt-5.6/high")
+    ap.add_argument("--picker-models", default=None,
+                    help="model and effort rows the /second-wind picker offers "
+                         "per worker, as worker=model/effort,... for example "
+                         "codex=gpt-5.6/high,codex=gpt-5.6/medium")
     ap.add_argument("--no-launchd", action="store_true",
                     help="do not install the scheduled refresh agent")
     ap.add_argument("--timeout", type=int, default=None,

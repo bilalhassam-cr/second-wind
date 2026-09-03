@@ -12,6 +12,9 @@ model would be worse than one that says what it did.
 
 Picking any real model deletes the mode file, so stopping is the same gesture as
 starting. A real model is never blocked, whatever else is going on.
+
+The route it writes carries this session's id, so it applies here and not in
+every other session the user has open.
 """
 import json
 import os
@@ -63,6 +66,9 @@ def main():
     cfg = swlib.load_config()
     mode = swlib.mode_path()
     route = swlib.parse_route(target, cfg)
+    # Scoped to the session that picked the row. A route armed in one session
+    # used to tell every other one to send its work away.
+    session = payload.get("session_id")
 
     if not route:
         if not os.path.exists(mode):
@@ -80,7 +86,7 @@ def main():
     if route["worker"] not in swlib.enabled_roles(cfg):
         return block("second-wind: that worker is not connected; run setup.")
 
-    swlib.write_mode(route)
+    swlib.write_mode(route, session_id=session)
     detail = ""
     if route["model"]:
         detail += ", model %s" % route["model"]

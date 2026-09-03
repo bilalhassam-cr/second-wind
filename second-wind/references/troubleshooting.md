@@ -220,6 +220,20 @@ and worker levels, which do not install it. Rerun `--write` and restart.
 A route that is refused with "the next tasks route to ..." is the hook working:
 the block is the mechanism, not a fault.
 
+## A route is armed but nothing routes
+
+A route belongs to the session that armed it. Run
+`python3 "$SW/scripts/route.py" --show`: it names the session id the route was
+written for and says `Applies here: yes` or `no`. `no, it was armed in another
+session` means exactly that, and the fix is to arm it here with
+`route.py --set <worker> --here`, or everywhere with `--all`. A route more than 12
+hours old is ignored and deleted on the next read, so `--show` saying the file has
+gone is the expected end of a route nobody cleared.
+
+Two other reasons a route does nothing: `~/.second-wind/no-failover` is present,
+or the level is not relief, so the UserPromptSubmit guard that reads the route is
+not installed. `setup.py --check` lists it.
+
 ## A route says the worker is not connected
 
 The hook only writes a routing override for a worker the config has enabled, so

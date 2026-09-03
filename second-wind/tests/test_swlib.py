@@ -698,6 +698,402 @@ class ModeFile(Base):
                          os.path.join(self.home, "mode"))
 
 
+class ScopedRoutes(Base):
+    """A route belongs to the session that armed it. Before this, a route armed
+    in one chat told every other session to send its work away."""
+
+    SESSION = "1111aaaa-2222-3333-4444-555566667777"
+
+    def write_route(self, **fields):
+        data = {"worker": "codex", "model": None, "effort": None,
+                "set_at": int(time.time()), "label": "Codex"}
+        data.update(fields)
+        swlib.write_json_atomic(swlib.mode_path(), data)
+        return data
+
+    def test_a_bare_word_stays_global(self):
+        self.write_config()
+        swlib.write_text_atomic(swlib.mode_path(), "codex\n")
+        for session in (self.SESSION, "another", None):
+            route = swlib.active_route(session)
+            self.assertEqual(route["worker"], "codex", session)
+            self.assertEqual(route["word"], "codex")
+
+    def test_a_bare_id_still_carries_a_model_and_an_effort(self):
+        self.write_config()
+        swlib.write_text_atomic(swlib.mode_path(),
+                                "second-wind/codex/gpt-5.6/high\n")
+        route = swlib.active_route(self.SESSION)
+        self.assertEqual((route["model"], route["effort"]), ("gpt-5.6", "high"))
+
+    def test_the_session_that_armed_it_gets_it(self):
+        self.write_config()
+        self.write_route(session_id=self.SESSION)
+        self.assertEqual(swlib.active_route(self.SESSION)["worker"], "codex")
+
+    def test_another_session_is_ignored_and_the_route_is_left_alone(self):
+        self.write_config()
+        self.write_route(session_id=self.SESSION)
+        self.assertIsNone(swlib.active_route("somebody-else"))
+        self.assertIsNone(swlib.active_route(None))
+        self.assertTrue(os.path.exists(swlib.mode_path()),
+                        "another session's route is still their decision")
+
+    def test_a_star_applies_everywhere(self):
+        self.write_config()
+        self.write_route(session_id="*")
+        for session in (self.SESSION, "another", None):
+            self.assertEqual(swlib.active_route(session)["worker"], "codex",
+                             session)
+
+    def test_a_route_naming_no_session_applies_everywhere(self):
+        # What an older version of this tool wrote.
+        self.write_config()
+        self.write_route()
+        self.assertEqual(swlib.active_route("anyone")["worker"], "codex")
+
+    def test_a_route_past_twelve_hours_is_ignored_and_deleted(self):
+        self.write_config()
+        self.write_route(session_id=self.SESSION,
+                         set_at=int(time.time()) - swlib.ROUTE_MAX_AGE - 60)
+        self.assertIsNone(swlib.active_route(self.SESSION))
+        self.assertFalse(os.path.exists(swlib.mode_path()))
+
+    def test_a_route_with_no_timestamp_is_aged_by_the_file(self):
+        self.write_config()
+        self.write_route(session_id=self.SESSION, set_at=None)
+        self.assertEqual(swlib.active_route(self.SESSION)["worker"], "codex")
+        old = time.time() - swlib.ROUTE_MAX_AGE - 60
+        os.utime(swlib.mode_path(), (old, old))
+        self.assertIsNone(swlib.active_route(self.SESSION))
+
+    def test_the_mode_is_carried_and_a_worker_nobody_named_is_not(self):
+        self.write_config()
+        self.write_route(session_id="*", mode="review")
+        self.assertEqual(swlib.active_route(self.SESSION)["mode"], "review")
+        self.write_route(session_id="*", worker="banana")
+        self.assertIsNone(swlib.active_route(self.SESSION))
+
+    def test_a_written_route_records_the_session_and_nothing_more(self):
+        self.write_config()
+        swlib.write_mode({"worker": "codex", "model": None, "effort": None,
+                          "label": "Codex"}, source="chat",
+                         session_id=self.SESSION)
+        written = read_json(swlib.mode_path())
+        self.assertEqual(written["session_id"], self.SESSION)
+        self.assertEqual(written["source"], "chat")
+        self.assertNotIn("mode", written)
+
+
+class Destinations(Base):
+    """What the /second-wind picker is built from."""
+
+    def house(self):
+        self.write_config(secondary={"enabled": True, "label": "spare Claude"},
+                          codex={"enabled": True, "label": "codex"},
+                          grok={"enabled": False}, cursor={"enabled": False})
+        self.write_usage_live("secondary", age_seconds=60, five_hour_pct=10,
+                              seven_day_pct=20)
+        self.write_usage_live("codex", age_seconds=120, five_hour_pct=70,
+                              seven_day_pct=30)
+
+    def test_one_row_per_enabled_worker_sorted_by_headroom(self):
+        self.house()
+        rows = swlib.destinations()
+        self.assertEqual([row["worker"] for row in rows], ["secondary", "codex"])
+        self.assertEqual(rows[0]["label"], "spare Claude")
+        self.assertEqual(rows[0]["headroom"], 80)
+        self.assertEqual(rows[1]["headroom"], 30)
+        self.assertIn("5h 10%, 7d 20%", rows[0]["usage"])
+        self.assertIn(" ago)", rows[0]["usage"])
+
+    def test_the_primary_is_not_a_destination(self):
+        self.house()
+        self.assertNotIn("primary", [row["worker"] for row in swlib.destinations()])
+
+    def test_a_dead_reading_has_no_headroom_and_says_so(self):
+        self.house()
+        self.write_usage_live("codex", age_seconds=7200, five_hour_pct=70)
+        row = [r for r in swlib.destinations() if r["worker"] == "codex"][0]
+        self.assertIsNone(row["headroom"])
+        self.assertEqual(row["usage"], "no current reading, refreshing")
+
+    def test_the_default_presets(self):
+        self.house()
+        rows = {row["worker"]: row["models"] for row in swlib.destinations()}
+        self.assertEqual([entry["text"] for entry in rows["secondary"]],
+                         ["opus high", "opus medium", "sonnet medium",
+                          "sonnet low", "haiku low"])
+        self.assertEqual(rows["secondary"][0],
+                         {"model": "opus", "effort": "high",
+                          "text": "opus high",
+                          "note": "Opus 5, high effort: the hardest work, "
+                                  "spends the most"})
+        self.assertEqual([entry["text"] for entry in rows["codex"]],
+                         ["gpt-5.6 high", "gpt-5.6 medium", "gpt-5.6 low"])
+        # Every preset says what it costs, so a row is never a bare model name.
+        for entries in rows.values():
+            for entry in entries:
+                self.assertTrue(entry["note"].strip(), entry)
+
+    def test_grok_offers_effort_without_a_model_and_cursor_neither(self):
+        # Grok takes --reasoning-effort and no model of ours; Cursor takes
+        # neither, so its one row passes nothing.
+        self.write_config(grok={"enabled": True})
+        self.assertEqual([(entry["model"], entry["effort"], entry["text"])
+                          for entry in swlib.model_menu("grok")],
+                         [(None, "high", "high effort"),
+                          (None, "medium", "medium effort")])
+        self.assertEqual(swlib.model_menu("cursor"),
+                         [{"model": None, "effort": None, "text": "default",
+                           "note": "The account's own model and effort; "
+                                   "neither is passed"}])
+
+    def test_a_codex_effort_word_the_defaults_do_not_use_is_still_accepted(self):
+        self.write_config(codex={"enabled": True},
+                          picker={"models": {"codex": ["gpt-5.6/xhigh",
+                                                       "gpt-5.6/minimal"]}})
+        self.assertEqual([entry["text"] for entry in swlib.model_menu("codex")],
+                         ["gpt-5.6 xhigh", "gpt-5.6 minimal"])
+        self.assertEqual(swlib.model_menu("codex")[0]["note"],
+                         "gpt-5.6, xhigh effort")
+
+    def test_the_config_replaces_a_menu_and_drops_what_it_cannot_parse(self):
+        self.write_config(codex={"enabled": True},
+                          picker={"models": {"codex": ["gpt-6/low", "a/b/c",
+                                                       "", "default"]}})
+        self.assertEqual([entry["text"] for entry in swlib.model_menu("codex")],
+                         ["gpt-6 low", "default"])
+        # A worker the block does not name keeps the built-in presets.
+        self.assertEqual([entry["text"] for entry in swlib.model_menu("secondary")],
+                         ["opus high", "opus medium", "sonnet medium",
+                          "sonnet low", "haiku low"])
+
+    def test_an_empty_menu_in_the_config_falls_back(self):
+        self.write_config(codex={"enabled": True},
+                          picker={"models": {"codex": []}})
+        self.assertEqual([entry["text"] for entry in swlib.model_menu("codex")],
+                         ["gpt-5.6 high", "gpt-5.6 medium", "gpt-5.6 low"])
+
+
+class DesktopSessionHere(Base):
+    """`route.py --here` needs this session's id, and the desktop store is the
+    only place it is written down."""
+
+    def setUp(self):
+        super().setUp()
+        self.store = os.path.join(self.home, "desktop-store")
+        self.previous_store = os.environ.get("SW_DESKTOP_STORE")
+        os.environ["SW_DESKTOP_STORE"] = self.store
+        self.where = os.path.join(self.home, "project")
+        os.makedirs(self.where)
+
+    def tearDown(self):
+        if self.previous_store is None:
+            os.environ.pop("SW_DESKTOP_STORE", None)
+        else:
+            os.environ["SW_DESKTOP_STORE"] = self.previous_store
+        super().tearDown()
+
+    def entry(self, name, data):
+        folder = os.path.join(self.store, "%s-outer" % name, "%s-inner" % name)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "local_%s.json" % name)
+        swlib.write_json_atomic(path, data)
+        return path
+
+    def test_the_latest_session_in_this_directory_wins(self):
+        self.entry("old", {"cliSessionId": "old-one", "cwd": self.where,
+                           "lastActivityAt": 1000})
+        self.entry("new", {"cliSessionId": "new-one", "cwd": self.where,
+                           "lastActivityAt": 2000})
+        self.entry("elsewhere", {"cliSessionId": "other-folder",
+                                 "cwd": self.home, "lastActivityAt": 9000})
+        found = swlib.desktop_session_here(self.where)
+        self.assertEqual(found["cliSessionId"], "new-one")
+
+    def test_no_session_in_this_directory_has_no_answer(self):
+        self.entry("elsewhere", {"cliSessionId": "other-folder",
+                                 "cwd": self.home, "lastActivityAt": 9000})
+        self.assertIsNone(swlib.desktop_session_here(self.where))
+
+    def test_records_without_a_session_or_a_directory_are_skipped(self):
+        self.entry("nameless", {"cwd": self.where, "lastActivityAt": 5000})
+        self.entry("homeless", {"cliSessionId": "no-folder",
+                                "lastActivityAt": 5000})
+        self.entry("broken", {"cliSessionId": "", "cwd": self.where})
+        self.assertIsNone(swlib.desktop_session_here(self.where))
+
+    def test_a_record_with_no_activity_stamp_is_aged_by_its_file(self):
+        first = self.entry("first", {"cliSessionId": "first", "cwd": self.where})
+        second = self.entry("second", {"cliSessionId": "second",
+                                       "cwd": self.where})
+        os.utime(first, (1_600_000_000, 1_600_000_000))
+        os.utime(second, (1_600_000_100, 1_600_000_100))
+        self.assertEqual(swlib.desktop_session_here(self.where)["cliSessionId"],
+                         "second")
+
+    def test_no_store_no_answer(self):
+        os.environ["SW_DESKTOP_STORE"] = os.path.join(self.home, "gone")
+        self.assertIsNone(swlib.desktop_session_here(self.where))
+
+    def test_off_macos_it_never_looks(self):
+        self.entry("mine", {"cliSessionId": "mine", "cwd": self.where})
+        os.environ.pop("SW_DESKTOP_STORE")
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.object(swlib, "DESKTOP_STORE", self.store):
+            self.assertIsNone(swlib.desktop_session_here(self.where))
+            with mock.patch.object(sys, "platform", "darwin"):
+                self.assertEqual(
+                    swlib.desktop_session_here(self.where)["cliSessionId"],
+                    "mine")
+
+
+class RouteCli(Base):
+    """scripts/route.py, which is how the chat picker arms a route."""
+
+    SESSION = "9999aaaa-2222-3333-4444-555566667777"
+
+    def setUp(self):
+        super().setUp()
+        self.store = os.path.join(self.home, "desktop-store")
+        self.where = os.path.join(self.home, "project")
+        os.makedirs(self.where)
+
+    def run_route(self, *args, store=None, cwd=None):
+        environment = dict(os.environ)
+        environment["SW_HOME"] = self.home
+        environment["SW_DESKTOP_STORE"] = store or os.path.join(self.home, "gone")
+        return subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "route.py")] + list(args),
+            capture_output=True, text=True, timeout=30, env=environment,
+            cwd=cwd or self.where)
+
+    def session_entry(self, session=None):
+        folder = os.path.join(self.store, "outer", "inner")
+        os.makedirs(folder, exist_ok=True)
+        swlib.write_json_atomic(os.path.join(folder, "local_mine.json"),
+                                {"cliSessionId": session or self.SESSION,
+                                 "cwd": self.where, "lastActivityAt": 2000})
+        return self.store
+
+    def route(self):
+        return read_json(swlib.mode_path())
+
+    def test_it_arms_a_route_for_every_session(self):
+        self.write_config(codex={"enabled": True, "label": "codex"})
+        done = self.run_route("--set", "codex", "--model", "gpt-5.6",
+                              "--effort", "high", "--all")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("Routing to Codex, model gpt-5.6, effort high, every "
+                      "session.", done.stdout)
+        self.assertIn("/second-wind off stops it.", done.stdout)
+        written = self.route()
+        self.assertEqual((written["worker"], written["model"], written["effort"],
+                          written["session_id"], written["source"]),
+                         ("codex", "gpt-5.6", "high", "*", "chat"))
+
+    def test_here_finds_the_session_in_this_directory(self):
+        self.write_config(codex={"enabled": True})
+        done = self.run_route("--set", "codex", "--here",
+                              store=self.session_entry())
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("this session only", done.stdout)
+        self.assertEqual(self.route()["session_id"], self.SESSION)
+
+    def test_here_falls_back_to_every_session_and_says_so(self):
+        self.write_config(codex={"enabled": True})
+        done = self.run_route("--set", "codex", "--here")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("this session could not be identified", done.stdout)
+        self.assertEqual(self.route()["session_id"], "*")
+
+    def test_a_named_session_and_a_mode(self):
+        self.write_config(secondary={"enabled": True, "label": "spare Claude"})
+        done = self.run_route("--set", "personal", "--mode", "review",
+                              "--session", "given-id")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("Routing to spare Claude, review mode", done.stdout)
+        written = self.route()
+        self.assertEqual((written["worker"], written["mode"],
+                          written["session_id"]),
+                         ("secondary", "review", "given-id"))
+
+    def test_an_effort_without_a_model_is_kept_as_an_effort(self):
+        # Grok's presets pass --reasoning-effort and no model. Treating the
+        # effort word as the model would have sent "--model high".
+        self.write_config(grok={"enabled": True})
+        done = self.run_route("--set", "grok", "--effort", "high", "--all")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        written = self.route()
+        self.assertIsNone(written["model"])
+        self.assertEqual(written["effort"], "high")
+
+    def test_a_worker_that_is_not_connected_is_refused(self):
+        self.write_config(codex={"enabled": False})
+        done = self.run_route("--set", "codex", "--all")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("is not connected", done.stderr)
+        self.assertFalse(os.path.exists(swlib.mode_path()))
+
+    def test_rubbish_is_refused(self):
+        self.write_config(codex={"enabled": True})
+        for args in (("--set", "banana", "--all"),
+                     ("--set", "codex", "--model", "a b c", "--all"),
+                     ("--set", "codex", "--all", "--here")):
+            done = self.run_route(*args)
+            self.assertNotEqual(done.returncode, 0, args)
+            self.assertFalse(os.path.exists(swlib.mode_path()), args)
+
+    def test_show_and_clear(self):
+        self.write_config(codex={"enabled": True})
+        self.run_route("--set", "codex", "--session", "given-id")
+        shown = self.run_route("--show", "--session", "given-id").stdout
+        self.assertIn("Worker    codex", shown)
+        self.assertIn("Session   given-id", shown)
+        self.assertIn("Armed by  chat", shown)
+        self.assertIn("Applies here: yes", shown)
+        elsewhere = self.run_route("--show", "--session", "another").stdout
+        self.assertIn("Applies here: no, it was armed in another session",
+                      elsewhere)
+        cleared = self.run_route("--clear")
+        self.assertIn("Routing off", cleared.stdout)
+        self.assertFalse(os.path.exists(swlib.mode_path()))
+        self.assertIn("Nothing to clear", self.run_route("--clear").stdout)
+        self.assertIn("No route armed", self.run_route("--show").stdout)
+
+    def test_show_reads_a_bare_word_file(self):
+        self.write_config(codex={"enabled": True})
+        swlib.write_text_atomic(swlib.mode_path(), "codex\n")
+        self.assertIn("applies to every session",
+                      self.run_route("--show").stdout)
+
+    def test_destinations_are_printed_for_the_picker(self):
+        self.write_config(secondary={"enabled": True, "label": "spare Claude"},
+                          codex={"enabled": True, "label": "codex"})
+        self.write_usage_live("secondary", age_seconds=60, five_hour_pct=10,
+                              seven_day_pct=20)
+        out = self.run_route("--destinations").stdout
+        self.assertIn("secondary | spare Claude | 80% headroom | 5h 10%, 7d 20%",
+                      out)
+        self.assertIn("    opus high | Opus 5, high effort: the hardest work, "
+                      "spends the most", out)
+        self.assertIn("codex | Codex | headroom unknown | no current reading",
+                      out)
+        self.assertIn("    gpt-5.6 medium | GPT-5.6, medium: everyday tasks",
+                      out)
+
+    def test_no_destinations_says_so(self):
+        self.write_config()
+        self.assertIn("No destinations are connected",
+                      self.run_route("--destinations").stdout)
+
+    def test_an_unconfigured_machine_is_told_to_run_setup(self):
+        done = self.run_route("--set", "codex", "--all")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("not set up yet", done.stderr)
+
+
 class InstalledSettings(Base):
     """What setup actually writes into a profile's settings.json."""
 
@@ -985,9 +1381,26 @@ class WriteRerun(Base):
         with self.assertRaises(SystemExit):
             self.write("--picker-routes", "opus")
 
-    def test_a_first_write_takes_no_picker_routes(self):
+    def test_a_first_write_takes_no_picker_routes_or_models(self):
         self.write()
-        self.assertEqual(self.config()["picker"], {"routes": []})
+        self.assertEqual(self.config()["picker"], {"routes": [], "models": {}})
+
+    def test_picker_models_are_carried_forward_and_validated(self):
+        self.write("--picker-models",
+                   "codex=gpt-5.6/high, codex=gpt-5.6/medium, personal=opus/high")
+        self.assertEqual(self.config()["picker"]["models"],
+                         {"codex": ["gpt-5.6/high", "gpt-5.6/medium"],
+                          "secondary": ["opus/high"]})
+        self.write()
+        self.assertEqual(self.config()["picker"]["models"],
+                         {"codex": ["gpt-5.6/high", "gpt-5.6/medium"],
+                          "secondary": ["opus/high"]})
+        text = self.write("--picker-models", "grok=default")
+        self.assertEqual(self.config()["picker"]["models"], {"grok": ["default"]})
+        self.assertIn("picker models", text)
+        for bad in ("opus/high", "banana=opus/high", "codex=a/b/c"):
+            with self.assertRaises(SystemExit, msg=bad):
+                self.write("--picker-models", bad)
 
     def test_a_first_write_still_takes_the_documented_defaults(self):
         self.write()
