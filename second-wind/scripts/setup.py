@@ -98,7 +98,9 @@ def in_temp_home():
     """A test run points SW_HOME at a temporary directory. Do not touch the
     real launchd domain in that case."""
     real = os.path.realpath(sw_home())
-    return real.startswith("/tmp/") or real.startswith("/private/tmp/")
+    roots = ["/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/",
+             os.path.realpath(tempfile.gettempdir()).rstrip("/") + "/"]
+    return any(real.startswith(root) for root in roots)
 
 
 def settings_path(config_dir):

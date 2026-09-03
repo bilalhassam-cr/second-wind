@@ -138,16 +138,24 @@ def read_screen(cwd, budget):
         chance = left(35)
         if chance is None:
             return "budget: the MCP servers", screen.text
-        screen.wait_for(present=[PROMPT], absent=[STARTING], quiet=1.2,
-                        timeout=chance)
-        stop = type_when_clear(b"/status")
-        if stop:
-            return stop, screen.text
-        chance = left(10)
-        if chance is None:
-            return "budget: the completion list", screen.text
-        if not screen.wait_for(present=[MENU], timeout=chance):
-            return "no panel", screen.text
+        # A server that fails to start leaves "MCP startup incomplete" on
+        # screen for good, so the gate is the screen going quiet, not the
+        # startup line disappearing. One retry after Escape covers a swallowed
+        # first attempt.
+        screen.wait_for(present=[PROMPT], quiet=2.5, timeout=chance)
+        for attempt in (1, 2):
+            stop = type_when_clear(b"/status")
+            if stop:
+                return stop, screen.text
+            chance = left(10)
+            if chance is None:
+                return "budget: the completion list", screen.text
+            if screen.wait_for(present=[MENU], timeout=chance):
+                break
+            if attempt == 2:
+                return "no panel", screen.text
+            screen.send(b"\x1b")
+            screen.wait_for(present=[PROMPT], quiet=2.0, timeout=left(8) or 1)
         stop = type_when_clear(b"\r")
         if stop:
             return stop, screen.text
