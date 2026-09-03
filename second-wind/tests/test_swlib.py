@@ -593,6 +593,11 @@ class SetupDecisions(Base):
             "echo usage-guard",
             "",
             None,
+            # Somebody else's script that happens to sit under a path with our
+            # name in it, or to be named after us. A substring rule claimed both.
+            "~/notes/second-wind-notes.sh",
+            "/x/second-wind/scripts/my-own-thing.py",
+            "python3 ~/second-wind/tools/export.py",
         ]
         for command in ours:
             self.assertTrue(sw_setup.is_ours(command), command)
@@ -614,6 +619,26 @@ class SetupDecisions(Base):
         self.assertEqual(len(hooks["UserPromptSubmit"]), 1)
         self.assertEqual(hooks["UserPromptSubmit"][0]["hooks"][0]["command"],
                          "/opt/other/my-hook.sh")
+
+    def test_an_unrelated_hook_named_after_us_survives_uninstall(self):
+        # The uninstall path is merge_settings with no events and no status
+        # line. A hook that merely lives near us, or borrows the name, is the
+        # user's and has to come out the other side untouched.
+        folder = os.path.join(self.home, "profile-keep")
+        os.makedirs(folder, exist_ok=True)
+        mine = sw_setup.hook_command("UserPromptSubmit")
+        theirs = os.path.join(self.home, "notes", "second-wind-notes.sh")
+        swlib.write_json_atomic(
+            os.path.join(folder, "settings.json"),
+            {"hooks": {"UserPromptSubmit": [
+                {"hooks": [{"type": "command", "command": mine}]},
+                {"hooks": [{"type": "command", "command": theirs}]},
+            ]}})
+        sw_setup.merge_settings(folder)
+        left = read_json(os.path.join(folder, "settings.json"))["hooks"]
+        commands = [entry["command"] for group in left["UserPromptSubmit"]
+                    for entry in group["hooks"]]
+        self.assertEqual(commands, [theirs])
 
     def test_codex_trust_is_appended_once(self):
         previous_home = sw_setup.HOME

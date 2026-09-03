@@ -2,16 +2,25 @@
 """Parser tests over panels captured from the real clients.
 
 Everything in tests/fixtures is the cleaned text of a panel one of these
-clients actually printed on this project's test machine on 2 September 2026,
-with two substitutions, because fixtures are tracked files in a public repo:
-an email address becomes user@example.com, and the em dash this repo's writing
-rule forbids becomes a hyphen. Nothing else was edited, with one exception,
+clients actually printed on this project's test machine on 2 September 2026.
+Fixtures are tracked files in a public repo, so identifying detail was
+substituted before they were committed: an email address becomes
+user@example.com, a Codex session id becomes a zero UUID, MCP server names
+become mcp_a, mcp_b and so on, a credential prompt naming one service becomes a
+generic one, a time zone name becomes UTC, and the em dash this repo's writing
+rule forbids becomes a hyphen. Layout was preserved through each substitution,
+because the parsers read columns. Nothing else was edited, with one exception,
 named in the file: `codex-0.152.1-five-hour.txt` is the captured panel with a
 five hour limit line added, because the plan on the capture machine shows no
 five hour window at all. That case matters, so both are tested.
 
 The `-trust.txt` fixtures were captured by starting each client in an empty and
-untrusted directory under /tmp. No key was pressed to answer any of them.
+untrusted directory under /tmp. No key was pressed to answer any of them. What
+the trust tests then check is one regex against that saved text: the pattern
+matches the dialog and does not match a normal panel. No client is started
+here, so nothing in this file demonstrates that a live reader stops at a dialog
+rather than typing at it. That behaviour is exercised by hand, and the
+procedure is in TESTING.md.
 """
 import contextlib
 import importlib.util
@@ -61,7 +70,12 @@ def fixture(name):
 
 class CleanTests(unittest.TestCase):
     """The renderer. These clients lay out a panel by moving the cursor, so a
-    reader that only strips escape codes gets `Totalcost:$0.0000`."""
+    reader that only strips escape codes gets `Totalcost:$0.0000`.
+
+    The escape sequences here are written by hand, one behaviour per test, and
+    the one fixture case reads a file that was already cleaned before it was
+    saved. So this is a test of the renderer's rules and of the labels the saved
+    panel carries, not of a raw byte stream coming off a live client."""
 
     def test_cursor_forward_becomes_spaces(self):
         self.assertEqual(ptyreader.clean(b"a\x1b[5Cb"), "a     b")
@@ -96,9 +110,9 @@ class ClaudeTests(unittest.TestCase):
 
     def test_resets_read_as_written(self):
         self.assertEqual(self.data["five_hour_resets"],
-                         "3:19am (Africa/Johannesburg)")
+                         "3:19am (UTC)")
         self.assertEqual(self.data["seven_day_resets"],
-                         "Sep 7 at 2:59am (Africa/Johannesburg)")
+                         "Sep 7 at 2:59am (UTC)")
 
     def test_plan_and_version_from_the_banner(self):
         self.assertEqual(self.data["plan"], "Claude Team")
@@ -213,7 +227,11 @@ class CursorTests(unittest.TestCase):
 
 class BudgetTests(unittest.TestCase):
     """The budget is an upper bound on the whole reading, so a wait started
-    after it has gone is time nobody agreed to spend."""
+    after it has gone is time nobody agreed to spend.
+
+    These call budget_left directly with a deadline and a clock reading. They
+    check that one function's arithmetic, and not that a reading actually stops
+    on time: nothing here starts a reader or waits for anything."""
 
     def test_a_wait_never_outlasts_the_budget(self):
         now = 1000.0

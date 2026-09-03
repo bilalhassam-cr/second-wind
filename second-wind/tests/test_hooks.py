@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Tests for the five hooks and what they say to a session.
 
-Every hook runs here the way Claude Code runs it: as a subprocess, with the
-event JSON on stdin, and with SW_HOME pointing at a fixture directory. Nothing
-touches the real ~/.second-wind.
+Each hook is run as a subprocess with the event JSON on stdin and SW_HOME
+pointing at a fixture directory, which is the shape Claude Code invokes it in.
+Claude Code itself is not in the picture: nothing here proves the harness
+dispatches these hooks on those events, that settings.json wires them up, or
+that a session does anything with what they print. That end of it is checked by
+hand against a real session, and TESTING.md says how. Nothing touches the real
+~/.second-wind.
 
 Two stubs stand in for the outside world, both on PATH or in the staged copy of
 scripts/:

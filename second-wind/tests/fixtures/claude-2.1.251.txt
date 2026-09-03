@@ -74,7 +74,7 @@ Settings  Status     Config   Usage   Stats
 
   ███████████▌                                       23% used
 
-  Resets 3:19am (Africa/Johannesburg)
+  Resets 3:19am (UTC)
 
 
 
@@ -82,7 +82,7 @@ Settings  Status     Config   Usage   Stats
 
   █████████████████▌                                 35% used
 
-  Resets Sep 7 at 2:59am (Africa/Johannesburg)
+  Resets Sep 7 at 2:59am (UTC)
 
   +50% weekly limits promo through Sep 13 · clau.de/cc-50-promo
 
@@ -92,7 +92,7 @@ Settings  Status     Config   Usage   Stats
 
   █████████████████████                              42% used
 
-  Resets Sep 7 at 2:59am (Africa/Johannesburg)
+  Resets Sep 7 at 2:59am (UTC)
 
 
 

@@ -125,19 +125,24 @@ def statusline_command():
 
 def is_ours(command):
     """True for a command second-wind installed, in this version or an older
-    one. Matched on our own basenames and our own hooks directory, never on a
-    substring of the whole entry, so a hook that merely mentions usage stays."""
+    one. Matched on the exact paths this install writes, on our own hook
+    basenames inside a directory called hooks, and on the basenames older
+    versions used. Never on a substring: a rule that removed any .py or .sh
+    living under a path containing "second-wind" also removed somebody's own
+    second-wind-notes.sh, and uninstall is not the place to guess."""
     if not isinstance(command, str) or not command.strip():
         return False
+    ours = {statusline_command()}
+    ours.update(hook_command(event) for event in HOOK_FILES)
     # scan every token, because an entry may name an interpreter first
     for token in command.split():
+        if token in ours:
+            return True
         base = os.path.basename(token)
         parent = os.path.basename(os.path.dirname(token))
         if base in LEGACY_BASENAMES:
             return True
         if parent == "hooks" and base in HOOK_BASENAMES:
-            return True
-        if "second-wind" in token and (base.endswith(".py") or base.endswith(".sh")):
             return True
     return False
 
@@ -1146,9 +1151,19 @@ def build_parser():
                          "usage, so a background reader never shares the desktop "
                          "app's credential")
     ap.add_argument("--level", choices=sorted(LEVELS))
-    ap.add_argument("--codex", choices=["auto", "on", "off"], default="auto")
-    ap.add_argument("--grok", choices=["auto", "on", "off"], default="auto")
-    ap.add_argument("--cursor", choices=["auto", "on", "off"], default="auto")
+    # Each worker is off unless it is asked for by name. The old default was
+    # auto, which enabled anything installed and signed in, so a config written
+    # for one worker quietly turned on two more and spent subscriptions nobody
+    # had mentioned. auto is still accepted, because the wizard offers it and
+    # someone may want it, but it has to be typed.
+    worker_help = ("on to use it, off to leave it out, auto to use it when it "
+                   "is installed and signed in (default off)")
+    ap.add_argument("--codex", choices=["auto", "on", "off"], default="off",
+                    help=worker_help)
+    ap.add_argument("--grok", choices=["auto", "on", "off"], default="off",
+                    help=worker_help)
+    ap.add_argument("--cursor", choices=["auto", "on", "off"], default="off",
+                    help=worker_help)
     # These five default to None so --write can tell "not passed" from "passed
     # the same value as last time", and carry the previous config forward.
     ap.add_argument("--five-hour", type=int, default=None)

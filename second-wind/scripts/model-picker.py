@@ -4,8 +4,12 @@
 Claude Code can show a description under each model in the picker. When
 `refresh.model_picker` is on, second-wind writes one row per alias with the
 current usage in the description, so the figures are visible at the moment a
-model is chosen. When it is off, the key is removed again, and only ever the
-key second-wind marked as its own.
+model is chosen.
+
+Turning the setting off only stops the refresh rewriting the rows. Removing a key
+that is already there is a separate act: `--off` here, or `setup.py --write
+--model-picker off`, or `--uninstall`. Each of them removes only a key
+second-wind marked as its own.
 
 Nothing else in settings.json is touched: the file is read, one key is changed,
 and it is written back through a temp file in the same directory. The first

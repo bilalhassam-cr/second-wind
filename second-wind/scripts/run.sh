@@ -37,30 +37,35 @@ is_int() { case "${1:-}" in ''|*[!0-9]*) return 1;; *) return 0;; esac; }
 # API key left in the environment makes the client bill that key instead,
 # quietly, and the delegation then costs money nobody meant to spend. Codex is
 # the sharpest case: its CLI prefers OPENAI_API_KEY over the ChatGPT login when
-# the variable is set. One list in one place, because three lists in three
-# branches is how one of them goes stale.
+# the variable is set.
 #
-# Cursor is the exception. It has two sign-ins and an API key is one of them, so
-# clearing the key unconditionally broke every API-key delegation. The key is
-# kept when the config records that sign-in, and when the config says nothing at
-# all, because an unrecorded auth is more likely an old config than a bill.
+# Every worker gets the whole list cleared, not just its own vendor's key. A key
+# for another vendor is no safer: an agent that can run commands can read the
+# environment it was handed, and a key it has no business seeing is a key that
+# can leave with it. One list in one place, because six lists in four branches
+# is how one of them goes stale.
+#
+# Cursor is the one exception, and only for its own key. It has two sign-ins and
+# an API key is one of them, so clearing the key unconditionally broke every
+# API-key delegation. The key is kept when the config records that sign-in, and
+# when the config says nothing at all, because an unrecorded auth is more likely
+# an old config than a bill.
+VENDOR_KEYS="ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY XAI_API_KEY CURSOR_API_KEY"
 creds_cleared=""
 creds_kept=""
 isolate_credentials() {
   creds_kept=""
-  case "$1" in
-    secondary) creds_cleared="ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN" ;;
-    codex)     creds_cleared="OPENAI_API_KEY" ;;
-    grok)      creds_cleared="XAI_API_KEY" ;;
-    cursor)
-      case "$(cfg '.cursor.auth')" in
-        api_key|"") creds_cleared=""; creds_kept="CURSOR_API_KEY" ;;
-        *)          creds_cleared="CURSOR_API_KEY" ;;
-      esac
-      ;;
-    *)         creds_cleared="" ;;
-  esac
-  for name in $creds_cleared; do unset "$name"; done
+  if [ "$1" = cursor ]; then
+    case "$(cfg '.cursor.auth')" in
+      api_key|"") creds_kept="CURSOR_API_KEY" ;;
+    esac
+  fi
+  creds_cleared=""
+  for name in $VENDOR_KEYS; do
+    case " $creds_kept " in *" $name "*) continue ;; esac
+    creds_cleared="${creds_cleared:+$creds_cleared }$name"
+    unset "$name"
+  done
 }
 
 mode=$(cfg '.defaults.mode'); [ -n "$mode" ] || mode=review
@@ -316,8 +321,9 @@ is_int "$reply_bytes" || reply_bytes=0
   printf -- '- Model: %s\n' "${model:-default}"
   printf -- '- Effort: %s\n' "${effort:-default}"
   printf -- '- Browser guard applied: %s\n' "$([ -n "$guard" ] && echo yes || echo no)"
-  printf -- '- Credentials isolated: %s%s\n' "${creds_cleared:-none}" \
-    "$([ -n "$creds_kept" ] && echo " (kept $creds_kept, it is this worker's sign-in)")"
+  printf -- '- Credentials cleared: %s\n' "${creds_cleared:-none}"
+  printf -- '- Credentials kept: %s\n' \
+    "$([ -n "$creds_kept" ] && echo "$creds_kept, this worker's own sign-in" || echo none)"
   printf -- '- Exit code: %s%s\n\n' "$rc" "$([ "$rc" = 124 ] && echo ' (killed on timeout)')"
   printf '## Prompt sent\n\n```\n'; cat "$sendfile"; printf '\n```\n\n'
   printf '## Reply\n\n'; cat "$bodyf"

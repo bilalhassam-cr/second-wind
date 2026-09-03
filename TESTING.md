@@ -111,8 +111,11 @@ your home directory with `~`. It does **not** redact project or directory names,
 and those 40 lines are whatever the worker said, so **read the file before you
 send it**.
 
-Exchanges are capped at 200 KB each and deleted after 30 days; the ledger line
-survives, so an old month still says what was delegated.
+Exchanges are capped at 200 KB each. Old ones are deleted at the end of the next
+delegation, not on a clock: the runner prunes anything older than 30 days as it
+finishes, so a machine that has delegated nothing for months still holds every
+exchange it had. The ledger line survives the prune, so an old month still says
+what was delegated.
 
 Send that file, plus anything you learned that is not already in the
 documentation, under these headings:

@@ -6,7 +6,7 @@ Prints JSON on stdout and changes nothing, and it starts no model prompt.
 It reports rather than decides on purpose: which account should be primary is a
 judgement about how someone works, not something a script can infer.
 """
-import base64, json, os, shutil, subprocess, sys, glob
+import json, os, re, shutil, subprocess, sys, glob
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import swlib
@@ -95,16 +95,17 @@ def codex_info():
         return {"installed": False}
     # codex writes its login status to stderr, not stdout
     status = run([b, "login", "status"], want_stderr=True).splitlines()
+    # Whatever the status text volunteers, and nothing more. Reading
+    # ~/.codex/auth.json to decode the id_token would be opening a credential
+    # store to learn a label, which is a line this repository does not cross.
+    # Some versions print the account and some print only the sign-in kind, so
+    # "unknown" is a normal answer here rather than a fault.
     acct = ""
-    try:
-        with open(os.path.join(HOME, ".codex", "auth.json")) as fh:
-            tok = (json.load(fh).get("tokens") or {}).get("id_token", "")
-        payload = tok.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        claims = json.loads(base64.urlsafe_b64decode(payload))
-        acct = claims.get("email", "")
-    except Exception:
-        pass
+    for line in status:
+        found = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", line)
+        if found:
+            acct = found.group(0)
+            break
     return {
         "installed": True,
         "bin": b,

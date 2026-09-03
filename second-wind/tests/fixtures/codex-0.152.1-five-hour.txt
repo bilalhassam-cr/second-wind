@@ -118,7 +118,7 @@ gpt-5.6-sol default · ~/projects/example
 
 
  
-• Starting MCP servers (1/7): codex_apps, composio, github, … (0s • esc to interrupt)
+• Starting MCP servers (1/7): mcp_a, mcp_b, mcp_c, … (0s • esc to interrupt)
  
  
 › Ask Codex to do anything
@@ -227,14 +227,14 @@ ers
 
 
 
-⚠ GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and
+⚠ An MCP server needs a token. Add one to your environment and to your
   config.toml:
-  [mcp_servers.github]
-  bearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN
+  [mcp_servers.mcp_c]
+  bearer_token_env_var = CODEX_MCP_C_TOKEN
 
 ser
 s (3
-mcp-image, … (0s • esc
+mcp_d, … (0s • esc
 to interrupt)
 
  
@@ -765,7 +765,7 @@ g
 
 
 
-⚠ MCP startup incomplete (failed: github)
+⚠ MCP startup incomplete (failed: mcp_c)
 
 
 
@@ -814,7 +814,7 @@ g
 │  Agents.md:            <none>                                                  │
 │  Account:              user@example.com (Business Premium)                  │
 │  Collaboration mode:   Default                                                 │
-│  Session:              01a063fa-1d04-7343-8302-171909ecfeb8                    │
+│  Session:              00000000-0000-4000-8000-000000000000                    │
 │                                                                                │
 │  5h limit:              [░░░░░░░░░░░░░░░░░░░░] 100% left (resets 14:00)
   Weekly limit:         [█████████████████░░░] 87% left (resets 18:00 on 8 Sep) │

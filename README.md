@@ -32,14 +32,18 @@ account did it.
 
 ## The three levels
 
-| Level | Default mode | Automatic handover | What it installs |
+| Level | Default mode | Handover prompt | What it installs |
 |---|---|---|---|
 | `reviewer` | review | off | the session brief |
 | `worker` | work | off | the brief, plus hooks that notice a limit and refresh the readings |
-| `relief` | work | on | the above, plus the prompt guard that hands over at a task boundary |
+| `relief` | work | on | the above, plus the prompt guard that asks for a handover at a task boundary |
 
-Handover at level relief announces itself in one line and happens between tasks,
-never part-way through a job. If you say keep the work here, it stays here.
+Handover is advice, not automation. At level relief the guard adds one line to
+the session saying the primary is low and that the next task should go to another
+account. Acting on it is the session's decision and yours: nothing in
+second-wind dispatches a delegation by itself, and the line arrives between
+tasks, never part-way through a job. If you say keep the work here, it stays
+here.
 
 ## Requirements
 
@@ -93,14 +97,21 @@ one missing command at a time. To do it by hand:
 SW=~/.claude/skills/second-wind
 python3 $SW/scripts/setup.py --detect
 python3 $SW/scripts/setup.py --write --level relief \
-  --primary ~/.claude --secondary ~/.claude-secondary --codex on
+  --primary ~/.claude --secondary ~/.claude-secondary \
+  --codex on --grok off --cursor off
 python3 $SW/scripts/setup.py --check
 python3 $SW/scripts/setup.py --accounts
 ```
 
+Name every worker. A worker flag left out is off, so nothing gets enabled just
+because it happens to be installed and signed in.
+
 Create the second profile before running setup: it is one directory and one
-sign-in, described in `second-wind/references/setup.md`. Setup refuses to write a
-config for a profile that does not exist or is not signed in.
+sign-in, described in `second-wind/references/setup.md`. A primary that does not
+report a terminal login is a warning, because the desktop app can be signed in
+while the CLI check says otherwise. A secondary or reader that is not signed in
+is a refusal unless you pass `--force`, and a profile directory that does not
+exist is always a refusal.
 
 `--write` also creates `~/.second-wind/workdir`, an empty directory the usage
 readers run in, and marks it trusted in each Claude profile and in the Codex

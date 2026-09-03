@@ -108,10 +108,18 @@ of each model row. It needs `replaceBuiltInOptions: true`, so the rows shown are
 the four aliases second-wind writes and not the built-in list. The key carries a
 `_second_wind` marker, and setup and uninstall only ever remove a key carrying it.
 
-To turn it off, run `--write` again with `--model-picker off`, then
-`python3 scripts/model-picker.py --off` to take the rows out now. The setting
-alone only stops the refresh rewriting them; the key it already wrote stays until
-that command or `--uninstall` removes it.
+It is an experiment because of what it costs: a background job rewriting a file
+Claude Code owns. The refresh reads the key first and writes only when a figure
+has actually moved, so an idle machine sees no writes at all, but if Claude Code
+saves `settings.json` at the same moment as a refresh, one of the two writes is
+lost. Turn it on if you want to try it, and leave it off if that trade is not
+one you want on your settings file.
+
+To turn it off, run `--write` again with `--model-picker off`. That records the
+setting, which stops the refresh rewriting the rows, and takes out a `modelPicker`
+key carrying our marker in the same pass. `python3 scripts/model-picker.py --off`
+does the removal on its own if you would rather not rewrite the config, and
+`--uninstall` removes it too.
 
 ## Codex
 
@@ -120,7 +128,10 @@ with `npm i -g @openai/codex`; if you already use Codex in the ChatGPT desktop a
 the CLI reads that same sign-in and needs no separate login.
 
 Sign in with `codex login` and verify with `codex login status`, which writes to
-stderr. `codex doctor` is the fast health check.
+stderr. `codex doctor` is the fast health check. Setup records the Codex account
+only when that status text names it; otherwise it records `unknown`. It will not
+open `~/.codex/auth.json` to find out, because that file holds a token, and this
+repository does not read tokens to fill in a label.
 
 Codex 0.152.1 shows a directory-trust modal on launch in an unknown directory, and
 on a trusted one it spends ten to forty seconds starting MCP servers before it

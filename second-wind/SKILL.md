@@ -116,9 +116,13 @@ drops Write, Edit and Bash. Cursor adds `--mode ask`; `--trust` alone is not
 read-only and wrote a file in live testing. Use review mode to have work
 challenged, and whenever you are still editing the same files.
 
-**`--work` is full access** in the current directory, the same as you. Use it to
-build or fix something, and when the point is to spend the other allowance. The
-config sets the default mode. Say which mode you used when reporting back.
+**`--work` gives the worker read and write access** to the current directory. A
+Claude, Grok or Cursor worker runs with the same reach you have. A Codex worker
+does not: work mode passes `--approve-for-me`, which puts it in the
+workspace-write sandbox, so it edits files in the directory but cannot write
+outside it and cannot launch a browser. Use work mode to build or fix something,
+and when the point is to spend the other allowance. The config sets the default
+mode. Say which mode you used when reporting back.
 
 **Writing the prompt.** The worker starts blind. Put the question, the relevant
 file contents, the constraint that matters and what finished looks like into the
@@ -169,10 +173,12 @@ At every level a SessionStart hook puts one line per account in front of the
 session: the windows, their age, and any reader fault. The desktop app runs no
 status line, so the brief is the only surface there.
 
-At level relief the guard adds a line when the primary crosses its thresholds. It
-fires **at a task boundary**, never part-way through a job already running. It
-**says so in one line** before doing it, so the user knows which account did the
-work. If the user says keep it here, keep it here.
+At level relief the guard adds a line when the primary crosses its thresholds.
+The line is a request, not a dispatch: it asks this session to send the next task
+to another account, and the session has to act on it. It arrives **at a task
+boundary**, never part-way through a job already running. Say in one line that
+you are handing over and which account is taking it, so the user can stop you. If
+the user says keep it here, keep it here.
 
 Writing `secondary`, `codex`, `grok`, `cursor`, `both` or `all` to
 `~/.second-wind/mode` forces routing whatever the figures say, and
