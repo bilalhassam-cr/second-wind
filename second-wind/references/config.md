@@ -87,6 +87,9 @@ On-demand availability is context and does not override those pools. Unknown sor
 ~/.second-wind/
 ├── config.json                the settings above
 ├── workdir/                   empty, pre-trusted, where every reader starts
+├── runtime/                   the refresh script, swlib, the readers and the
+│                              picker, mirrored here because a launchd agent
+│                              cannot read a skill kept under ~/Documents
 ├── usage-primary.json         last primary reading
 ├── usage-secondary.json       last secondary reading
 ├── usage-codex.json           last Codex status-panel reading
@@ -119,7 +122,7 @@ added. `--check` reads the trust store back for every Claude profile and for Cod
 discovered by a reader sitting on a modal.
 
 `--uninstall` removes our hooks, our status line, our `modelPicker` key, the routing
-override at `~/.second-wind/mode` and the launchd agent, restores a status line it
+override at `~/.second-wind/mode`, the runtime mirror and the launchd agent, restores a status line it
 replaced, and leaves accounts and logins alone. It leaves
 the workdir trust entries in place, because removing them means editing files a running
 client may be writing, and it prints where to delete them by hand.

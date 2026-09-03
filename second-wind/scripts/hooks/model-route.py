@@ -27,17 +27,19 @@ def block(reason):
     return 0
 
 
-def route_of(payload, cfg):
-    """The route this request names, or None.
+def target_of(payload):
+    """What this request actually names, or None when it names nothing.
 
-    Both fields are read: `to_model` is what the matcher saw, `requested_model`
-    is what the person typed, and on a target Claude Code cannot canonicalise
-    the two do not have to agree.
+    `requested_model` is what the person typed or picked, so it decides.
+    `to_model` is what the matcher canonicalised, which on one of our ids it
+    cannot do, so it is the fallback for the case where the field is absent.
+    Taking the first route found in either field meant a real switch was blocked
+    whenever a routing id happened to sit in the other one.
     """
-    for key in ("to_model", "requested_model"):
-        found = swlib.parse_route(payload.get(key), cfg)
-        if found:
-            return found
+    for key in ("requested_model", "to_model"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return None
 
 
@@ -45,17 +47,23 @@ def main():
     try:
         raw = sys.stdin.read()
     except Exception:
-        raw = ""
+        return 0
     try:
-        payload = json.loads(raw) if raw.strip() else {}
+        payload = json.loads(raw) if raw.strip() else None
     except Exception:
-        payload = {}
+        payload = None
     if not isinstance(payload, dict):
-        payload = {}
+        return 0
+    # Nothing named means nothing was chosen. Treating that as a real-model
+    # selection deleted an active mode file on any malformed event, so an event
+    # we cannot read leaves everything exactly as it was.
+    target = target_of(payload)
+    if target is None:
+        return 0
 
     cfg = swlib.load_config()
     mode = os.path.join(swlib.sw_home(), "mode")
-    route = route_of(payload, cfg)
+    route = swlib.parse_route(target, cfg)
 
     if not route:
         if not os.path.exists(mode):

@@ -453,6 +453,27 @@ class PromptGuard(Base):
         text = self.context(self.prompt(), "UserPromptSubmit").replace("\n", " ")
         self.assertIn("routing the heavy work to Grok Build", text)
 
+    def test_the_mode_file_takes_every_spelling_of_a_worker(self):
+        # The guard reads the mode file with the same parser the routing hook
+        # writes it with, so a picker id, a bare alias and the config's own role
+        # name all mean the same account.
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        for contents in ("personal\n", "second-wind/personal\n", "secondary\n",
+                         json.dumps({"worker": "personal"})):
+            self.touch("mode", contents)
+            text = self.context(self.prompt(), "UserPromptSubmit").replace("\n", " ")
+            self.assertIn("routing the heavy work to spare Claude", text, contents)
+
+    def test_a_bare_routing_id_can_carry_a_model_and_an_effort(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.touch("mode", "second-wind/codex/gpt-5.6/high\n")
+        text = self.context(self.prompt(), "UserPromptSubmit").replace("\n", " ")
+        self.assertIn("routing the heavy work to Codex", text)
+        self.assertIn("passing --model gpt-5.6 and --effort high to the runner",
+                      text)
+
     def test_a_malformed_mode_file_is_silent(self):
         self.write_config()
         self.write_usage("primary", five=2, week=3, age=60)
@@ -664,9 +685,35 @@ class ModelRoute(Base):
         self.assertIn("route to spare Claude", reason)
         self.assertEqual(self.mode()["worker"], "secondary")
 
-    def test_the_requested_model_is_read_as_well_as_the_target(self):
+    def test_what_the_person_asked_for_decides(self):
+        # requested_model is what was typed or picked. to_model is whatever
+        # Claude Code managed to canonicalise, which on one of our ids is
+        # nothing useful, so it does not get a vote when the other field is set.
         self.write_config()
         self.blocked(self.switch("claude-haiku-4-5", requested="second-wind/codex"))
+        self.assertEqual(self.mode()["worker"], "codex")
+
+    def test_a_routing_id_in_the_other_field_never_blocks_a_real_switch(self):
+        self.write_config()
+        self.blocked(self.switch("second-wind/personal"))
+        out = self.switch("second-wind/codex", requested="claude-opus-5")
+        self.assertNotIn("block", out)
+        self.assertIn("routing off", out)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+
+    def test_the_target_is_read_when_nothing_was_requested(self):
+        self.write_config()
+        out = self.run_hook("model-route.py", {
+            "hook_event_name": "PreModelSwitch", "to_model": "second-wind/grok",
+            "source": "picker"})
+        self.assertIn("that worker is not connected", self.blocked(out))
+
+    def test_an_event_naming_nothing_leaves_an_active_override_alone(self):
+        self.write_config()
+        self.blocked(self.switch("second-wind/codex"))
+        out = self.run_hook("model-route.py", {
+            "hook_event_name": "PreModelSwitch", "source": "picker"})
+        self.assertEqual(out.strip(), "")
         self.assertEqual(self.mode()["worker"], "codex")
 
     def test_a_worker_that_is_not_connected_is_refused_and_writes_nothing(self):
@@ -705,19 +752,32 @@ class ModelRoute(Base):
             self.assertFalse(os.path.exists(os.path.join(self.home, "mode")),
                              contents)
 
-    def test_rubbish_on_stdin_is_silent(self):
-        self.write_config()
+    def raw_switch(self, raw):
         path = os.path.join(STAGE, "scripts", "hooks", "model-route.py")
         environment = dict(os.environ)
         environment["SW_HOME"] = self.home
         environment["CLAUDE_CONFIG_DIR"] = self.primary_dir
+        return subprocess.run([path], input=raw, text=True, capture_output=True,
+                              timeout=20, env=environment)
+
+    def test_rubbish_on_stdin_is_silent(self):
+        self.write_config()
         for raw in ("", "not json", "[]", "null"):
-            done = subprocess.run([path], input=raw, text=True,
-                                  capture_output=True, timeout=20,
-                                  env=environment)
+            done = self.raw_switch(raw)
             self.assertEqual(done.returncode, 0, raw)
             self.assertEqual(done.stdout.strip(), "", raw)
             self.assertEqual(done.stderr, "", raw)
+
+    def test_rubbish_on_stdin_leaves_an_active_override_alone(self):
+        # Unreadable input is not somebody choosing a real model, and treating
+        # it as one turned every malformed event into "routing off".
+        self.write_config()
+        self.blocked(self.switch("second-wind/codex"))
+        for raw in ("", "not json", "[]", "null", "{}"):
+            done = self.raw_switch(raw)
+            self.assertEqual(done.returncode, 0, raw)
+            self.assertEqual(done.stdout.strip(), "", raw)
+            self.assertEqual(self.mode()["worker"], "codex", raw)
 
     def test_it_comes_back_quickly(self):
         self.write_config()

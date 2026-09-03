@@ -9,9 +9,9 @@
 #                         what the launchd timer passes
 #
 # Each reader writes its own cache and its own one-line status file. This script
-# owns three things only: the lock, which roles are due, and catching a reader
-# that died without saying why. Which roles are due comes from swlib, so the
-# staleness rule lives in one place.
+# owns four things only: the runtime mirror the scheduled agent runs from, the
+# lock, which roles are due, and catching a reader that died without saying why.
+# Which roles are due comes from swlib, so the staleness rule lives in one place.
 set -u
 umask 077
 
@@ -42,6 +42,16 @@ while [ $# -gt 0 ]; do
 done
 
 [ -f "$CFG" ] || exit 0
+
+# The scheduled agent runs the copy in $SW_HOME/runtime, because a LaunchAgent
+# has no permission to read ~/Documents and dies on the skill folder itself.
+# Every other caller runs the skill copy and refreshes that mirror here. Nothing
+# below reads the skill directory: every path resolves against $HERE, so the
+# mirrored copy never reaches back into a folder it cannot open.
+RUNTIME=$(CDPATH= cd "$SW_HOME/runtime" 2>/dev/null && pwd)
+if [ "$HERE" != "$RUNTIME" ]; then
+  python3 "$HERE/swlib.py" --sync-runtime "$(dirname "$HERE")" >/dev/null 2>&1 || true
+fi
 
 if [ "$if_running" = true ]; then
   pgrep -x claude >/dev/null 2>&1 || pgrep -x Claude >/dev/null 2>&1 || exit 0

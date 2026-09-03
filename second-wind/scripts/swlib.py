@@ -298,6 +298,91 @@ def backup_once(path):
     return made_original, stamped
 
 
+# ---------------------------------------------------------------- runtime mirror
+
+# A LaunchAgent has no permission for ~/Documents, ~/Desktop or ~/Downloads, so
+# it cannot read a skill installed in one of them and every scheduled refresh
+# dies with "Operation not permitted" before its first line. Hooks are fine:
+# they run inside Claude Code, which does have that permission. So the scheduled
+# refresh runs from a mirror inside SW_HOME, and these are the files it needs.
+# scripts/hooks/ is deliberately not mirrored.
+RUNTIME_FILES = (
+    "usage-refresh.sh",
+    "swlib.py",
+    "ptyreader.py",
+    "claude-usage.py",
+    "codex-status.py",
+    "grok-usage.py",
+    "cursor-usage.py",
+    "model-picker.py",
+)
+
+
+def runtime_dir():
+    return os.path.join(sw_home(), "runtime")
+
+
+def _runtime_source(skill_dir):
+    """The folder to mirror from. Accepts the skill root or the scripts folder
+    itself, because setup passes one and usage-refresh.sh passes the other."""
+    folder = expand(skill_dir or "")
+    if not folder:
+        return ""
+    inner = os.path.join(folder, "scripts")
+    return inner if os.path.isdir(inner) else folder
+
+
+def sync_runtime(skill_dir):
+    """Mirror the scheduled-refresh files into ~/.second-wind/runtime.
+
+    A file is copied only when the mirror is missing it, or the source is newer,
+    or the sizes differ. The executable bit is preserved. Nothing in the mirror
+    that this list does not name is ever deleted, and the source is only ever
+    read. Returns ``{dir, copied, skipped, missing}``.
+    """
+    source = _runtime_source(skill_dir)
+    target = runtime_dir()
+    os.makedirs(target, exist_ok=True)
+    os.chmod(target, 0o700)
+    result = {"dir": target, "copied": [], "skipped": [], "missing": []}
+    if not source or not os.path.isdir(source):
+        result["missing"] = list(RUNTIME_FILES)
+        return result
+    for name in RUNTIME_FILES:
+        src = os.path.join(source, name)
+        dst = os.path.join(target, name)
+        try:
+            src_stat = os.stat(src)
+        except OSError:
+            result["missing"].append(name)
+            continue
+        try:
+            dst_stat = os.stat(dst)
+        except OSError:
+            dst_stat = None
+        if (dst_stat is not None and dst_stat.st_size == src_stat.st_size
+                and int(src_stat.st_mtime) <= int(dst_stat.st_mtime)):
+            result["skipped"].append(name)
+            continue
+        handle, tmp = tempfile.mkstemp(dir=target, prefix=".second-wind-",
+                                       suffix=".tmp")
+        os.close(handle)
+        try:
+            shutil.copyfile(src, tmp)
+            # mode and times together: the mode carries the executable bit, and
+            # the mtime is what makes the next sync skip this file.
+            shutil.copystat(src, tmp)
+            os.replace(tmp, dst)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        result["copied"].append(name)
+    return result
+
+
 # ---------------------------------------------------------------- usage cache
 
 
@@ -629,3 +714,25 @@ def client_versions():
 
 def has_jq():
     return shutil.which("jq") is not None
+
+
+# ---------------------------------------------------------------- command line
+
+
+def _main(argv):
+    """One job only: usage-refresh.sh calls this to keep the runtime mirror
+    current when it is running from the skill folder."""
+    if len(argv) == 3 and argv[1] == "--sync-runtime":
+        try:
+            sync_runtime(argv[2])
+        except Exception as problem:
+            sys.stderr.write("swlib: could not mirror the runtime files: %s\n"
+                             % problem)
+            return 1
+        return 0
+    sys.stderr.write("usage: swlib.py --sync-runtime <skill directory>\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv))

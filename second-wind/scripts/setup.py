@@ -9,6 +9,7 @@ backwards silently sends their main work to the wrong subscription.
   setup.py --detect
   setup.py --write --primary ~/.claude --secondary ~/.claude-secondary
       --level reviewer|worker|relief [--reader ~/.claude-usage]
+      [--primary-label TEXT] [--secondary-label TEXT]
       [--codex on|off] [--grok on|off] [--cursor on|off]
       [--five-hour N] [--seven-day N] [--refresh-minutes N]
       [--model-picker on|off] [--picker-routes id,id] [--no-launchd]
@@ -367,6 +368,14 @@ def codex_trusted(folder):
 # ---------------------------------------------------------------- launchd
 
 
+def runtime_refresh_script():
+    """What the scheduled agent runs. Never the skill folder: a LaunchAgent has
+    no permission for ~/Documents, ~/Desktop or ~/Downloads, and a skill
+    installed in one of those fails with "Operation not permitted" on every
+    scheduled run. swlib.sync_runtime keeps this copy current."""
+    return os.path.join(swlib.runtime_dir(), "usage-refresh.sh")
+
+
 def launchd_plist(interval_seconds):
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
            "HOME": HOME}
@@ -374,7 +383,7 @@ def launchd_plist(interval_seconds):
         env["SW_HOME"] = os.environ["SW_HOME"]
     return {
         "Label": LAUNCHD_LABEL,
-        "ProgramArguments": ["/bin/sh", os.path.join(HERE, "usage-refresh.sh"),
+        "ProgramArguments": ["/bin/sh", runtime_refresh_script(),
                              "--if-claude-running"],
         "StartInterval": int(interval_seconds),
         "RunAtLoad": False,
@@ -388,8 +397,8 @@ def launchd_install(interval_seconds):
     if sys.platform != "darwin":
         minutes = max(1, int(interval_seconds) // 60)
         return ("no launchd on this platform. Add this cron line instead:\n"
-                "  */%d * * * * %s --if-claude-running"
-                % (minutes, os.path.join(HERE, "usage-refresh.sh")))
+                "  */%d * * * * /bin/sh %s --if-claude-running"
+                % (minutes, runtime_refresh_script()))
     os.makedirs(os.path.dirname(LAUNCHD_PLIST), exist_ok=True)
     os.makedirs(os.path.join(sw_home(), "log"), exist_ok=True)
     handle, tmp = tempfile.mkstemp(dir=os.path.dirname(LAUNCHD_PLIST),
@@ -495,6 +504,14 @@ def cmd_write(a):
         if previous_value is not None and chosen != previous_value:
             settings_changed.append("%s %s to %s" % (label, previous_value, chosen))
 
+    for attr in ("primary_label", "secondary_label"):
+        given = getattr(a, attr)
+        if isinstance(given, str):
+            setattr(a, attr, given.strip() or None)
+    carry("primary_label", (previous.get("primary") or {}).get("label"),
+          "primary", "primary label")
+    carry("secondary_label", (previous.get("secondary") or {}).get("label"),
+          "secondary", "secondary label")
     prev_thresholds = previous.get("thresholds") if isinstance(
         previous.get("thresholds"), dict) else {}
     prev_refresh = previous.get("refresh") if isinstance(
@@ -606,19 +623,22 @@ def cmd_write(a):
     os.chmod(os.path.join(sw_home(), "log"), 0o700)
     os.chmod(folder, 0o700)
 
+    # Before the plist, because the plist names a file in here.
+    mirror = swlib.sync_runtime(os.path.dirname(HERE))
+
     cfg = {
         "version": swlib.CONFIG_VERSION,
         "created": time.strftime("%Y-%m-%d"),
         "level": a.level,
         "primary": {
-            "kind": "claude", "label": "primary",
+            "kind": "claude", "label": a.primary_label,
             "config_dir": tilde(expand(a.primary)),
             "account": prim.get("account", "unknown"),
             "plan": prim.get("subscription") or "unknown",
             "is_default_dir": prim.get("is_default_dir", False),
         },
         "secondary": {
-            "kind": "claude", "label": "secondary",
+            "kind": "claude", "label": a.secondary_label,
             "enabled": bool(a.secondary),
             "config_dir": tilde(expand(a.secondary)) if a.secondary else "",
             "account": sec.get("account", "unknown") if a.secondary else "",
@@ -683,6 +703,10 @@ def cmd_write(a):
                                          cfg["secondary"]["config_dir"]))
     else:
         print("  secondary off")
+    labels = ['primary "%s"' % a.primary_label]
+    if a.secondary:
+        labels.append('secondary "%s"' % a.secondary_label)
+    print("  labels    %s" % ", ".join(labels))
     if a.reader:
         print("  reader    %s   (%s)" % (cfg["reader"]["account"],
                                          cfg["reader"]["config_dir"]))
@@ -739,6 +763,13 @@ def cmd_write(a):
         print("  %s cleared of second-wind entries" % stale_dir)
 
     print("\nBackground refresh:")
+    print("  the scheduled agent runs the copy in %s (%d of %d files mirrored)"
+          % (tilde(mirror["dir"]),
+             len(swlib.RUNTIME_FILES) - len(mirror["missing"]),
+             len(swlib.RUNTIME_FILES)))
+    if mirror["missing"]:
+        print("  ! these files are not in the mirror: %s"
+              % ", ".join(mirror["missing"]))
     if a.no_launchd or in_temp_home():
         print("  skipped. Run %s yourself, or rerun --write without --no-launchd."
               % tilde(os.path.join(HERE, "usage-refresh.sh")))
@@ -1035,6 +1066,43 @@ def cmd_check():
                     "on, no labels written yet (the next refresh writes them)")
 
     print()
+    # Resynced first, then reported: it is a few file stats, and a mirror that
+    # has fallen behind the skill folder is the failure this row exists to catch.
+    # The recorded skill_dir normally, but this file's own folder when that
+    # path has moved on, so a stale config does not report a false STALE.
+    skill = expand(cfg.get("skill_dir") or "")
+    if not os.path.isdir(os.path.join(skill, "scripts")):
+        skill = os.path.dirname(HERE)
+    try:
+        mirror = swlib.sync_runtime(skill)
+    except Exception as problem:
+        mirror = None
+        row("runtime mirror", "STALE: could not be written (%s)" % problem)
+        faults.append("the runtime mirror at %s could not be written, so the "
+                      "scheduled refresh has nothing to run."
+                      % tilde(swlib.runtime_dir()))
+    if mirror is not None:
+        copied = len(mirror["copied"])
+        detail = "present and in sync (%d files)" % len(mirror["skipped"])
+        if copied:
+            detail = ("STALE: %d newer file%s copied in just now"
+                      % (copied, "" if copied == 1 else "s"))
+        if mirror["missing"]:
+            detail = "STALE: not mirrored: %s" % ", ".join(mirror["missing"])
+        row("runtime mirror", detail)
+        if not os.path.exists(runtime_refresh_script()):
+            message = ("the refresh script is missing from %s, so the launchd "
+                       "agent has nothing to run. Rerun --write."
+                       % tilde(swlib.runtime_dir()))
+            if (cfg.get("refresh") or {}).get("launchd"):
+                faults.append(message)
+            else:
+                warnings.append(message)
+        elif mirror["missing"]:
+            warnings.append("these files are not in the runtime mirror: %s. The "
+                            "scheduled refresh will fail on whichever reader "
+                            "needs one." % ", ".join(mirror["missing"]))
+
     if sys.platform == "darwin":
         loaded = launchd_loaded()
         exists = os.path.exists(LAUNCHD_PLIST)
@@ -1058,8 +1126,13 @@ def cmd_check():
         was = tested.get(name, "")
         if not version:
             continue
-        mark = "" if was == version else "  (set up against %s)" % (was or "nothing")
-        row(name + " version", version + mark)
+        if not was:
+            detail = "%s installed, no tested version recorded" % version
+        elif was == version:
+            detail = "%s installed, tested against the same" % version
+        else:
+            detail = "%s installed, tested against %s" % (version, was)
+        row(name + " version", detail)
         if was and was != version:
             warnings.append("%s is %s now, %s when second-wind was set up. If a "
                             "reading stops parsing, that is the first thing to "
@@ -1143,6 +1216,13 @@ def cmd_uninstall():
             print("  routing override %s removed" % tilde(mode))
         except OSError:
             print("  ! could not remove %s. Delete it by hand." % tilde(mode))
+    mirror = swlib.runtime_dir()
+    if os.path.isdir(mirror):
+        try:
+            shutil.rmtree(mirror)
+            print("  runtime mirror %s removed" % tilde(mirror))
+        except OSError:
+            print("  ! could not remove %s. Delete it by hand." % tilde(mirror))
     if in_temp_home():
         print("  launchd left alone: SW_HOME points at a temporary directory")
     else:
@@ -1179,6 +1259,12 @@ def build_parser():
     ap.add_argument("--uninstall", action="store_true")
     ap.add_argument("--primary")
     ap.add_argument("--secondary")
+    ap.add_argument("--primary-label", default=None,
+                    help="what the session brief, the picker rows and the guard "
+                         "call the primary account. Free text. Carried over on a "
+                         "rerun that does not pass it.")
+    ap.add_argument("--secondary-label", default=None,
+                    help="the same for the second Claude account.")
     ap.add_argument("--reader",
                     help="a third Claude profile used only to read the primary's "
                          "usage, so a background reader never shares the desktop "

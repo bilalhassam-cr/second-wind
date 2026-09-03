@@ -170,11 +170,11 @@ keeps the model it has and the next tasks go to that worker instead, through the
 runner. Picking any normal model stops it. With `--model-picker on` these are
 rows in the picker, and `--picker-routes` adds parameterised ones.
 
-The desktop app's picker does not show the rows, so type the id there, or ask in
-chat. Asked in chat, offer an **AskUserQuestion** picker of worker, then model,
-then effort, and write the file yourself: `~/.second-wind/mode` as JSON,
-`{"worker": "codex", "model": "gpt-5.6", "effort": "high"}`, model and effort
-null when they were not chosen. Delete it to stop.
+The desktop picker does not show the rows, so type the id there, or ask in chat.
+Asked in chat, offer an **AskUserQuestion** picker of worker, then model, then
+effort, then write `~/.second-wind/mode` in the shape the hook writes, model and
+effort null when not chosen: `{"worker": "codex", "model": "gpt-5.6", "effort":
+"high", "set_at": <epoch seconds>, "label": "Codex"}`. Delete it to stop.
 
 `references/setup.md`, `references/config.md` and
 `references/troubleshooting.md` carry the rest.

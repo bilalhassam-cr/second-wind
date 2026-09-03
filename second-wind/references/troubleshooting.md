@@ -91,6 +91,26 @@ is running. So an idle machine refreshing nothing is correct behaviour. A refres
 lock older than three minutes is discarded automatically. If the agent is written
 but not loaded, rerun `setup.py --write`.
 
+## The scheduled refresh never runs
+
+`~/.second-wind/log/launchd.err` fills up with one line per attempt:
+
+```
+/bin/sh: /Users/you/Documents/second-wind/scripts/usage-refresh.sh: Operation not permitted
+```
+
+A LaunchAgent has no permission for `~/Documents`, `~/Desktop` or `~/Downloads`,
+so it cannot read a skill installed in one of them, whether directly or through a
+symlink, and the run dies before its first line. Hooks are unaffected: they run
+inside Claude Code, which does have that permission, which is why an on-demand
+refresh works while the scheduled one never has. So setup mirrors the refresh
+script, `swlib`, the four readers and the model picker into
+`~/.second-wind/runtime`, a folder launchd can always read, and points the agent
+there. The mirror is refreshed by `--write`, by `--check`, and by every
+hook-triggered or manual run of the skill copy, so an edited reader reaches the
+schedule on the next refresh. `setup.py --check` shows it as the `runtime mirror`
+row. Granting anything Full Disk Access is not needed and does not fix it.
+
 ## The status bar is blank, or shows no percentages
 
 In a terminal the status line only appears after a Claude Code restart, and the

@@ -9,6 +9,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -853,6 +854,33 @@ class WriteRerun(Base):
         self.assertEqual(self.config()["timeout_seconds"], 900)
         self.assertIn("timeout 2400 to 900", text)
 
+    def test_the_account_labels_survive_a_rerun(self):
+        text = self.write("--primary-label", "Work Claude",
+                          "--secondary-label", "Personal Claude")
+        self.assertIn('primary "Work Claude", secondary "Personal Claude"', text)
+        self.write()
+        cfg = self.config()
+        self.assertEqual(cfg["primary"]["label"], "Work Claude")
+        self.assertEqual(cfg["secondary"]["label"], "Personal Claude")
+        self.assertEqual(swlib.role_label("primary", cfg), "Work Claude")
+        self.assertEqual(swlib.route_label("secondary", cfg), "Personal Claude")
+
+    def test_a_first_write_labels_the_accounts_by_role(self):
+        self.write()
+        cfg = self.config()
+        self.assertEqual(cfg["primary"]["label"], "primary")
+        self.assertEqual(cfg["secondary"]["label"], "secondary")
+
+    def test_a_changed_label_is_reported_and_an_explicit_one_still_wins(self):
+        self.write("--primary-label", "Work Claude")
+        text = self.write("--primary-label", "Day job")
+        self.assertEqual(self.config()["primary"]["label"], "Day job")
+        self.assertIn("primary label Work Claude to Day job", text)
+
+    def test_a_blank_label_falls_back_to_the_role_name(self):
+        self.write("--primary-label", "   ")
+        self.assertEqual(self.config()["primary"]["label"], "primary")
+
     def test_model_picker_off_removes_a_marked_key(self):
         swlib.write_json_atomic(
             os.path.join(self.primary_dir, "settings.json"),
@@ -870,6 +898,229 @@ class WriteRerun(Base):
             os.path.join(self.primary_dir, "settings.json"), {"modelPicker": mine})
         self.write("--model-picker", "off")
         self.assertEqual(self.settings()["modelPicker"], mine)
+
+
+class RuntimeMirror(Base):
+    """The scheduled refresh runs from a mirror inside SW_HOME, because a
+    LaunchAgent cannot read a skill installed under ~/Documents."""
+
+    def setUp(self):
+        super().setUp()
+        self.skill = os.path.join(self.home, "skill")
+        self.scripts = os.path.join(self.skill, "scripts")
+        os.makedirs(os.path.join(self.scripts, "hooks"))
+        for name in swlib.RUNTIME_FILES:
+            self.write_source(name, "# %s\n" % name)
+        os.chmod(os.path.join(self.scripts, "usage-refresh.sh"), 0o755)
+        self.write_source("discover.py", "# not one of the mirrored files\n")
+        self.write_source(os.path.join("hooks", "session-start.py"),
+                          "# hooks run inside the app\n")
+
+    def write_source(self, name, text):
+        path = os.path.join(self.scripts, name)
+        with open(path, "w") as handle:
+            handle.write(text)
+        return path
+
+    def mirrored(self):
+        return sorted(os.listdir(swlib.runtime_dir()))
+
+    def test_the_listed_files_are_copied_and_nothing_else(self):
+        result = swlib.sync_runtime(self.skill)
+        self.assertEqual(sorted(result["copied"]), sorted(swlib.RUNTIME_FILES))
+        self.assertEqual(self.mirrored(), sorted(swlib.RUNTIME_FILES))
+        self.assertNotIn("discover.py", self.mirrored())
+        self.assertNotIn("hooks", self.mirrored())
+
+    def test_the_scripts_folder_can_be_named_directly(self):
+        swlib.sync_runtime(self.scripts)
+        self.assertEqual(self.mirrored(), sorted(swlib.RUNTIME_FILES))
+
+    def test_the_executable_bit_is_preserved_either_way(self):
+        swlib.sync_runtime(self.skill)
+        script = os.path.join(swlib.runtime_dir(), "usage-refresh.sh")
+        library = os.path.join(swlib.runtime_dir(), "swlib.py")
+        self.assertTrue(os.stat(script).st_mode & 0o111)
+        self.assertFalse(os.stat(library).st_mode & 0o111)
+
+    def test_the_mirror_is_private(self):
+        swlib.sync_runtime(self.skill)
+        self.assertEqual(os.stat(swlib.runtime_dir()).st_mode & 0o777, 0o700)
+
+    def test_a_file_already_current_is_not_copied_again(self):
+        swlib.sync_runtime(self.skill)
+        result = swlib.sync_runtime(self.skill)
+        self.assertEqual(result["copied"], [])
+        self.assertEqual(sorted(result["skipped"]), sorted(swlib.RUNTIME_FILES))
+
+    def test_a_newer_source_is_copied_again(self):
+        swlib.sync_runtime(self.skill)
+        source = self.write_source("claude-usage.py", "# edited\n")
+        later = time.time() + 10
+        os.utime(source, (later, later))
+        result = swlib.sync_runtime(self.skill)
+        self.assertEqual(result["copied"], ["claude-usage.py"])
+        self.assertEqual(read_text(os.path.join(swlib.runtime_dir(),
+                                                "claude-usage.py")), "# edited\n")
+
+    def test_a_source_of_a_different_size_is_copied_again(self):
+        swlib.sync_runtime(self.skill)
+        mirrored = os.path.join(swlib.runtime_dir(), "grok-usage.py")
+        stamp = os.stat(mirrored).st_mtime
+        source = self.write_source("grok-usage.py", "# longer than it was\n")
+        os.utime(source, (stamp, stamp))
+        self.assertEqual(swlib.sync_runtime(self.skill)["copied"],
+                         ["grok-usage.py"])
+
+    def test_nothing_the_list_does_not_name_is_deleted(self):
+        swlib.sync_runtime(self.skill)
+        stray = os.path.join(swlib.runtime_dir(), "somebody-elses-file.py")
+        swlib.write_text_atomic(stray, "keep me\n")
+        swlib.sync_runtime(self.skill)
+        self.assertTrue(os.path.exists(stray))
+
+    def test_the_source_is_never_written(self):
+        before = {name: os.stat(os.path.join(self.scripts, name)).st_mtime_ns
+                  for name in swlib.RUNTIME_FILES}
+        swlib.sync_runtime(self.skill)
+        swlib.sync_runtime(self.skill)
+        after = {name: os.stat(os.path.join(self.scripts, name)).st_mtime_ns
+                 for name in swlib.RUNTIME_FILES}
+        self.assertEqual(before, after)
+        self.assertNotIn("runtime", os.listdir(self.scripts))
+
+    def test_a_missing_source_file_is_reported_and_the_rest_still_copy(self):
+        os.unlink(os.path.join(self.scripts, "cursor-usage.py"))
+        result = swlib.sync_runtime(self.skill)
+        self.assertEqual(result["missing"], ["cursor-usage.py"])
+        self.assertNotIn("cursor-usage.py", self.mirrored())
+        self.assertIn("usage-refresh.sh", self.mirrored())
+
+    def test_a_source_folder_that_is_not_there_reports_everything_missing(self):
+        result = swlib.sync_runtime(os.path.join(self.home, "gone"))
+        self.assertEqual(sorted(result["missing"]), sorted(swlib.RUNTIME_FILES))
+        self.assertEqual(self.mirrored(), [])
+
+    def test_the_command_line_entry_point_syncs(self):
+        done = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "swlib.py"),
+             "--sync-runtime", self.skill],
+            capture_output=True, text=True,
+            env=dict(os.environ, SW_HOME=self.home), timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.mirrored(), sorted(swlib.RUNTIME_FILES))
+
+    def test_the_launchd_agent_runs_the_mirror_not_the_skill_folder(self):
+        plist = sw_setup.launchd_plist(900)
+        self.assertEqual(plist["ProgramArguments"],
+                         ["/bin/sh",
+                          os.path.join(swlib.runtime_dir(), "usage-refresh.sh"),
+                          "--if-claude-running"])
+        self.assertNotIn(SCRIPTS, " ".join(plist["ProgramArguments"]))
+
+    def test_uninstall_removes_the_mirror(self):
+        self.write_config(primary={"config_dir": os.path.join(self.home, "gone"),
+                                   "label": "primary"})
+        swlib.sync_runtime(self.skill)
+        with contextlib.redirect_stdout(io.StringIO()):
+            sw_setup.cmd_uninstall()
+        self.assertFalse(os.path.isdir(swlib.runtime_dir()))
+
+
+class MirroredRefreshRuns(Base):
+    """The proof of the fix: the mirrored refresh script runs with the skill
+    folder gone, which is what a launchd agent effectively sees."""
+
+    def test_it_runs_without_reading_the_skill_folder(self):
+        skill = os.path.join(self.home, "skill")
+        shutil.copytree(SCRIPTS, os.path.join(skill, "scripts"))
+        swlib.sync_runtime(skill)
+        shutil.rmtree(skill)
+        workdir = os.path.join(self.home, "workdir")
+        os.makedirs(workdir)
+        # Readings off for every role, so this exercises the plan, the lock and
+        # the workdir without starting a real client.
+        self.write_config(refresh={"interval_minutes": 15, "workdir": workdir,
+                                   "primary": False, "model_picker": False})
+        done = subprocess.run(
+            ["/bin/sh", os.path.join(swlib.runtime_dir(), "usage-refresh.sh")],
+            capture_output=True, text=True, timeout=120,
+            env=dict(os.environ, SW_HOME=self.home))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stderr, "")
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".refresh.lock")))
+
+
+class Check(Base):
+    """--check has to answer the questions the tool cannot answer for itself, so
+    the two rows added here are tested for what they actually say."""
+
+    def setUp(self):
+        super().setUp()
+        self.profile = os.path.join(self.home, "profile-primary")
+        os.makedirs(self.profile)
+        self.skill = os.path.join(self.home, "skill")
+        self.scripts = os.path.join(self.skill, "scripts")
+        os.makedirs(self.scripts)
+        for name in swlib.RUNTIME_FILES:
+            with open(os.path.join(self.scripts, name), "w") as handle:
+                handle.write("# %s\n" % name)
+        self.real_versions = swlib.client_versions
+        self.real_loaded = sw_setup.launchd_loaded
+        swlib.client_versions = lambda: {"claude": "2.1.259"}
+        sw_setup.launchd_loaded = lambda: True
+
+    def tearDown(self):
+        swlib.client_versions = self.real_versions
+        sw_setup.launchd_loaded = self.real_loaded
+        super().tearDown()
+
+    def configure(self, **overrides):
+        settings = {"skill_dir": self.skill,
+                    "primary": {"config_dir": self.profile, "label": "primary"},
+                    "tested_versions": {"claude": "2.1.251"}}
+        settings.update(overrides)
+        return self.write_config(**settings)
+
+    def check(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            sw_setup.cmd_check()
+        return out.getvalue()
+
+    def test_the_mirror_row_says_stale_then_in_sync(self):
+        self.configure()
+        first = self.check()
+        self.assertIn("runtime mirror", first)
+        self.assertIn("copied in just now", first)
+        second = self.check()
+        self.assertIn("present and in sync (%d files)" % len(swlib.RUNTIME_FILES),
+                      second)
+
+    def test_a_file_the_mirror_cannot_get_is_named(self):
+        self.configure()
+        self.check()
+        os.unlink(os.path.join(swlib.runtime_dir(), "model-picker.py"))
+        os.unlink(os.path.join(self.scripts, "model-picker.py"))
+        text = self.check()
+        self.assertIn("STALE: not mirrored: model-picker.py", text)
+        self.assertIn("not in the runtime mirror: model-picker.py", text)
+
+    def test_a_missing_refresh_script_is_a_fault_when_the_agent_is_installed(self):
+        self.configure(refresh={"interval_minutes": 15, "launchd": True})
+        os.unlink(os.path.join(self.scripts, "usage-refresh.sh"))
+        text = self.check()
+        self.assertIn("the launchd agent has nothing to run", text)
+        self.assertIn("NOT ARMED", text)
+
+    def test_a_newer_client_than_the_tested_one_is_stated_plainly(self):
+        self.configure()
+        text = self.check()
+        self.assertIn("2.1.259 installed, tested against 2.1.251", text)
+
+    def test_the_same_client_version_says_so(self):
+        self.configure(tested_versions={"claude": "2.1.259"})
+        self.assertIn("2.1.259 installed, tested against the same", self.check())
 
 
 if __name__ == "__main__":

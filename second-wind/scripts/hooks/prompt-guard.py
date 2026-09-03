@@ -24,15 +24,17 @@ import swlib  # noqa: E402
 
 MACHINERY = ("<system-reminder>", "<task-notification>", "<command-name>")
 
-MANUAL_WORKERS = {
-    "secondary": "the secondary Claude account",
-    "codex": "Codex",
-    "grok": "Grok Build",
-    "cursor": "Cursor Agent",
+# The two bare words in a mode file that do not name a single worker. Every
+# other word, and the JSON the routing hook writes, is read by swlib.parse_route,
+# so the guard, that hook and the picker cannot disagree about what a word means.
+GROUP_WORDS = {
     "both": "the secondary Claude account and Codex",
     "all": "every enabled worker",
 }
 
+# How the handover announcement names each destination in a list. Its own
+# wording on purpose: this is a sentence fragment inside "routing the heavy work
+# to ...", not the routing vocabulary.
 WORKER_NAMES = {
     "secondary": "the secondary Claude account",
     "codex": "Codex",
@@ -107,14 +109,36 @@ def drop(path):
         pass
 
 
-def read_mode(home):
+def named_worker(word, cfg):
+    """A worker named the way the config and the mode file name it, in the shape
+    parse_route returns. parse_route takes the picker ids and the aliases
+    somebody types; this is the other spelling, the plain role name."""
+    worker = swlib.ROUTE_WORKERS.get(str(word or "").strip().lower())
+    if not worker:
+        return None
+    return {"worker": worker, "model": None, "effort": None,
+            "label": swlib.route_label(worker, cfg)}
+
+
+def runner_note(model, effort):
+    """What to tell the session to pass on to the runner."""
+    flags = []
+    for value, flag in ((model, "--model"), (effort, "--effort")):
+        if isinstance(value, str) and value.strip():
+            flags.append("%s %s" % (flag, value.strip()))
+    return ", passing %s to the runner" % " and ".join(flags) if flags else ""
+
+
+def read_mode(home, cfg=None):
     """The routing override, as (word, worker name, runner note), or None.
 
-    Two forms, both live. The model picker hook writes JSON, which can also
-    carry a model and an effort for the runner. A person, or an older version of
-    this tool, writes one bare word. Anything else is not an instruction we can
-    honour, so it returns None and the guard falls through to the readings
-    rather than routing work somewhere nobody named.
+    Two forms, both live. The routing hook writes JSON, which can also carry a
+    model and an effort for the runner. A person, or an older version of this
+    tool, writes one bare word. Either way the worker and its name come from
+    swlib, so this hook cannot disagree with the one that wrote the file.
+    Anything else is not an instruction we can honour, so it returns None and
+    the guard falls through to the readings rather than routing work somewhere
+    nobody named.
     """
     try:
         with open(os.path.join(home, "mode")) as handle:
@@ -126,26 +150,27 @@ def read_mode(home):
         return None
     if not text.startswith("{"):
         word = "".join(text.split())
-        return (word, MANUAL_WORKERS[word], "") if word in MANUAL_WORKERS else None
+        if word in GROUP_WORDS:
+            return word, GROUP_WORDS[word], ""
+        route = swlib.parse_route(word, cfg) or named_worker(word, cfg)
+        if not route:
+            return None
+        return (route["worker"], route["label"],
+                runner_note(route["model"], route["effort"]))
     try:
         data = json.loads(text)
     except Exception:
         return None
     if not isinstance(data, dict):
         return None
-    worker = data.get("worker")
-    if worker not in WORKER_NAMES:
+    route = named_worker(data.get("worker"), cfg)
+    if not route:
         return None
     label = data.get("label")
     name = label.strip() if isinstance(label, str) and label.strip() \
-        else WORKER_NAMES[worker]
-    flags = []
-    for key, flag in (("model", "--model"), ("effort", "--effort")):
-        value = data.get(key)
-        if isinstance(value, str) and value.strip():
-            flags.append("%s %s" % (flag, value.strip()))
-    runner = ", passing %s to the runner" % " and ".join(flags) if flags else ""
-    return worker, name, runner
+        else route["label"]
+    return route["worker"], name, runner_note(data.get("model"),
+                                              data.get("effort"))
 
 
 def worker_list(cfg):
@@ -236,7 +261,7 @@ def main():
     # any usage reading. It still honours the master switches above, and
     # unrecognised contents stay silent rather than routing work somewhere the
     # user did not name.
-    manual = read_mode(home)
+    manual = read_mode(home, cfg)
     if manual:
         word, name, runner = manual
         return emit(

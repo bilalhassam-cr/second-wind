@@ -94,8 +94,10 @@ assuming it survived; if it says `NOT TRUSTED`, restart the client and run
 ## The scheduled refresh
 
 On macOS, setup installs a launchd agent, `com.second-wind.refresh`, that runs
-`scripts/usage-refresh.sh --if-claude-running` every `refresh.interval_minutes`,
-15 by default. `--if-claude-running` exits immediately unless a `claude` process
+`~/.second-wind/runtime/usage-refresh.sh --if-claude-running` every
+`refresh.interval_minutes`, 15 by default. It runs that mirrored copy rather than
+the one in the skill folder because a LaunchAgent cannot read `~/Documents`; see
+`troubleshooting.md`. `--if-claude-running` exits immediately unless a `claude` process
 or the Claude desktop app is running, so nothing starts a client on an idle
 machine. `--no-launchd` at setup skips it; run `usage-refresh.sh` from cron or by
 hand instead. `setup.py --check` reports whether the agent is loaded.
