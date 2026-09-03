@@ -10,11 +10,11 @@ The refusal is the mechanism, not a failure. Claude Code has no "do something
 else" entry in a picker, and a row that quietly left the session on some other
 model would be worse than one that says what it did.
 
-Picking any real model deletes the mode file, so stopping is the same gesture as
-starting. A real model is never blocked, whatever else is going on.
+Picking any real model clears this session's route, so stopping is the same
+gesture as starting. A real model is never blocked, whatever else is going on.
 
-The route it writes carries this session's id, so it applies here and not in
-every other session the user has open.
+The route it writes goes in this session's own file, so it applies here and not
+in every other session the user has open.
 """
 import json
 import os
@@ -64,18 +64,16 @@ def main():
         return 0
 
     cfg = swlib.load_config()
-    mode = swlib.mode_path()
     route = swlib.parse_route(target, cfg)
     # Scoped to the session that picked the row. A route armed in one session
     # used to tell every other one to send its work away.
     session = payload.get("session_id")
 
     if not route:
-        if not os.path.exists(mode):
-            return 0
-        try:
-            os.unlink(mode)
-        except OSError:
+        # This session's own route, and the global one when that is what was
+        # routing here. A route armed in another session is left alone: picking
+        # a model here is not a decision about that chat.
+        if not swlib.clear_route(session):
             return 0
         # PreModelSwitch shows a systemMessage whatever the decision is, so this
         # says routing stopped without standing in the way of the switch.

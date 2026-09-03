@@ -141,27 +141,27 @@ def runner_note(route):
 
 
 def read_mode(cfg=None, session_id=None):
-    """The routing override, as (word, worker name, runner note), or None.
+    """The routing override, as (word, worker name, runner note, file), or None.
 
-    Three forms, all live. The picker hook and the chat command write JSON,
-    which carries a model, an effort and the session it was armed in. A person,
-    or an older version of this tool, writes one bare word, which is global.
-    Either way the worker, its name and the scope rule come from swlib, so this
+    Three forms, all live. The picker hook and the chat command write JSON into
+    this session's own file, which carries a model, an effort and the session it
+    was armed in. A person, or an older version of this tool, writes one bare
+    word into the global file, which applies everywhere. Either way the worker,
+    its name, the reading order and the expiry rule come from swlib, so this
     hook cannot disagree with whatever wrote the file. Anything else is not an
     instruction we can honour, so it returns None and the guard falls through to
     the readings rather than routing work somewhere nobody named.
     """
     text = swlib.mode_text()
-    if not text:
-        return None
-    if not text.startswith("{"):
+    if text and not text.startswith("{"):
         word = "".join(text.split())
         if word in GROUP_WORDS:
-            return word, GROUP_WORDS[word], ""
+            return word, GROUP_WORDS[word], "", swlib.mode_path()
     route = swlib.active_route(session_id, cfg)
     if not route:
         return None
-    return route["word"], route["label"], runner_note(route)
+    return (route["word"], route["label"], runner_note(route),
+            route.get("path") or swlib.mode_path())
 
 
 def worker_list(cfg):
@@ -280,7 +280,7 @@ def main():
     # user did not name.
     manual = read_mode(cfg, session)
     if manual:
-        word, name, runner = manual
+        word, name, runner, path = manual
         return emit(
             "[second-wind] Manual routing override '%s' is active.\n"
             "\n"
@@ -295,7 +295,7 @@ def main():
             "the user tells you to keep the work on this account, do that without "
             "arguing. Run\n"
             "/second-wind off, or remove %s, to return to usage-based handover."
-            % (word, name, runner, swlib.tilde(os.path.join(home, "mode"))))
+            % (word, name, runner, swlib.tilde(path)))
 
     # A failed or blocked refresh means the figures below describe nothing, and
     # a wrong percentage is worse than no percentage.

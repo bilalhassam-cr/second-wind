@@ -765,14 +765,59 @@ class ModelRoute(Base):
         self.assertEqual(written["label"], "spare Claude")
         self.assertGreaterEqual(written["set_at"], self.now)
 
+    def pick(self, target, session):
+        return self.blocked(self.run_hook("model-route.py", {
+            "hook_event_name": "PreModelSwitch", "to_model": target,
+            "requested_model": target, "source": "picker",
+            "session_id": session}))
+
+    def route(self, session):
+        with open(os.path.join(self.home, "routes", session + ".json")) as handle:
+            return json.load(handle)
+
     def test_the_route_is_scoped_to_the_session_that_picked_it(self):
         self.write_config()
-        self.blocked(self.run_hook("model-route.py", {
-            "hook_event_name": "PreModelSwitch", "to_model": "second-wind/codex",
-            "requested_model": "second-wind/codex", "source": "picker",
-            "session_id": "3333aaaa-1111-2222-3333-444455556666"}))
-        self.assertEqual(self.mode()["session_id"],
-                         "3333aaaa-1111-2222-3333-444455556666")
+        session = "3333aaaa-1111-2222-3333-444455556666"
+        self.pick("second-wind/codex", session)
+        self.assertEqual(self.route(session)["session_id"], session)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")),
+                         "a route for one session must not land in the file "
+                         "every session reads")
+
+    def test_two_sessions_are_armed_separately(self):
+        # The live fault: both routes went to one file, so the second arming
+        # overwrote the first and both chats routed to the same worker.
+        self.write_config()
+        first = "1111aaaa-1111-2222-3333-444455556666"
+        second = "2222bbbb-1111-2222-3333-444455556666"
+        self.pick("second-wind/codex", first)
+        self.pick("second-wind/personal", second)
+        self.assertEqual(self.route(first)["worker"], "codex")
+        self.assertEqual(self.route(second)["worker"], "secondary")
+
+    def test_a_real_model_leaves_another_sessions_route_alone(self):
+        self.write_config()
+        theirs = "9999cccc-1111-2222-3333-444455556666"
+        self.pick("second-wind/codex", theirs)
+        out = self.run_hook("model-route.py", {
+            "hook_event_name": "PreModelSwitch", "to_model": "claude-opus-5",
+            "requested_model": "opus", "source": "picker",
+            "session_id": "somebody-else"})
+        self.assertEqual(out.strip(), "",
+                         "picking a model here is not a decision about that chat")
+        self.assertEqual(self.route(theirs)["worker"], "codex")
+
+    def test_a_real_model_clears_this_sessions_own_route(self):
+        self.write_config()
+        session = "4444dddd-1111-2222-3333-444455556666"
+        self.pick("second-wind/codex", session)
+        out = self.run_hook("model-route.py", {
+            "hook_event_name": "PreModelSwitch", "to_model": "claude-opus-5",
+            "requested_model": "opus", "source": "picker",
+            "session_id": session})
+        self.assertIn("routing off", out)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.home, "routes", session + ".json")))
 
     def test_an_event_with_no_session_id_arms_a_route_for_every_session(self):
         self.write_config()
@@ -945,9 +990,19 @@ class DesktopRoute(Base):
             env={"SW_DESKTOP_STORE": store or os.path.join(self.home, "gone")},
             **kwargs)
 
-    def mode(self):
-        with open(os.path.join(self.home, "mode")) as handle:
+    def mode(self, session=None):
+        """The route armed for a session, which is its own file now."""
+        path = os.path.join(self.home, "routes",
+                            (session or self.SESSION) + ".json")
+        with open(path) as handle:
             return json.load(handle)
+
+    def assert_nothing_armed(self, message=None):
+        """No global route, and no per-session file wherever it might land."""
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")),
+                         message)
+        self.assertEqual(
+            glob.glob(os.path.join(self.home, "routes", "*.json")), [], message)
 
     def denied(self, stdout):
         self.assertTrue(stdout.strip(), "expected a refusal, got nothing")
@@ -987,13 +1042,13 @@ class DesktopRoute(Base):
         self.write_config()
         self.write_usage("primary", five=2, week=3, age=60)
         self.assertEqual(self.prompt(self.store("claude-fable-5-1")).strip(), "")
-        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+        self.assert_nothing_armed()
 
     def test_a_missing_store_is_silent(self):
         self.write_config()
         self.write_usage("primary", five=2, week=3, age=60)
         self.assertEqual(self.prompt().strip(), "")
-        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+        self.assert_nothing_armed()
         self.assertFalse(os.path.exists(
             os.path.join(self.home, "session-map.json")))
 
@@ -1005,7 +1060,7 @@ class DesktopRoute(Base):
         self.write_usage("primary", five=2, week=3, age=60)
         root = self.store("claude-fable-5-1")
         self.assertEqual(self.prompt(root).strip(), "")
-        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+        self.assert_nothing_armed()
 
     def snapshot(self, root):
         """Every store file, its mtime and its contents."""
@@ -1067,7 +1122,7 @@ class DesktopRoute(Base):
         reason = self.denied(self.prompt(self.store("cursor")))
         self.assertIn("Cursor Agent is not connected", reason)
         self.assertIn("pick any normal model from the menu", reason)
-        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+        self.assert_nothing_armed()
 
     def test_the_refusal_comes_before_the_usage_reading(self):
         # A spent account and a broken model at once: the prompt cannot be sent
@@ -1084,7 +1139,7 @@ class DesktopRoute(Base):
         self.write_usage("primary", five=2, week=3, age=60)
         self.touch("no-failover")
         self.assertEqual(self.prompt(self.store("claude-personal")).strip(), "")
-        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+        self.assert_nothing_armed()
 
     def test_machinery_prompts_are_left_alone(self):
         self.write_config()
@@ -1122,8 +1177,36 @@ class DesktopRoute(Base):
             self.assertIn("type /second-wind as a command to open the picker",
                           reason, typed)
             self.assertIn("Pick any real model from the menu first", reason)
-            self.assertFalse(os.path.exists(os.path.join(self.home, "mode")),
-                             typed)
+            self.assert_nothing_armed(typed)
+
+    def test_two_sessions_armed_at_once_each_see_only_their_own(self):
+        # The live fault: a route armed from the desktop app replaced the route
+        # another chat had set from the picker, so both chats routed together.
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        other = "1234bbbb-2222-3333-4444-555566667777"
+        self.denied(self.prompt(self.store("claude-personal")))
+        self.denied(self.prompt(self.store("second-wind/codex", session=other),
+                                session=other))
+        self.assertEqual(self.mode()["worker"], "secondary")
+        self.assertEqual(self.mode(other)["worker"], "codex")
+        mine = self.context(self.prompt(self.store("claude-fable-5-1")),
+                            "UserPromptSubmit").replace("\n", " ")
+        self.assertIn("routing the heavy work to spare Claude", mine)
+        self.assertNotIn("Codex", mine)
+        theirs = self.context(
+            self.prompt(self.store("claude-fable-5-1", session=other),
+                        session=other), "UserPromptSubmit").replace("\n", " ")
+        self.assertIn("routing the heavy work to Codex", theirs)
+        self.assertNotIn("spare Claude", theirs)
+
+    def test_the_announcement_names_the_file_that_holds_the_route(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.denied(self.prompt(self.store("claude-personal")))
+        text = self.context(self.prompt(self.store("claude-fable-5-1")),
+                            "UserPromptSubmit").replace("\n", " ")
+        self.assertIn("routes/%s.json" % self.SESSION, text)
 
     def test_it_comes_back_quickly(self):
         self.write_config()

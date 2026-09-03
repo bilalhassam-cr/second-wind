@@ -100,7 +100,9 @@ On-demand availability is context and does not override those pools. Unknown sor
 │                              TRUST PROMPT, PARSER MISMATCH or FAILED
 ├── replaced-statusline.json   any status line we replaced, restored on uninstall
 ├── no-failover                present = automatic handover off
-├── mode                       the route: where the next tasks go
+├── mode                       the one route armed for every session
+├── routes/
+│   └── <session_id>.json      one route per session: where its next tasks go
 └── log/
     ├── YYYY-MM.jsonl          one line per delegated call
     └── <ts>-<pid>-<worker>-<folder>.md   full prompt and reply
@@ -109,10 +111,11 @@ On-demand availability is context and does not override those pools. Unknown sor
 A status file newer than its reading wins: it describes the attempt that came after
 the cached figures.
 
-## The route file
+## The route files
 
-`mode` is written by `scripts/route.py` and by the two routing hooks, and read by
-the prompt guard and the session brief. Never write it by hand.
+`routes/<session_id>.json` and `mode` are written by `scripts/route.py` and by
+the two routing hooks, and read by the prompt guard and the session brief. Never
+write either by hand. Both hold the same fields.
 
 | Field | Meaning |
 |---|---|
@@ -127,8 +130,11 @@ the prompt guard and the session brief. Never write it by hand.
 
 A route applies only in the session that armed it, which is what stops a
 destination picked in one chat from telling every other session to send its work
-away. A bare word in the file, such as `codex` on its own, stays global.
-`references/routing.md` carries the rest.
+away. One file each is what makes that true: while every route shared `mode`, the
+second arming overwrote the first. A session's own file is read before `mode`, so
+a route armed here beats one armed for every session, and a bare word in `mode`,
+such as `codex` on its own, stays global. `references/routing.md` carries the
+rest.
 
 ## Files it edits, and the backups it leaves
 
@@ -144,7 +150,8 @@ added. `--check` reads the trust store back for every Claude profile and for Cod
 discovered by a reader sitting on a modal.
 
 `--uninstall` removes our hooks, our status line, our `modelPicker` key, the routing
-override at `~/.second-wind/mode`, the runtime mirror and the launchd agent, restores a status line it
+override at `~/.second-wind/mode`, the per-session routes in `~/.second-wind/routes/`,
+the runtime mirror and the launchd agent, restores a status line it
 replaced, and leaves accounts and logins alone. It leaves
 the workdir trust entries in place, because removing them means editing files a running
 client may be writing, and it prints where to delete them by hand.

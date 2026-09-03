@@ -16,13 +16,17 @@ somewhere else.
     route.py --clear
     route.py --destinations
 
+A session-scoped route is its own file, `~/.second-wind/routes/<session>.json`,
+so two chats can each be routed somewhere without overwriting each other.
+`--all` writes `~/.second-wind/mode`, which is the one route that applies
+everywhere.
+
 `--here` finds this session's id in the desktop app's own store, by the
 directory it is running in. When it cannot, it says so and falls back to a route
 that applies everywhere, because a route nobody can scope is still better than
 silently arming nothing.
 """
 import argparse
-import json
 import os
 import sys
 
@@ -37,17 +41,25 @@ def fail(message, code=2):
     return code
 
 
+def here_session(a):
+    """This session's id, from `--session` or the desktop app's own store, or
+    None when nothing can name it."""
+    if a.session:
+        return a.session.strip()
+    record = swlib.desktop_session_here()
+    session = (record or {}).get("cliSessionId")
+    return session.strip() if isinstance(session, str) and session.strip() \
+        else None
+
+
 def scope(a):
     """(session id or "*", note to print). `--here` is the default: a route
     meant for every session is a bigger claim and has to be asked for."""
     if a.all:
         return EVERY_SESSION, "applies to every session until cleared"
-    if a.session:
-        return a.session.strip(), ""
-    record = swlib.desktop_session_here()
-    session = (record or {}).get("cliSessionId")
-    if isinstance(session, str) and session.strip():
-        return session.strip(), ""
+    session = here_session(a)
+    if session:
+        return session, ""
     return EVERY_SESSION, ("this session could not be identified, so the route "
                            "applies to every session until cleared")
 
@@ -104,46 +116,96 @@ def cmd_set(a):
     return 0
 
 
-def cmd_clear():
-    if not swlib.mode_text():
+def cmd_clear(a):
+    """Clear this session's route. `--all` clears the one that applies
+    everywhere, `--session` takes an id. When the session cannot be named, the
+    armed routes are listed rather than one of them guessed at: removing
+    somebody else's route is exactly the fault this store exists to stop."""
+    if a.all:
+        if not swlib.mode_text():
+            print("No route applies to every session. Nothing to clear.")
+            return 0
+        swlib.drop_mode()
+        print("Routing off for every session, back to usage-based handover.")
+        return 0
+    session = here_session(a)
+    if session:
+        removed = swlib.clear_route(session)
+        if removed:
+            if swlib.mode_path() in removed:
+                print("Routing off, back to usage-based handover. The route "
+                      "that applied to every session is gone too.")
+            else:
+                print("Routing off for this session, back to usage-based "
+                      "handover.")
+            return 0
+    armed = swlib.armed_routes()
+    if not armed:
         print("No route was armed. Nothing to clear.")
         return 0
-    swlib.drop_mode()
-    print("Routing off, back to usage-based handover.")
+    if session:
+        print("Nothing was armed for this session. Armed elsewhere:")
+    else:
+        print("This session could not be identified, so nothing was cleared. "
+              "Armed now:")
+    for row in armed:
+        print("  %s" % summary(row))
+    print("Clear one with --clear --session ID, or --clear --all for the route "
+          "that applies to every session.")
     return 0
 
 
+def where(row):
+    return "every session" if row["scope"] == EVERY_SESSION else row["scope"]
+
+
+def summary(row):
+    """One armed route on one line, for a listing."""
+    age = swlib.short_age(row["age"]) if row["age"] is not None else "unknown"
+    label = row["label"] or row["worker"] or "unreadable"
+    return "%s | %s | armed %s ago%s" % (where(row), label, age,
+                                         " | expired" if row["expired"] else "")
+
+
 def cmd_show(a):
-    text = swlib.mode_text()
-    if not text:
+    """Every armed route, with the session it belongs to, its label and its
+    age, and which one applies here. First thing to check when a route seems to
+    apply to the wrong chat."""
+    rows = swlib.armed_routes()
+    if not rows:
         print("No route armed. Work stays on this account.")
         return 0
-    if not text.startswith("{"):
-        print("Route: %s (a bare word, so it applies to every session)" % text)
-        return 0
-    try:
-        data = json.loads(text)
-    except Exception:
-        return fail("the route file is not readable. Run --clear.", 1)
-    here, _ = scope(a)
-    route = swlib.active_route(here)
-    session = data.get("session_id") or "every session"
-    print("Worker    %s" % (data.get("worker") or "unreadable"))
-    print("Label     %s" % (data.get("label") or ""))
-    print("Model     %s" % (data.get("model") or "not set"))
-    print("Effort    %s" % (data.get("effort") or "not set"))
-    print("Mode      %s" % (data.get("mode") or "the configured default"))
-    print("Session   %s" % session)
-    print("Armed by  %s" % (data.get("source") or "unknown"))
-    age = swlib.route_age(data)
-    print("Age       %s" % (swlib.short_age(age) if age is not None else "unknown"))
-    if route:
-        print("Applies here: yes")
-    elif age is not None and age > swlib.ROUTE_MAX_AGE:
-        print("Applies here: no, it was armed more than 12 hours ago and has "
-              "now been dropped")
-    else:
-        print("Applies here: no, it was armed in another session")
+    here = here_session(a)
+    applies = swlib.active_route(here)
+    print("Armed routes: %d" % len(rows))
+    for row in rows:
+        print()
+        print("Session   %s%s" % (where(row),
+                                  " (a bare word, so it applies to every "
+                                  "session)" if row["source"] == "a bare word"
+                                  else ""))
+        print("Worker    %s" % (row["worker"] or "unreadable"))
+        print("Label     %s" % (row["label"] or ""))
+        print("Model     %s" % (row["model"] or "not set"))
+        print("Effort    %s" % (row["effort"] or "not set"))
+        print("Mode      %s" % (row["mode"] or "the configured default"))
+        print("Armed by  %s" % (row["source"] or "unknown"))
+        print("Age       %s" % (swlib.short_age(row["age"])
+                                if row["age"] is not None else "unknown"))
+        print("File      %s" % swlib.tilde(row["path"]))
+        if applies and applies.get("path") == row["path"]:
+            print("Applies here: yes")
+        elif not row["readable"]:
+            print("Applies here: no, the file is not readable. Clear it.")
+        elif row["expired"]:
+            print("Applies here: no, it was armed more than 12 hours ago and "
+                  "is ignored")
+        elif row["scope"] not in (EVERY_SESSION, here):
+            print("Applies here: no, it was armed in another session")
+        elif applies:
+            print("Applies here: no, this session's own route takes it")
+        else:
+            print("Applies here: no")
     return 0
 
 
@@ -190,7 +252,7 @@ def main():
     if len([x for x in (a.session, a.here, a.all) if x]) > 1:
         return fail("pick one of --session, --here or --all")
     if a.clear:
-        return cmd_clear()
+        return cmd_clear(a)
     if a.show:
         return cmd_show(a)
     if a.destinations:

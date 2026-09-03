@@ -190,11 +190,12 @@ have reset since, and it ignores one whose status is `TRUST PROMPT`,
 nothing. It never runs on the secondary profile.
 
 To force it regardless, write `secondary`, `codex`, `grok`, `cursor`, `both` or
-`all` to `~/.second-wind/mode`. Remove the file to go back to usage-based
-handover. The model picker writes the same file as JSON, which can also carry a
-model and an effort; both forms are read. A route armed from the desktop app
-writes the same JSON with `"source": "desktop"`, and stays until a real model is
-picked in a terminal or the file is deleted.
+`all` to `~/.second-wind/mode`. A bare word there applies to every session.
+Remove the file to go back to usage-based handover. The picker and the chat
+command write JSON instead, into `~/.second-wind/routes/<session_id>.json`, which
+can also carry a model and an effort; every form is read. A route armed from the
+desktop app writes that JSON with `"source": "desktop"`, and stays until a real
+model is picked in a terminal or `route.py --clear` removes it.
 
 ## "Model isn't available" after picking a route
 
@@ -220,15 +221,31 @@ and worker levels, which do not install it. Rerun `--write` and restart.
 A route that is refused with "the next tasks route to ..." is the hook working:
 the block is the mechanism, not a fault.
 
+## A route seems to apply to the wrong chat
+
+Run `python3 "$SW/scripts/route.py" --show`. It lists **every** armed route with
+its session id, label and age, and marks the one that applies here, so two chats
+routed to different places can be seen side by side.
+
+Each session's route is its own file, `~/.second-wind/routes/<session_id>.json`,
+and `~/.second-wind/mode` holds the one route somebody armed for every session
+with `--all`. A session's own file wins over the global one. So a chat routing
+somewhere nobody chose in it is almost always that global route: clear it with
+`route.py --clear --all`, which leaves the per-session ones alone.
+
+If `--show` names a session id you do not recognise, that route is another chat's
+and this one is not affected by it. Routes armed before this store existed all
+sat in `mode`, which is why arming a route in one chat used to change another.
+
 ## A route is armed but nothing routes
 
 A route belongs to the session that armed it. Run
-`python3 "$SW/scripts/route.py" --show`: it names the session id the route was
+`python3 "$SW/scripts/route.py" --show`: it names the session id each route was
 written for and says `Applies here: yes` or `no`. `no, it was armed in another
 session` means exactly that, and the fix is to arm it here with
 `route.py --set <worker> --here`, or everywhere with `--all`. A route more than 12
-hours old is ignored and deleted on the next read, so `--show` saying the file has
-gone is the expected end of a route nobody cleared.
+hours old is ignored and its file deleted on the next read, so `--show` no longer
+listing it is the expected end of a route nobody cleared.
 
 Two other reasons a route does nothing: `~/.second-wind/no-failover` is present,
 or the level is not relief, so the UserPromptSubmit guard that reads the route is

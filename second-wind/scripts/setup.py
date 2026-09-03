@@ -441,6 +441,62 @@ def launchd_loaded():
     return done.returncode == 0
 
 
+def launchd_print():
+    """The loaded job as launchctl describes it, or an empty string. Read only:
+    this is the one way to see what the running job actually runs, as opposed to
+    what the plist on disk says."""
+    if sys.platform != "darwin":
+        return ""
+    done = subprocess.run(
+        ["launchctl", "print", "gui/%d/%s" % (os.getuid(), LAUNCHD_LABEL)],
+        capture_output=True, text=True)
+    return done.stdout if done.returncode == 0 else ""
+
+
+def launchd_arguments(text):
+    """The loaded job's argument vector, from `launchctl print` output, or None
+    when the output does not carry one.
+
+    launchctl prints the vector as `arguments = { ... }`, one argument a line,
+    and only a `program = ...` line when there is no vector. None means the
+    output could not be read, which is reported as such rather than guessed at:
+    a wrong "stale path" would send somebody rerunning setup for no reason.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        head = line.strip()
+        if head.startswith("arguments") and head.endswith("{"):
+            args = []
+            for rest in lines[index + 1:]:
+                if rest.strip() == "}":
+                    return args or None
+                if rest.strip():
+                    args.append(rest.strip())
+            return None
+    for line in lines:
+        head = line.strip()
+        if head.startswith("program ") and "=" in head:
+            value = head.split("=", 1)[1].strip()
+            return [value] if value else None
+    return None
+
+
+def launchd_command_state(text, expected):
+    """Whether the loaded job runs the mirror copy setup expects.
+
+    The plist can be right while the loaded job is an older one still running a
+    path that has since moved, and nothing else in --check can tell those apart.
+    """
+    args = launchd_arguments(text)
+    if not args:
+        return "loaded, arguments not readable", None
+    if expected and expected in args:
+        return "loaded, runs the mirror", True
+    return "loaded, runs a stale path: rerun --write", False
+
+
 def launchd_remove():
     if sys.platform != "darwin":
         return "nothing to remove"
@@ -1165,6 +1221,19 @@ def cmd_check():
         exists = os.path.exists(LAUNCHD_PLIST)
         row("launchd agent", "loaded" if loaded else
             ("written but NOT LOADED" if exists else "NOT INSTALLED"))
+        if loaded:
+            detail, fresh = launchd_command_state(launchd_print(),
+                                                  runtime_refresh_script())
+            row("launchd command", detail)
+            if fresh is False:
+                message = ("the loaded launchd agent runs a path that is not "
+                           "the mirror at %s, so a scheduled refresh runs the "
+                           "wrong copy or nothing at all. Rerun --write."
+                           % tilde(swlib.runtime_dir()))
+                if level["failover"]:
+                    faults.append(message)
+                else:
+                    warnings.append(message)
         if (cfg.get("refresh") or {}).get("launchd") and not loaded:
             message = ("the launchd refresh agent is not loaded, so nothing "
                        "refreshes the readings on a schedule.")
@@ -1266,13 +1335,20 @@ def cmd_uninstall():
         else:
             print("  %s cleaned: our hooks and status line removed, and our "
                   "modelPicker key if it was there" % folder)
-    mode = os.path.join(sw_home(), "mode")
+    mode = swlib.mode_path()
     if os.path.exists(mode):
         try:
             os.unlink(mode)
             print("  routing override %s removed" % tilde(mode))
         except OSError:
             print("  ! could not remove %s. Delete it by hand." % tilde(mode))
+    routes = swlib.routes_dir()
+    if os.path.isdir(routes):
+        try:
+            shutil.rmtree(routes)
+            print("  per-session routes %s removed" % tilde(routes))
+        except OSError:
+            print("  ! could not remove %s. Delete it by hand." % tilde(routes))
     mirror = swlib.runtime_dir()
     if os.path.isdir(mirror):
         try:

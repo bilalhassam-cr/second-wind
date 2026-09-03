@@ -696,6 +696,28 @@ class ModeFile(Base):
     def test_it_is_written_where_every_reader_looks(self):
         self.assertEqual(swlib.mode_path(),
                          os.path.join(self.home, "mode"))
+        self.assertEqual(swlib.routes_dir(),
+                         os.path.join(self.home, "routes"))
+
+    def test_a_session_route_is_its_own_file_and_a_global_one_is_not(self):
+        swlib.write_mode(self.route(), session_id="abc-123")
+        self.assertEqual(
+            read_json(os.path.join(self.home, "routes", "abc-123.json"))["worker"],
+            "codex")
+        self.assertFalse(os.path.exists(swlib.mode_path()),
+                         "one session's route must not sit in the global file")
+        swlib.write_mode(self.route(), session_id="*")
+        self.assertEqual(read_json(swlib.mode_path())["session_id"], "*")
+
+    def test_an_id_that_is_not_a_filename_still_gets_one_file(self):
+        # Ids are uuids in practice. A crafted one must not write outside the
+        # routes directory or collide with the global file.
+        for session in ("../mode", "a/b/c", "..", "  spaces  ", "\u00e9\u00e9"):
+            path = swlib.route_path(session)
+            self.assertEqual(os.path.dirname(path), swlib.routes_dir(), session)
+            swlib.write_mode(self.route(), session_id=session)
+            self.assertEqual(read_json(path)["session_id"], session.strip())
+        self.assertFalse(os.path.exists(swlib.mode_path()))
 
 
 class ScopedRoutes(Base):
@@ -779,10 +801,116 @@ class ScopedRoutes(Base):
         swlib.write_mode({"worker": "codex", "model": None, "effort": None,
                           "label": "Codex"}, source="chat",
                          session_id=self.SESSION)
-        written = read_json(swlib.mode_path())
+        written = read_json(swlib.route_path(self.SESSION))
         self.assertEqual(written["session_id"], self.SESSION)
         self.assertEqual(written["source"], "chat")
         self.assertNotIn("mode", written)
+
+    def arm(self, session, worker="codex", label="Codex", **fields):
+        """A route armed the way route.py and the hooks arm one."""
+        route = {"worker": worker, "model": None, "effort": None,
+                 "label": label}
+        route.update(fields)
+        return swlib.write_mode(route, source="chat", session_id=session)
+
+    def test_two_sessions_armed_at_once_each_see_only_their_own(self):
+        # The fault this store exists for: both routes went to one file, so
+        # arming the second overwrote the first and both chats routed together.
+        self.write_config(secondary={"enabled": True, "label": "spare Claude"})
+        other = "8888bbbb-2222-3333-4444-555566667777"
+        self.arm(self.SESSION)
+        self.arm(other, worker="secondary", label="spare Claude")
+        self.assertEqual(swlib.active_route(self.SESSION)["worker"], "codex")
+        self.assertEqual(swlib.active_route(other)["worker"], "secondary")
+        self.assertIsNone(swlib.active_route("a-third-session"))
+        for session in (self.SESSION, other):
+            self.assertTrue(os.path.exists(swlib.route_path(session)), session)
+
+    def test_the_sessions_own_route_beats_a_global_one(self):
+        self.write_config(secondary={"enabled": True, "label": "spare Claude"})
+        self.write_route(session_id="*", worker="secondary",
+                         label="spare Claude")
+        self.arm(self.SESSION)
+        self.assertEqual(swlib.active_route(self.SESSION)["worker"], "codex")
+        self.assertEqual(swlib.active_route("anyone")["worker"], "secondary")
+
+    def test_the_route_names_the_file_it_came_from(self):
+        self.write_config()
+        self.arm(self.SESSION)
+        self.assertEqual(swlib.active_route(self.SESSION)["path"],
+                         swlib.route_path(self.SESSION))
+        swlib.drop_route(self.SESSION)
+        self.write_route(session_id="*")
+        self.assertEqual(swlib.active_route(self.SESSION)["path"],
+                         swlib.mode_path())
+
+    def test_an_expired_session_file_is_deleted_where_it_is_found(self):
+        self.write_config()
+        self.arm(self.SESSION)
+        stale = time.time() - swlib.ROUTE_MAX_AGE - 60
+        data = read_json(swlib.route_path(self.SESSION))
+        data["set_at"] = int(stale)
+        swlib.write_json_atomic(swlib.route_path(self.SESSION), data)
+        self.assertIsNone(swlib.active_route(self.SESSION))
+        self.assertFalse(os.path.exists(swlib.route_path(self.SESSION)))
+
+    def test_clearing_takes_this_session_and_the_global_route(self):
+        self.write_config()
+        self.arm(self.SESSION)
+        self.write_route(session_id="*")
+        removed = swlib.clear_route(self.SESSION)
+        self.assertEqual(sorted(removed),
+                         sorted([swlib.route_path(self.SESSION),
+                                 swlib.mode_path()]))
+        self.assertIsNone(swlib.active_route(self.SESSION))
+
+    def test_clearing_leaves_another_sessions_route_alone(self):
+        self.write_config()
+        other = "8888bbbb-2222-3333-4444-555566667777"
+        self.arm(other)
+        self.assertEqual(swlib.clear_route(self.SESSION), [])
+        self.assertEqual(swlib.active_route(other)["worker"], "codex")
+
+    def test_clearing_takes_a_bare_word_because_it_routes_everyone(self):
+        self.write_config()
+        swlib.write_text_atomic(swlib.mode_path(), "codex\n")
+        self.assertEqual(swlib.clear_route(self.SESSION), [swlib.mode_path()])
+
+    def test_armed_routes_lists_every_one_with_its_session_and_age(self):
+        self.write_config(secondary={"enabled": True, "label": "spare Claude"})
+        other = "8888bbbb-2222-3333-4444-555566667777"
+        self.arm(self.SESSION, model="gpt-5.6", effort="high")
+        self.arm(other, worker="secondary", label="spare Claude")
+        self.write_route(session_id="*", set_at=int(time.time()) - 300)
+        rows = swlib.armed_routes()
+        self.assertEqual(len(rows), 3)
+        by_scope = {row["scope"]: row for row in rows}
+        self.assertEqual(set(by_scope), {self.SESSION, other, "*"})
+        self.assertEqual(by_scope[self.SESSION]["label"], "Codex")
+        self.assertEqual((by_scope[self.SESSION]["model"],
+                          by_scope[self.SESSION]["effort"]),
+                         ("gpt-5.6", "high"))
+        self.assertEqual(by_scope[other]["label"], "spare Claude")
+        self.assertGreaterEqual(by_scope["*"]["age"], 300)
+        self.assertEqual(rows[-1]["scope"], "*", "newest first")
+        self.assertTrue(all(row["readable"] for row in rows))
+        self.assertFalse(any(row["expired"] for row in rows))
+
+    def test_armed_routes_names_an_expired_or_unreadable_file(self):
+        # A listing, not a reader: --show has to be able to say what is there.
+        self.write_config()
+        self.arm(self.SESSION)
+        data = read_json(swlib.route_path(self.SESSION))
+        data["set_at"] = int(time.time()) - swlib.ROUTE_MAX_AGE - 60
+        swlib.write_json_atomic(swlib.route_path(self.SESSION), data)
+        swlib.write_text_atomic(swlib.mode_path(), "{not json")
+        rows = swlib.armed_routes()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(os.path.exists(swlib.route_path(self.SESSION)),
+                        "a listing must not delete what it lists")
+        by_scope = {row["scope"]: row for row in rows}
+        self.assertTrue(by_scope[self.SESSION]["expired"])
+        self.assertFalse(by_scope["*"]["readable"])
 
 
 class Destinations(Base):
@@ -977,8 +1105,14 @@ class RouteCli(Base):
                                  "cwd": self.where, "lastActivityAt": 2000})
         return self.store
 
-    def route(self):
-        return read_json(swlib.mode_path())
+    def route(self, session=None):
+        """The armed route: this session's own file, or the global one."""
+        return read_json(swlib.route_path(session) if session
+                         else swlib.mode_path())
+
+    def assert_nothing_armed(self, message=None):
+        self.assertFalse(os.path.exists(swlib.mode_path()), message)
+        self.assertEqual(swlib.route_paths(), [], message)
 
     def test_it_arms_a_route_for_every_session(self):
         self.write_config(codex={"enabled": True, "label": "codex"})
@@ -999,7 +1133,9 @@ class RouteCli(Base):
                               store=self.session_entry())
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("this session only", done.stdout)
-        self.assertEqual(self.route()["session_id"], self.SESSION)
+        self.assertEqual(self.route(self.SESSION)["session_id"], self.SESSION)
+        self.assertFalse(os.path.exists(swlib.mode_path()),
+                         "one session's route must not land in the global file")
 
     def test_here_falls_back_to_every_session_and_says_so(self):
         self.write_config(codex={"enabled": True})
@@ -1014,7 +1150,7 @@ class RouteCli(Base):
                               "--session", "given-id")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("Routing to spare Claude, review mode", done.stdout)
-        written = self.route()
+        written = self.route("given-id")
         self.assertEqual((written["worker"], written["mode"],
                           written["session_id"]),
                          ("secondary", "review", "given-id"))
@@ -1034,7 +1170,7 @@ class RouteCli(Base):
         done = self.run_route("--set", "codex", "--all")
         self.assertEqual(done.returncode, 1)
         self.assertIn("is not connected", done.stderr)
-        self.assertFalse(os.path.exists(swlib.mode_path()))
+        self.assert_nothing_armed()
 
     def test_rubbish_is_refused(self):
         self.write_config(codex={"enabled": True})
@@ -1043,24 +1179,88 @@ class RouteCli(Base):
                      ("--set", "codex", "--all", "--here")):
             done = self.run_route(*args)
             self.assertNotEqual(done.returncode, 0, args)
-            self.assertFalse(os.path.exists(swlib.mode_path()), args)
+            self.assert_nothing_armed(args)
 
     def test_show_and_clear(self):
         self.write_config(codex={"enabled": True})
         self.run_route("--set", "codex", "--session", "given-id")
         shown = self.run_route("--show", "--session", "given-id").stdout
+        self.assertIn("Armed routes: 1", shown)
         self.assertIn("Worker    codex", shown)
         self.assertIn("Session   given-id", shown)
         self.assertIn("Armed by  chat", shown)
+        self.assertIn("Age       ", shown)
+        self.assertIn("routes/given-id.json", shown)
         self.assertIn("Applies here: yes", shown)
         elsewhere = self.run_route("--show", "--session", "another").stdout
         self.assertIn("Applies here: no, it was armed in another session",
                       elsewhere)
-        cleared = self.run_route("--clear")
-        self.assertIn("Routing off", cleared.stdout)
-        self.assertFalse(os.path.exists(swlib.mode_path()))
-        self.assertIn("Nothing to clear", self.run_route("--clear").stdout)
+        cleared = self.run_route("--clear", "--session", "given-id")
+        self.assertIn("Routing off for this session", cleared.stdout)
+        self.assert_nothing_armed()
+        self.assertIn("Nothing to clear",
+                      self.run_route("--clear", "--session", "given-id").stdout)
         self.assertIn("No route armed", self.run_route("--show").stdout)
+
+    def test_show_lists_every_armed_route(self):
+        self.write_config(codex={"enabled": True},
+                          secondary={"enabled": True, "label": "spare Claude"})
+        self.run_route("--set", "codex", "--session", "chat-one")
+        self.run_route("--set", "personal", "--session", "chat-two")
+        self.run_route("--set", "personal", "--all")
+        shown = self.run_route("--show", "--session", "chat-one").stdout
+        self.assertIn("Armed routes: 3", shown)
+        for expected in ("Session   chat-one", "Session   chat-two",
+                         "Session   every session", "Label     Codex",
+                         "Label     spare Claude"):
+            self.assertIn(expected, shown)
+        self.assertIn("Applies here: yes", shown)
+        self.assertIn("Applies here: no, it was armed in another session",
+                      shown)
+        self.assertIn("Applies here: no, this session's own route takes it",
+                      shown)
+
+    def test_two_sessions_are_armed_at_once_and_keep_their_own_route(self):
+        self.write_config(codex={"enabled": True},
+                          secondary={"enabled": True, "label": "spare Claude"})
+        self.run_route("--set", "codex", "--session", "chat-one")
+        self.run_route("--set", "personal", "--session", "chat-two")
+        self.assertEqual(self.route("chat-one")["worker"], "codex")
+        self.assertEqual(self.route("chat-two")["worker"], "secondary")
+        self.run_route("--clear", "--session", "chat-one")
+        self.assertFalse(os.path.exists(swlib.route_path("chat-one")))
+        self.assertEqual(self.route("chat-two")["worker"], "secondary")
+
+    def test_clear_without_a_session_asks_which_rather_than_guessing(self):
+        # No desktop store, so nothing can name this session. Removing
+        # somebody else's route on a guess is the fault being fixed.
+        self.write_config(codex={"enabled": True})
+        self.run_route("--set", "codex", "--session", "chat-one")
+        done = self.run_route("--clear")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("This session could not be identified", done.stdout)
+        self.assertIn("chat-one | Codex | armed", done.stdout)
+        self.assertIn("--clear --session ID", done.stdout)
+        self.assertTrue(os.path.exists(swlib.route_path("chat-one")))
+
+    def test_clear_all_takes_the_global_route_only(self):
+        self.write_config(codex={"enabled": True})
+        self.run_route("--set", "codex", "--session", "chat-one")
+        self.run_route("--set", "codex", "--all")
+        done = self.run_route("--clear", "--all")
+        self.assertIn("Routing off for every session", done.stdout)
+        self.assertFalse(os.path.exists(swlib.mode_path()))
+        self.assertTrue(os.path.exists(swlib.route_path("chat-one")))
+        self.assertIn("No route applies to every session",
+                      self.run_route("--clear", "--all").stdout)
+
+    def test_clear_here_takes_the_global_route_that_was_routing_here(self):
+        self.write_config(codex={"enabled": True})
+        self.run_route("--set", "codex", "--all")
+        done = self.run_route("--clear", "--session", "chat-one")
+        self.assertIn("The route that applied to every session is gone too.",
+                      done.stdout)
+        self.assert_nothing_armed()
 
     def test_show_reads_a_bare_word_file(self):
         self.write_config(codex={"enabled": True})
@@ -1614,6 +1814,84 @@ class MirroredRefreshRuns(Base):
         self.assertFalse(os.path.exists(os.path.join(self.home, ".refresh.lock")))
 
 
+# Captured from `launchctl print gui/<uid>/com.second-wind.refresh` on a machine
+# where the agent was loaded, with the home directory generalised. Written out
+# here rather than run for real, so the comparison is tested without launchd.
+LAUNCHCTL_PRINT = """gui/501/com.second-wind.refresh = {
+\tactive count = 0
+\tpath = /Users/example/Library/LaunchAgents/com.second-wind.refresh.plist
+\ttype = LaunchAgent
+\tstate = not running
+
+\tprogram = /bin/sh
+\targuments = {
+\t\t/bin/sh
+\t\t%s
+\t\t--if-claude-running
+\t}
+
+\tstderr path = /Users/example/.second-wind/log/launchd.err
+\tdefault environment = {
+\t\tPATH => /usr/bin:/bin:/usr/sbin:/sbin
+\t}
+
+\trun interval = 900 seconds
+\tlast exit code = (never exited)
+
+\tproperties = inferred program
+}
+"""
+
+MIRROR = "/Users/example/.second-wind/runtime/usage-refresh.sh"
+
+
+def launchctl_print(script=MIRROR):
+    return LAUNCHCTL_PRINT % script
+
+
+class LaunchdCommand(unittest.TestCase):
+    """--check could say the agent was loaded but not what it was running, so a
+    job still pointed at a path that has since moved read as healthy."""
+
+    def test_the_argument_vector_is_read(self):
+        self.assertEqual(sw_setup.launchd_arguments(launchctl_print()),
+                         ["/bin/sh", MIRROR, "--if-claude-running"])
+
+    def test_the_mirror_is_recognised(self):
+        self.assertEqual(sw_setup.launchd_command_state(launchctl_print(),
+                                                        MIRROR),
+                         ("loaded, runs the mirror", True))
+
+    def test_a_path_that_has_moved_is_named_with_the_fix(self):
+        stale = launchctl_print(
+            "/Users/example/Documents/skills/second-wind/scripts/usage-refresh.sh")
+        detail, fresh = sw_setup.launchd_command_state(stale, MIRROR)
+        self.assertEqual(detail, "loaded, runs a stale path: rerun --write")
+        self.assertIs(fresh, False)
+
+    def test_a_job_with_a_program_and_no_vector_is_read_as_one_argument(self):
+        text = "gui/501/x = {\n\tprogram = /bin/sh\n\tstate = not running\n}\n"
+        self.assertEqual(sw_setup.launchd_arguments(text), ["/bin/sh"])
+        self.assertEqual(
+            sw_setup.launchd_command_state(text, MIRROR)[0],
+            "loaded, runs a stale path: rerun --write")
+
+    def test_output_it_cannot_read_fails_closed(self):
+        for text in ("", "   ", None,
+                     "Could not find service \"com.second-wind.refresh\"",
+                     "gui/501/x = {\n\targuments = {\n\t\t/bin/sh\n",
+                     "gui/501/x = {\n\targuments = {\n\t}\n}\n",
+                     "gui/501/x = {\n\tprogram =\n}\n"):
+            self.assertIsNone(sw_setup.launchd_arguments(text), text)
+            self.assertEqual(sw_setup.launchd_command_state(text, MIRROR),
+                             ("loaded, arguments not readable", None), text)
+
+    def test_no_expected_path_is_not_reported_as_a_match(self):
+        self.assertEqual(
+            sw_setup.launchd_command_state(launchctl_print(), "")[0],
+            "loaded, runs a stale path: rerun --write")
+
+
 class Check(Base):
     """--check has to answer the questions the tool cannot answer for itself, so
     the two rows added here are tested for what they actually say."""
@@ -1630,12 +1908,19 @@ class Check(Base):
                 handle.write("# %s\n" % name)
         self.real_versions = swlib.client_versions
         self.real_loaded = sw_setup.launchd_loaded
+        self.real_print = sw_setup.launchd_print
         swlib.client_versions = lambda: {"claude": "2.1.259"}
         sw_setup.launchd_loaded = lambda: True
+        # No launchctl in a test. The loaded job runs the mirror unless a test
+        # says otherwise.
+        self.printed = lambda: launchctl_print(
+            os.path.join(swlib.runtime_dir(), "usage-refresh.sh"))
+        sw_setup.launchd_print = lambda: self.printed()
 
     def tearDown(self):
         swlib.client_versions = self.real_versions
         sw_setup.launchd_loaded = self.real_loaded
+        sw_setup.launchd_print = self.real_print
         super().tearDown()
 
     def configure(self, **overrides):
@@ -1675,6 +1960,28 @@ class Check(Base):
         text = self.check()
         self.assertIn("the launchd agent has nothing to run", text)
         self.assertIn("NOT ARMED", text)
+
+    def test_the_loaded_job_is_reported_as_running_the_mirror(self):
+        self.configure(refresh={"interval_minutes": 15, "launchd": True})
+        text = self.check()
+        self.assertIn("loaded, runs the mirror", text)
+
+    def test_a_loaded_job_running_a_path_that_moved_is_a_fault(self):
+        self.configure(level="relief",
+                       refresh={"interval_minutes": 15, "launchd": True})
+        self.printed = lambda: launchctl_print(
+            os.path.join(self.scripts, "usage-refresh.sh"))
+        text = self.check()
+        self.assertIn("loaded, runs a stale path: rerun --write", text)
+        self.assertIn("runs a path that is not the mirror", text)
+        self.assertIn("NOT ARMED", text)
+
+    def test_output_that_cannot_be_parsed_says_so_and_raises_nothing(self):
+        self.configure(refresh={"interval_minutes": 15, "launchd": True})
+        self.printed = lambda: "Could not find service"
+        text = self.check()
+        self.assertIn("loaded, arguments not readable", text)
+        self.assertNotIn("stale path", text)
 
     def test_a_newer_client_than_the_tested_one_is_stated_plainly(self):
         self.configure()

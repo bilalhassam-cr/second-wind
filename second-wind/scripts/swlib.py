@@ -18,6 +18,7 @@ or from ``scripts/hooks/``:
     import swlib
 """
 import glob
+import hashlib
 import json
 import os
 import re
@@ -403,11 +404,51 @@ def backup_once(path):
     return made_original, stamped
 
 
-# ---------------------------------------------------------------- mode file
+# ---------------------------------------------------------------- route store
+
+# One file per session, plus one file for the routes that are meant to apply
+# everywhere. Before this, every route landed in ~/.second-wind/mode, so a route
+# armed in one chat overwrote the route another chat had already set: a desktop
+# arming replaced a picker route somebody was in the middle of using. The global
+# file is still written for an explicit "every session" route, and still read,
+# because a bare word echoed into it is the oldest way to use this tool.
+EVERY_SESSION = "*"
 
 
 def mode_path():
+    """The global route file: a bare word, or JSON scoped to every session."""
     return os.path.join(sw_home(), "mode")
+
+
+def routes_dir():
+    return os.path.join(sw_home(), "routes")
+
+
+def route_slug(session_id):
+    """A session id as one filename, or None when no single session is named.
+
+    Ids are uuids in practice. Anything else is folded to the same small set of
+    characters, so an id carrying a slash or a dotted pair cannot write outside
+    the routes directory.
+    """
+    text = str(session_id or "").strip()
+    if not text or text == EVERY_SESSION:
+        return None
+    slug = re.sub(r"[^A-Za-z0-9._-]", "-", text)[:120]
+    if not slug.strip("._-"):
+        slug = "session-%s" % hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+    return slug
+
+
+def route_path(session_id):
+    """Where this session's route lives, or None when the route is global."""
+    slug = route_slug(session_id)
+    return os.path.join(routes_dir(), slug + ".json") if slug else None
+
+
+def route_paths():
+    """Every per-session route file, by name."""
+    return sorted(glob.glob(os.path.join(routes_dir(), "*.json")))
 
 
 def write_mode(route, source=None, session_id=None):
@@ -416,9 +457,8 @@ def write_mode(route, source=None, session_id=None):
     Two hooks and the chat command write it now, so the keys live here rather
     than in each of them. ``source`` records which path armed the route, because
     the desktop one cannot be turned off by picking a model in a menu that runs
-    no hook. ``session_id`` scopes the route to the session that armed it: a
-    route armed in a test chat used to tell every other session to route its
-    work away. ``"*"`` means every session, on purpose.
+    no hook. ``session_id`` decides the file: a named session gets its own file
+    in ``routes/``, and ``"*"`` or no session at all goes to the global file.
     """
     data = {"worker": route["worker"],
             "model": route["model"],
@@ -430,66 +470,119 @@ def write_mode(route, source=None, session_id=None):
     if source:
         data["source"] = source
     if session_id:
-        data["session_id"] = str(session_id)
-    return write_json_atomic(mode_path(), data)
+        data["session_id"] = str(session_id).strip()
+    return write_json_atomic(route_path(session_id) or mode_path(), data)
 
 
-def mode_text():
-    """The routing override as written, stripped, or an empty string."""
+def route_text(path):
+    """A route file as written, stripped, or an empty string."""
     try:
-        with open(mode_path()) as handle:
+        with open(path) as handle:
             return handle.read().strip()
     except Exception:
         return ""
 
 
+def mode_text():
+    """The global route file as written, stripped, or an empty string."""
+    return route_text(mode_path())
+
+
 def drop_mode():
-    """Remove the routing override. Absent is the same as removed."""
+    """Remove the global route. Absent is the same as removed."""
     try:
         os.unlink(mode_path())
     except OSError:
         pass
 
 
-def route_age(data, now=None):
-    """Seconds since this route was armed, or None when it does not say. The
+def drop_route(session_id=None):
+    """Remove this session's route file. Returns the path when there was one."""
+    path = route_path(session_id)
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        os.unlink(path)
+    except OSError:
+        return None
+    return path
+
+
+def global_route_applies(session_id=None):
+    """Whether the global file is what routes this session.
+
+    Unreadable contents count as ours: rubbish in a file only this tool writes
+    is not somebody else's decision, and clearing is the gesture that gets rid
+    of it.
+    """
+    text = mode_text()
+    if not text:
+        return False
+    if not text.startswith("{"):
+        return True
+    try:
+        data = json.loads(text)
+    except Exception:
+        return True
+    if not isinstance(data, dict):
+        return True
+    scope = data.get("session_id")
+    scope = scope.strip() if isinstance(scope, str) and scope.strip() else None
+    return (not scope or scope == EVERY_SESSION
+            or scope == str(session_id or "").strip())
+
+
+def clear_route(session_id=None):
+    """Stop routing this session: its own file, and the global file when that is
+    what was routing here. Returns the paths removed."""
+    removed = []
+    path = drop_route(session_id)
+    if path:
+        removed.append(path)
+    if os.path.exists(mode_path()) and global_route_applies(session_id):
+        drop_mode()
+        removed.append(mode_path())
+    return removed
+
+
+def route_age(data, now=None, path=None):
+    """Seconds since this route was armed, or None when nothing says. The
     file's own mtime stands in for a hand-written route with no timestamp."""
     now = int(time.time()) if now is None else int(now)
     try:
         stamped = int(data.get("set_at"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, AttributeError):
         stamped = 0
     if stamped <= 0:
         try:
-            stamped = int(os.path.getmtime(mode_path()))
+            stamped = int(os.path.getmtime(path or mode_path()))
         except OSError:
             return None
     return now - stamped
 
 
-def active_route(session_id=None, cfg=None, now=None):
-    """The route in force for this session, or None.
+def route_in_file(path, session_id=None, cfg=None, now=None):
+    """The route this file holds for this session, or None.
 
     Three shapes reach this. A bare word is global, which is the old behaviour
     and what somebody echoing into the file expects. A JSON route carries the
     session that armed it and applies only there, unless it says ``"*"`` or is
     an older file that names no session. A JSON route past ROUTE_MAX_AGE is
-    deleted, because it is nobody's current decision.
+    deleted where it was found, because it is nobody's current decision.
 
-    Returns ``{word, worker, model, effort, mode, label, session_id, source}``.
-    ``word`` is what the file named, for a message that quotes it back.
+    Returns ``{word, worker, model, effort, mode, label, session_id, source,
+    path}``. ``word`` is what the file named, for a message that quotes it back.
     """
-    cfg = load_config() if cfg is None else cfg
-    text = mode_text()
+    text = route_text(path)
     if not text:
         return None
     if not text.startswith("{"):
-        route = parse_route("".join(text.split()), cfg) or \
-            role_route("".join(text.split()), cfg)
+        word = "".join(text.split())
+        route = parse_route(word, cfg) or role_route(word, cfg)
         if not route:
             return None
         route.update({"word": route["worker"], "mode": None,
-                      "session_id": None, "source": None})
+                      "session_id": None, "source": None, "path": path})
         return route
     try:
         data = json.loads(text)
@@ -500,13 +593,17 @@ def active_route(session_id=None, cfg=None, now=None):
     route = role_route(data.get("worker"), cfg)
     if not route:
         return None
-    age = route_age(data, now=now)
+    age = route_age(data, now=now, path=path)
     if age is not None and age > ROUTE_MAX_AGE:
-        drop_mode()
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
         return None
     scope = data.get("session_id")
     scope = scope.strip() if isinstance(scope, str) and scope.strip() else None
-    if scope and scope != "*" and scope != str(session_id or "").strip():
+    if scope and scope != EVERY_SESSION \
+            and scope != str(session_id or "").strip():
         # Somebody else's route. Left where it is: it is still their decision,
         # and this session simply is not the one it was armed for.
         return None
@@ -519,8 +616,84 @@ def active_route(session_id=None, cfg=None, now=None):
                   "label": label.strip() if isinstance(label, str)
                   and label.strip() else route["label"],
                   "session_id": scope,
-                  "source": data.get("source")})
+                  "source": data.get("source"),
+                  "path": path})
     return route
+
+
+def active_route(session_id=None, cfg=None, now=None):
+    """The route in force for this session, or None.
+
+    This session's own file is read first, then the global one, so a route armed
+    here beats one somebody left applying everywhere. An expired file met on the
+    way is deleted.
+    """
+    cfg = load_config() if cfg is None else cfg
+    mine = route_path(session_id)
+    if mine:
+        route = route_in_file(mine, session_id, cfg, now)
+        if route:
+            return route
+    return route_in_file(mode_path(), session_id, cfg, now)
+
+
+def armed_routes(cfg=None, now=None):
+    """Every route armed on this machine, newest first, for ``--show``.
+
+    A listing, not a reader: it names expired and unreadable files rather than
+    deleting or hiding them, because "why is my work going there" is answered by
+    seeing all of them at once.
+
+    Rows are ``{path, scope, worker, label, model, effort, mode, source, age,
+    expired, readable}``.
+    """
+    cfg = load_config() if cfg is None else cfg
+    rows = []
+    for path in [mode_path()] + route_paths():
+        text = route_text(path)
+        if not text:
+            continue
+        named = EVERY_SESSION if path == mode_path() \
+            else os.path.basename(path)[:-len(".json")]
+        row = {"path": path, "scope": named, "worker": None, "label": None,
+               "model": None, "effort": None, "mode": None, "source": None,
+               "age": None, "expired": False, "readable": True}
+        if not text.startswith("{"):
+            word = "".join(text.split())
+            route = parse_route(word, cfg) or role_route(word, cfg) or {}
+            row.update({"scope": EVERY_SESSION,
+                        "worker": route.get("worker") or word,
+                        "label": route.get("label"),
+                        "model": route.get("model"),
+                        "effort": route.get("effort"),
+                        "source": "a bare word",
+                        "readable": bool(route),
+                        "age": route_age({}, now=now, path=path)})
+            rows.append(row)
+            continue
+        try:
+            data = json.loads(text)
+        except Exception:
+            data = None
+        if not isinstance(data, dict):
+            row["readable"] = False
+            rows.append(row)
+            continue
+        route = role_route(data.get("worker"), cfg) or {}
+        scope = data.get("session_id")
+        scope = scope.strip() if isinstance(scope, str) and scope.strip() \
+            else named
+        age = route_age(data, now=now, path=path)
+        row.update({"scope": scope,
+                    "worker": route.get("worker") or data.get("worker"),
+                    "label": data.get("label") or route.get("label"),
+                    "model": data.get("model"), "effort": data.get("effort"),
+                    "mode": data.get("mode"), "source": data.get("source"),
+                    "age": age, "readable": bool(route),
+                    "expired": age is not None and age > ROUTE_MAX_AGE})
+        rows.append(row)
+    rows.sort(key=lambda row: (row["age"] is None, row["age"] or 0))
+    return rows
 
 
 def role_route(word, cfg=None):

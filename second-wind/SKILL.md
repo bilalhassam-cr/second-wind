@@ -26,8 +26,8 @@ python3 "$SW/scripts/setup.py" --accounts
 `--live` to run the readers first, and only when the table says the readings are
 stale. `--check` says whether the chain is wired up. Both print `NOT SET UP` and
 exit 0 when nothing is configured, so read the output, not the exit code, and
-**offer to set it up in one line before getting on with what the user asked
-for.** A missing optional tool never blocks a task.
+**offer to set it up in one line before getting on with the task.** A missing
+optional tool never blocks one.
 
 ## The command surface
 
@@ -37,16 +37,19 @@ the only way to route, since its model menu takes no rows of ours.
 1. `setup.py --accounts` for the figures, then
    `python3 "$SW/scripts/route.py" --destinations` for each destination, its
    headroom and its presets with a line each.
-2. Show them before asking. If a widget or inline HTML rendering tool is
-   available, render one compact card: a row per destination with its label, two
-   small bars (5h and weekly, or the Cursor pools), a **most headroom** mark on
-   the recommended row and the preset names under each. Otherwise print a tidy
-   aligned table. Then one line of advice, such as "the personal account has the
-   most headroom; Codex if you want a different model's read".
-3. **AskUserQuestion**, "Where should the next tasks run?". Labels stay short,
-   the destination name only, with the usage and the recommendation in the
-   description. "Keep it here" is one of the options, recommended when this
-   account's headroom is above 40%.
+2. Show them all before asking, because the question cannot list them all. If a
+   widget or inline HTML rendering tool is available, render one compact card: a
+   row per destination, its label, two small bars (5h and weekly, or the Cursor
+   pools), a **most headroom** mark on the recommended row and the presets under
+   each. Otherwise a tidy aligned table, then one line of advice.
+3. **AskUserQuestion**, "Where should the next tasks run?". **Four options is
+   the limit and "Keep it here" takes one**, so page one is "Keep it here" plus
+   the destinations with the most headroom, and when more are enabled than fit,
+   the last option is "Another destination", leading to a second question with
+   the rest. Three or fewer all fit, so no second page. Labels are the
+   destination name only, with the usage in the description. Keep the
+   recommendation on page one, "Keep it here" when this account's headroom is
+   above 40%. Count the options: a dropped one is how Cursor went missing.
 4. **AskUserQuestion** again: the presets for whatever was chosen, each option
    labelled with the preset and described by its own line.
 5. And a third: "Review only (read, no edits)" or "Full access (does the work)".
@@ -79,9 +82,8 @@ subscription, Codex a ChatGPT plan, Grok Build SuperGrok or X Premium+, Cursor
 Agent Cursor Pro. Ask with **AskUserQuestion, multi-select** which to connect,
 then sign them in one at a time, re-running `--detect` between each. Ask which
 Claude profile is primary and which level to run at: **reviewer** is read-only
-delegation with no automatic handover, **worker** is full access plus the hooks
-that notice a limit, **relief** adds handover at a task boundary when the primary
-crosses its thresholds. Then write everything with one command:
+delegation with no handover, **worker** is full access plus the hooks that notice
+a limit, **relief** adds handover at a task boundary. Then write it all at once:
 
 ```bash
 python3 "$SW/scripts/setup.py" --write --level relief \
@@ -90,18 +92,17 @@ python3 "$SW/scripts/setup.py" --write --level relief \
 ```
 
 Other options: `--reader ~/.claude-usage`, `--five-hour 85`, `--seven-day 75`,
-`--refresh-minutes 30`, `--model-picker on`, `--picker-routes id,id`,
-`--picker-models codex=gpt-5.6/high,...`, `--no-launchd`, `--timeout 900`,
-`--force`. Finally, tell the user to **restart Claude Code**, then run `--check`
-and `--accounts`: settings are read at session start, and a running session can
-write the project list back over the workdir trust when it exits.
+`--refresh-minutes 30`, `--model-picker on`, `--no-launchd`, `--timeout 900`,
+`--force`, and the picker flags in `references/setup.md`. Finally, tell the user
+to **restart Claude Code**, then run `--check` and `--accounts`: settings are
+read at session start, and a running session can write the project list back
+over the workdir trust when it exits.
 
 ## Running work on another account
 
-Always through the runner. It records the call, and an unlogged delegation is the
-thing this skill exists to prevent: a job that half worked still returns prose
-that reads like success. Write the prompt to a file first, since building the
-command inline turns quoting into the hard part of the job.
+Always through the runner: it records the call, and an unlogged delegation is
+what this skill exists to prevent, since a half-worked job still returns prose
+reading like success. Write the prompt to a file, or quoting becomes the job.
 
 ```bash
 "$SW/scripts/run.sh" <secondary|codex|grok|cursor> <prompt-file> [--review|--work] [--model M] [--effort E]   # cursor takes no --effort
@@ -117,31 +118,30 @@ whenever you are still editing the same files.
 with the same reach you have, except Codex: work mode puts it in the
 workspace-write sandbox, so it cannot write outside the directory and **cannot
 launch a browser**. Browser QA, screenshots and any CDP, puppeteer or playwright
-step stay on this session. Use work mode to build or fix something, and when the
-point is to spend the other allowance. Say which mode you used.
+step stay here. Use work mode to build or fix something, and when the point is
+to spend the other allowance. Say which mode you used.
 
 **Writing the prompt.** The worker starts blind. Put the question, the relevant
 file contents, the constraint that matters and what finished looks like into the
 prompt, and never point it at skill definitions written for another system. Open
-a review with: you are reviewing work you did not produce, be direct and
-specific, lead with the single biggest problem, no compliments, and where
-something is wrong say what it should be instead.
+a review with: you are reviewing work you did not produce, be direct, lead with
+the single biggest problem, no compliments, and where something is wrong say
+what it should be instead.
 
-**In parallel.** Each call writes its own exchange file and appends one ledger
-line, so parallel calls are safe: background each one and `wait`. Subagents
-inherit this session's login and always bill the primary account, so the runner
-is the only thing that shifts the load.
+**In parallel.** Each call writes its own exchange file and one ledger line, so
+parallel calls are safe: background each and `wait`. Subagents inherit this
+session's login and bill the primary account, so only the runner shifts it.
 
 ## Reporting back, and the record
 
 **First check whether it worked.** A non-zero exit means the delegation failed
 and the text is an error, not an opinion. Exit 124 is the timeout, and an empty
-reply with a zero exit is also a failure. Say so and do the work yourself.
+reply with a zero exit is a failure too. Say so and do the work yourself.
 
 1. Show the answer **verbatim**, in a quoted block, labelled with the account
-   that produced it. Do not summarise it and do not soften it.
-2. Add one line of your own: whether you agree and what you would do. Where you
-   disagree, say so rather than averaging.
+   that produced it. Do not summarise or soften it.
+2. Add one line of your own: whether you agree and what you would do. Where
+   you disagree, say so rather than averaging.
 3. Name the exchange file so the user can reopen it.
 4. In `--work` mode, verify the change yourself. Reported success is not evidence.
 
@@ -153,16 +153,15 @@ user's memory or a project file. Review the last week with
 ## The session brief and handover
 
 At every level a SessionStart hook puts one line per account in front of the
-session: the windows, their age, any reader fault, and whether a route is on for
-this session. The desktop app runs no status line, so the brief is the only
-surface there.
+session: the windows, their age, any reader fault, and whether a route is on
+here. The desktop app runs no status line, so the brief is the only surface.
 
 At level relief the guard adds a line when the primary crosses its thresholds. It
 is a request, not a dispatch: this session has to act on it, **at a task
 boundary**, never part-way through a job already running. Say in one line that
-you are handing over and which account is taking it, so the user can stop you. If
-the user says keep it here, keep it here. `~/.second-wind/no-failover` turns
-automatic handover off altogether.
+you are handing over and which account is taking it, so the user can stop you.
+If the user says keep it here, keep it here. `~/.second-wind/no-failover` turns
+handover off altogether.
 
 ## Routing from the model picker
 
@@ -170,11 +169,12 @@ In a terminal, `/model second-wind/personal` or
 `/model second-wind/codex/gpt-5.6/high` routes too. The switch is **refused on
 purpose**: the session keeps its model and the next tasks go to that worker
 through the runner, for this session only. Picking any normal model stops it.
-
 The desktop app fires no hook for a typed id, so a routing name there becomes a
 model the API rejects; at level relief the guard arms the route anyway and asks
 for a real model. In the desktop app, `/second-wind` is the way to pick.
 
-Never write `~/.second-wind/mode` by hand: `route.py` writes it, scoped to the
-session that asked. `references/routing.md`, `references/setup.md`,
-`references/config.md` and `references/troubleshooting.md` carry the rest.
+Never write the route files by hand: `route.py` writes one per session, in
+`~/.second-wind/routes/`, so two chats cannot overwrite each other.
+`route.py --show` lists every armed route when one seems to apply to the wrong
+chat. `references/routing.md`, `references/setup.md`, `references/config.md` and
+`references/troubleshooting.md` carry the rest.
