@@ -86,8 +86,12 @@ def read_screen(config_dir, cwd, budget):
         ["claude", "--model", "haiku"], cwd=cwd,
         env_set={} if default_dir else {"CLAUDE_CONFIG_DIR": resolved},
         # A nested session inherits markers that change how the CLI behaves.
+        # A key in the environment would bill the API instead of the plan
+        # this reader is measuring, so those go too.
         env_drop=("CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID",
-                  "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDECODE") +
+                  "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDECODE",
+                  "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+                  "ANTHROPIC_AUTH_TOKEN") +
                  (("CLAUDE_CONFIG_DIR",) if default_dir else ()))
     ends = time.time() + budget
 
