@@ -2,7 +2,7 @@
 
 ▝▜██████▀ Haiku 4.5 · Claude Team
 
-  ▝▝ ▝▝ ~/Documents/MycodeProjects/DhikrCircle_FromRork
+  ▝▝ ▝▝ ~/projects/example                             
 
 
 

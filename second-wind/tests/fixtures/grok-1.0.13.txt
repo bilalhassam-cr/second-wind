@@ -1,6 +1,6 @@
 
                                                                                                                                                                                                         
-   main ~/Documents/MycodeProjects/DhikrCircle_FromRork                                                                                                                                                
+   main ~/projects/example                                                                                                                                                                             
                                                                                                                                                                                                         
                                                                                                                                                                                                         
                                                                                                                                                                                                         

@@ -13,7 +13,9 @@ five hour window at all. That case matters, so both are tested.
 The `-trust.txt` fixtures were captured by starting each client in an empty and
 untrusted directory under /tmp. No key was pressed to answer any of them.
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -207,6 +209,86 @@ class CursorTests(unittest.TestCase):
         trust = fixture(CURSOR_FIXTURE + "-trust")
         self.assertIsNotNone(re.search(cursor.TRUST, trust, re.I))
         self.assertIsNone(re.search(cursor.TRUST, fixture(CURSOR_FIXTURE), re.I))
+
+
+class BudgetTests(unittest.TestCase):
+    """The budget is an upper bound on the whole reading, so a wait started
+    after it has gone is time nobody agreed to spend."""
+
+    def test_a_wait_never_outlasts_the_budget(self):
+        now = 1000.0
+        self.assertEqual(ptyreader.budget_left(now + 10, 6, now), 6)
+        self.assertEqual(ptyreader.budget_left(now + 2, 6, now), 2.0)
+
+    def test_zero_once_the_budget_has_gone(self):
+        now = 1000.0
+        self.assertEqual(ptyreader.budget_left(now, 6, now), 0.0)
+        self.assertEqual(ptyreader.budget_left(now - 30, 6, now), 0.0)
+        # Every reader turns that zero into None, which is what makes it stop
+        # instead of spending another second per wait past its budget.
+        self.assertIsNone(ptyreader.budget_left(now - 30, 6, now) or None)
+
+
+class ReaderMainTests(unittest.TestCase):
+    """What each reader leaves behind when the screen never gets read. The
+    client is not started: read_screen is replaced, because these are tests of
+    the reporting, not of the driving."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="second-wind-reader-")
+        self.status = os.path.join(self.tmp, "status.txt")
+        self.out = os.path.join(self.tmp, "usage.json")
+        self.real = claude.read_screen
+
+    def tearDown(self):
+        claude.read_screen = self.real
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def run_main(self):
+        argv = sys.argv
+        sys.argv = ["claude-usage.py", "--role", "primary",
+                    "--config-dir", self.tmp, "--cwd", self.tmp,
+                    "--out", self.out, "--status", self.status]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                return claude.main()
+        finally:
+            sys.argv = argv
+
+    def first_line(self):
+        with open(self.status) as handle:
+            return handle.readline().strip()
+
+    def test_an_os_failure_writes_a_status_rather_than_a_traceback(self):
+        def explode(*args):
+            raise OSError("out of pty devices\nsecond line")
+        claude.read_screen = explode
+        self.assertEqual(self.run_main(), 1)
+        self.assertEqual(self.first_line(),
+                         "FAILED: OSError: out of pty devices")
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_an_exhausted_budget_says_which_state_it_stopped_in(self):
+        claude.read_screen = lambda *args: ("budget: the prompt box",
+                                            "a screen with no figures on it")
+        self.assertEqual(self.run_main(), 1)
+        self.assertTrue(self.first_line().startswith(
+            "FAILED: budget exhausted before the prompt box"), self.first_line())
+        self.assertIn("a screen with no figures on it", self.first_line())
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_a_panel_writes_the_cache_and_says_OK(self):
+        claude.read_screen = lambda *args: ("panel", fixture(CLAUDE_FIXTURE))
+        self.assertEqual(self.run_main(), 0)
+        self.assertEqual(self.first_line(), "OK")
+        with open(self.out) as handle:
+            record = json.load(handle)
+        self.assertEqual(record["role"], "primary")
+        self.assertEqual(record["worker"], "claude")
+        self.assertEqual(record["five_hour_pct"], 23)
+        self.assertEqual(record["seven_day_pct"], 35)
+        self.assertEqual(record["client_version"], "2.1.251")
+        self.assertIsInstance(record["cached_at"], int)
 
 
 class PickerTests(unittest.TestCase):

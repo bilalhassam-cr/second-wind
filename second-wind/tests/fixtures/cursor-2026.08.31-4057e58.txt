@@ -11,7 +11,7 @@
                                                                                                                                                                                                        
 
   Auto
-  ~/Documents/MycodeProjects/DhikrCircle_FromRork · main
+  ~/projects/example                              · main
 
 
 
@@ -21,7 +21,7 @@
                                                                                                                                                                                                        
 
   Auto
-  ~/Documents/MycodeProjects/DhikrCircle_FromRork · main
+  ~/projects/example                              · main
 
 
     → /usage                    Show plan and on-demand usage
@@ -43,7 +43,7 @@
 
 
    Auto
-  ~/Documents/MycodeProjects/DhikrCircle_FromRork · main
+  ~/projects/example                              · main
 
   Loading usage data...
 

@@ -61,7 +61,10 @@ def read_screen(cwd, budget):
     ends = time.time() + budget
 
     def left(cap):
-        return min(cap, max(1.0, ends - time.time()))
+        """Seconds still allowed for one wait, or None once the budget has
+        gone: a reader that keeps waiting past its budget overruns it a second
+        at a time, so the caller stops and says which state it stopped in."""
+        return ptyreader.budget_left(ends, cap) or None
 
     def type_when_clear(keys):
         """Send keys only when no dialog is on screen, and name the dialog
@@ -78,8 +81,11 @@ def read_screen(cwd, budget):
     try:
         screen.start()
         # Trust first: a dialog can sit on top of a composer that looks ready.
+        chance = left(30)
+        if chance is None:
+            return "budget: the composer", screen.text
         seen = screen.first_of({"trust": TRUST, "login": LOGIN, "ready": PROMPT},
-                               timeout=left(30))
+                               timeout=chance)
         if seen in ("trust", "login"):
             return seen, screen.text
         if seen is None:
@@ -90,21 +96,39 @@ def read_screen(cwd, budget):
         stop = type_when_clear(b"/usage")
         if stop:
             return stop, screen.text
-        if not screen.wait_for(present=[MENU], timeout=left(10)):
+        chance = left(10)
+        if chance is None:
+            return "budget: the suggestion list", screen.text
+        if not screen.wait_for(present=[MENU], timeout=chance):
             stop = type_when_clear(b"/usage")
             if stop:
                 return stop, screen.text
-            if not screen.wait_for(present=[MENU], timeout=left(10)):
+            chance = left(10)
+            if chance is None:
+                return "budget: the suggestion list", screen.text
+            if not screen.wait_for(present=[MENU], timeout=chance):
                 return "no panel", screen.text
         stop = type_when_clear(b"\r")
         if stop:
             return stop, screen.text
-        if not screen.wait_for(present=[PANEL], timeout=left(20)):
+        chance = left(20)
+        if chance is None:
+            return "budget: the usage panel", screen.text
+        if not screen.wait_for(present=[PANEL], timeout=chance):
             return "no panel", screen.text
-        screen.wait_for(present=[PANEL], quiet=1.0, timeout=left(3))
+        # A panel already on screen is not thrown away for want of a settle.
+        chance = left(3)
+        if chance:
+            screen.wait_for(present=[PANEL], quiet=1.0, timeout=chance)
         return "panel", screen.text
     finally:
         screen.close()
+
+
+def tail(text):
+    """The last of the screen on one line, for a status that has to explain
+    itself in a sentence."""
+    return " ".join(text.strip()[-300:].split())
 
 
 def note(path, message):
@@ -133,10 +157,22 @@ def main():
                      "Rerun setup.py --write." % swlib.tilde(cwd))
         return 1
 
-    outcome, text = read_screen(cwd, a.budget)
+    try:
+        outcome, text = read_screen(cwd, a.budget)
+    except Exception as exc:
+        # A PTY that cannot be allocated, or a client that cannot be executed,
+        # must still leave a status behind. A traceback tells the refresh
+        # nothing and leaves the account with no reading and no reason for it.
+        note(status, "FAILED: %s: %s"
+             % (type(exc).__name__, (str(exc).splitlines() or [""])[0]))
+        return 1
     if a.dump:
         swlib.write_text_atomic(a.dump, text)
     data = parse_panel(text)
+    if outcome.startswith("budget:"):
+        note(status, "FAILED: budget exhausted before %s. Last of the screen: %s"
+             % (outcome.split(": ", 1)[1], tail(text)))
+        return 1
     if outcome == "trust":
         note(status, "TRUST PROMPT: open grok once in %s and accept, or rerun "
                      "setup --write to pre-trust it" % swlib.tilde(cwd))
@@ -146,7 +182,7 @@ def main():
         return 2
     if outcome == "no panel":
         note(status, "FAILED: usage panel did not appear. Last of the screen: %s"
-             % " ".join(text.strip()[-300:].split()))
+             % tail(text))
         return 1
     if data["seven_day_pct"] is None:
         note(status, "PARSER MISMATCH: client %s, expected labels not found"

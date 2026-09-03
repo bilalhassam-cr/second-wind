@@ -91,6 +91,12 @@ def read_screen(config_dir, cwd, budget):
                  (("CLAUDE_CONFIG_DIR",) if default_dir else ()))
     ends = time.time() + budget
 
+    def left(cap):
+        """Seconds still allowed for one wait, or None once the budget has
+        gone: a reader that keeps waiting past its budget overruns it a second
+        at a time, so the caller stops and says which state it stopped in."""
+        return ptyreader.budget_left(ends, cap) or None
+
     def type_when_clear(keys):
         """Send keys only when no dialog is on screen, and name the dialog
         when it refuses. A client can paint its composer before it paints a
@@ -107,8 +113,11 @@ def read_screen(config_dir, cwd, budget):
         screen.start()
         # Order matters: the trust dialog also shows a prompt-like line, so it
         # is tested first and wins.
+        chance = left(30)
+        if chance is None:
+            return "budget: the prompt box", screen.text
         seen = screen.first_of({"trust": TRUST, "login": LOGIN, "ready": PROMPT},
-                               timeout=min(30, budget))
+                               timeout=chance)
         if seen in ("trust", "login"):
             return seen, screen.text
         if seen is None:
@@ -118,20 +127,30 @@ def read_screen(config_dir, cwd, budget):
             return stop, screen.text
         # Only ever Right, only while no figure is on screen, five at most.
         for _ in range(5):
-            if screen.wait_for(present=[USED],
-                               timeout=min(6, max(1, ends - time.time()))):
+            chance = left(6)
+            if chance is None:
+                return "budget: the usage figures", screen.text
+            if screen.wait_for(present=[USED], timeout=chance):
                 break
             stop = type_when_clear(RIGHT)
             if stop:
                 return stop, screen.text
         if not re.search(USED, screen.text):
             return "no panel", screen.text
-        # The figures move while the panel scans local sessions; let it settle.
-        screen.wait_for(present=[USED], quiet=1.0,
-                        timeout=min(8, max(1, ends - time.time())))
+        # The figures move while the panel scans local sessions; let it settle,
+        # but a panel already on screen is not thrown away for want of one.
+        chance = left(8)
+        if chance:
+            screen.wait_for(present=[USED], quiet=1.0, timeout=chance)
         return "panel", screen.text
     finally:
         screen.close()
+
+
+def tail(text):
+    """The last of the screen on one line, for a status that has to explain
+    itself in a sentence."""
+    return " ".join(text.strip()[-300:].split())
 
 
 def note(path, message):
@@ -167,11 +186,23 @@ def main():
                      "Rerun setup.py --write." % swlib.tilde(cwd))
         return 1
 
-    outcome, text = read_screen(config_dir, cwd, a.budget)
+    try:
+        outcome, text = read_screen(config_dir, cwd, a.budget)
+    except Exception as exc:
+        # A PTY that cannot be allocated, or a client that cannot be executed,
+        # must still leave a status behind. A traceback tells the refresh
+        # nothing and leaves the account with no reading and no reason for it.
+        note(status, "FAILED: %s: %s"
+             % (type(exc).__name__, (str(exc).splitlines() or [""])[0]))
+        return 1
     if a.dump:
         swlib.write_text_atomic(a.dump, text)
     data = parse_panel(text)
     version = data["client_version"] or ""
+    if outcome.startswith("budget:"):
+        note(status, "FAILED: budget exhausted before %s. Last of the screen: %s"
+             % (outcome.split(": ", 1)[1], tail(text)))
+        return 1
     if outcome == "trust":
         note(status, "TRUST PROMPT: open claude once in %s and accept, or rerun "
                      "setup --write to pre-trust it" % swlib.tilde(cwd))
@@ -184,7 +215,7 @@ def main():
         note(status, "FAILED: usage panel did not appear. A profile that has "
                      "never been opened shows onboarding first, so run claude "
                      "in it once by hand. Last of the screen: %s"
-             % " ".join(text.strip()[-300:].split()))
+             % tail(text))
         return 1
     if data["five_hour_pct"] is None or data["seven_day_pct"] is None:
         note(status, "PARSER MISMATCH: client %s, expected labels not found"

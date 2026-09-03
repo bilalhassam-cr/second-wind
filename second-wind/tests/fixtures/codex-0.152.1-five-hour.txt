@@ -47,7 +47,7 @@
              │
              │
              │
-~/…/MycodeProjects/DhikrCircle_FromRork │
+~/projects/example                      │
 ─────────────╯
 
 ╭
@@ -88,7 +88,7 @@
 
 ╭
 
-gpt-5.6-sol default · ~/Documents/MycodeProjects/DhikrCircle_FromRork
+gpt-5.6-sol default · ~/projects/example                             
 
 ╭
 
@@ -105,7 +105,7 @@ gpt-5.6-sol default · ~/Documents/MycodeProjects/DhikrCircle_FromRork
 │ >_ OpenAI Codex (v0.152.1)                         │
 │                                                    │
 │ model:     gpt-5.6-sol medium   /model to change   │
-│ directory: ~/…/MycodeProjects/DhikrCircle_FromRork │
+│ directory: ~/projects/example                      │
 ╰────────────────────────────────────────────────────╯
 
   Tip: Try the Desktop app. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true
@@ -123,7 +123,7 @@ gpt-5.6-sol default · ~/Documents/MycodeProjects/DhikrCircle_FromRork
  
 › Ask Codex to do anything
  
-  gpt-5.6-sol medium · ~/Documents/MycodeProjects/DhikrCircle_FromRork
+  gpt-5.6-sol medium · ~/projects/example                             
 
  
 
@@ -776,7 +776,7 @@ g
  
 › Ask Codex to do anything
  
-  gpt-5.6-sol medium · ~/Documents/MycodeProjects/DhikrCircle_FromRork
+  gpt-5.6-sol medium · ~/projects/example                             
 
  
 
@@ -809,7 +809,7 @@ g
 │ information on rate limits and credits                                         │
 │                                                                                │
 │  Model:                gpt-5.6-sol (reasoning medium, summaries auto)          │
-│  Directory:            ~/Documents/MycodeProjects/DhikrCircle_FromRork         │
+│  Directory:            ~/projects/example                                      │
 │  Permissions:          Workspace (Ask for approval)                            │
 │  Agents.md:            <none>                                                  │
 │  Account:              user@example.com (Business Premium)                  │
@@ -830,7 +830,7 @@ g
  
 › Ask Codex to do anything
  
-  gpt-5.6-sol medium · ~/Documents/MycodeProjects/DhikrCircle_FromRork
+  gpt-5.6-sol medium · ~/projects/example                             
 
  
 
