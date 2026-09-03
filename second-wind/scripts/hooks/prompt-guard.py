@@ -107,6 +107,47 @@ def drop(path):
         pass
 
 
+def read_mode(home):
+    """The routing override, as (word, worker name, runner note), or None.
+
+    Two forms, both live. The model picker hook writes JSON, which can also
+    carry a model and an effort for the runner. A person, or an older version of
+    this tool, writes one bare word. Anything else is not an instruction we can
+    honour, so it returns None and the guard falls through to the readings
+    rather than routing work somewhere nobody named.
+    """
+    try:
+        with open(os.path.join(home, "mode")) as handle:
+            raw = handle.read()
+    except Exception:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    if not text.startswith("{"):
+        word = "".join(text.split())
+        return (word, MANUAL_WORKERS[word], "") if word in MANUAL_WORKERS else None
+    try:
+        data = json.loads(text)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    worker = data.get("worker")
+    if worker not in WORKER_NAMES:
+        return None
+    label = data.get("label")
+    name = label.strip() if isinstance(label, str) and label.strip() \
+        else WORKER_NAMES[worker]
+    flags = []
+    for key, flag in (("model", "--model"), ("effort", "--effort")):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            flags.append("%s %s" % (flag, value.strip()))
+    runner = ", passing %s to the runner" % " and ".join(flags) if flags else ""
+    return worker, name, runner
+
+
 def worker_list(cfg):
     """The workers this machine can hand to, in the order the config lists."""
     names = []
@@ -195,27 +236,24 @@ def main():
     # any usage reading. It still honours the master switches above, and
     # unrecognised contents stay silent rather than routing work somewhere the
     # user did not name.
-    manual = ""
-    try:
-        with open(os.path.join(home, "mode")) as handle:
-            manual = "".join(handle.read().split())
-    except Exception:
-        manual = ""
-    if manual in MANUAL_WORKERS:
+    manual = read_mode(home)
+    if manual:
+        word, name, runner = manual
         return emit(
             "[second-wind] Manual routing override '%s' is active.\n"
             "\n"
             "Before starting the task in this message, tell the user in one line that "
             "you are routing\n"
             "the heavy work to %s, then send the substantial pieces there through\n"
-            "second-wind. Keep orchestrating, reconciling and deciding on this account.\n"
+            "second-wind%s. Keep orchestrating, reconciling and deciding on this "
+            "account.\n"
             "\n"
             "Hand over at this task boundary, never part-way through a job already "
             "running here. If\n"
             "the user tells you to keep the work on this account, do that without "
             "arguing. Remove\n"
             "%s to return to usage-based handover."
-            % (manual, MANUAL_WORKERS[manual], swlib.tilde(os.path.join(home, "mode"))))
+            % (word, name, runner, swlib.tilde(os.path.join(home, "mode"))))
 
     # A failed or blocked refresh means the figures below describe nothing, and
     # a wrong percentage is worse than no percentage.

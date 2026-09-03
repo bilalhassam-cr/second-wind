@@ -63,6 +63,9 @@
     "model_picker": false,
     "cursor": true
   },
+  "picker": {
+    "routes": ["second-wind/codex/gpt-5.6/high"]
+  },
   "failover": {
     "enabled": true,
     "announce": true

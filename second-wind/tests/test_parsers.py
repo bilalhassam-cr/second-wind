@@ -418,6 +418,52 @@ class PickerTests(unittest.TestCase):
         self.assertLessEqual(len(text), 90)
         self.assertTrue(text)
 
+    def test_a_routing_row_per_worker_and_per_configured_route(self):
+        self.reading("primary", 2, 16)
+        self.reading("secondary", 1, 10)
+        self.reading("codex", None, 7)
+        rows = picker.route_rows(self.cfg)
+        self.assertEqual([row["model"] for row in rows],
+                         ["second-wind/personal", "second-wind/codex",
+                          "second-wind/codex/gpt-5.6/high"])
+        self.assertEqual([row["label"] for row in rows],
+                         ["Route: Personal Claude", "Route: Codex",
+                          "Route: Codex, gpt-5.6, high"])
+        self.assertEqual(rows[0]["description"],
+                         "5h 1% · 7d 10% · picking this routes the next "
+                         "tasks there")
+        for row in rows:
+            self.assertLessEqual(len(row["description"]), 90)
+            # Every row is a target the hook will accept.
+            self.assertTrue(swlib.parse_route(row["model"], self.cfg))
+
+    def test_a_route_for_a_worker_that_is_not_connected_is_dropped(self):
+        cfg = json.loads(json.dumps(self.cfg))
+        cfg["codex"]["enabled"] = False
+        cfg["picker"]["routes"] = ["second-wind/grok", "second-wind/cursor"]
+        self.reading("primary", 2, 16)
+        self.reading("secondary", 1, 10)
+        self.assertEqual([row["model"] for row in picker.route_rows(cfg)],
+                         ["second-wind/personal"])
+
+    def test_a_row_with_no_reading_says_so(self):
+        self.reading("primary", 2, 16)
+        rows = picker.route_rows(self.cfg)
+        self.assertEqual(rows[0]["description"],
+                         "no reading · picking this routes the next tasks there")
+
+    def test_the_row_description_keeps_its_sentence_when_it_is_cut(self):
+        cfg = json.loads(json.dumps(self.cfg))
+        cfg["secondary"]["label"] = "a label long enough to crowd the row out"
+        cfg["picker"]["routes"] = []
+        self.reading("primary", 2, 16)
+        self.reading("secondary", 11, 22)
+        self.reading("codex", 33, 44)
+        for row in picker.route_rows(cfg):
+            self.assertLessEqual(len(row["description"]), 90)
+            self.assertTrue(row["description"].endswith(
+                "picking this routes the next tasks there"), row["description"])
+
     def test_other_settings_keys_survive(self):
         self.reading("primary", 2, 16)
         self.reading("secondary", 1, 10)
@@ -437,8 +483,10 @@ class PickerTests(unittest.TestCase):
         self.assertIs(block["_second_wind"], True)
         self.assertIs(block["replaceBuiltInOptions"], True)
         self.assertEqual([row["model"] for row in block["options"]],
-                         ["fable", "opus", "sonnet", "haiku"])
-        self.assertEqual([row["label"] for row in block["options"]],
+                         ["fable", "opus", "sonnet", "haiku",
+                          "second-wind/personal", "second-wind/codex",
+                          "second-wind/codex/gpt-5.6/high"])
+        self.assertEqual([row["label"] for row in block["options"][:4]],
                          ["Fable", "Opus", "Sonnet", "Haiku"])
         self.assertEqual(block["options"][0]["description"],
                          picker.describe(self.cfg))

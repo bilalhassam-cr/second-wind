@@ -28,6 +28,7 @@ import swlib  # noqa: E402
 
 ALIASES = ("fable", "opus", "sonnet", "haiku")
 LIMIT = 90
+ROUTE_SUFFIX = " · picking this routes the next tasks there"
 # The brief's own wording, cut to something that fits a picker row.
 PHRASES = (("login expired", "login expired"),
            ("trust prompt", "trust prompt"),
@@ -45,6 +46,14 @@ def short_phrase(rest):
     return head[:20]
 
 
+def figures(rest):
+    """The percentages out of one brief line, or a short reason there are
+    none."""
+    windows = re.findall(r"\b(5h|7d|included|auto|api)\s+(\d+)%", rest)
+    return " · ".join("%s %s%%" % pair for pair in windows) if windows \
+        else short_phrase(rest)
+
+
 def compact(lines):
     """Squeeze the session brief into one line, at most LIMIT characters.
 
@@ -58,10 +67,7 @@ def compact(lines):
         words = label.split()
         name = words[0] if words else label
         name = name[:1].upper() + name[1:]
-        windows = re.findall(r"\b(5h|7d|included|auto|api)\s+(\d+)%", rest)
-        body = " · ".join("%s %s%%" % pair for pair in windows) \
-            if windows else short_phrase(rest)
-        parts.append(("%s %s" % (name, body)).strip())
+        parts.append(("%s %s" % (name, figures(rest))).strip())
     text = " | ".join(parts)
     if len(text) <= LIMIT:
         return text
@@ -77,12 +83,56 @@ def describe(cfg=None):
     return compact(swlib.brief_lines(cfg))
 
 
-def picker_block(description):
+def account_figures(worker, cfg):
+    """The figures for one account, for a routing row's description. Taken from
+    the same brief lines the alias rows use, so a row can never show a figure
+    the brief has already called dead."""
+    label = swlib.role_label(worker, cfg)
+    for line in swlib.brief_lines(cfg):
+        name, _, rest = line.partition(": ")
+        if name == label:
+            return figures(rest)
+    return "no reading"
+
+
+def route_rows(cfg):
+    """One row per enabled worker, then any extra ids from `picker.routes`.
+
+    The extra ids are how a model and an effort get into the picker:
+    `second-wind/codex/gpt-5.6/high` is a row that routes and parameterises in
+    one pick. A route naming a worker that is not connected is dropped rather
+    than shown, since picking it could only ever be refused.
+    """
+    enabled = [role for role in swlib.enabled_roles(cfg) if role != "primary"]
+    ids = [swlib.route_id(role) for role in enabled]
+    extra = (cfg.get("picker") or {}).get("routes")
+    for entry in extra if isinstance(extra, list) else []:
+        if isinstance(entry, str) and entry.strip() and entry.strip() not in ids:
+            ids.append(entry.strip())
+    rows = []
+    for ident in ids:
+        route = swlib.parse_route(ident, cfg)
+        if not route or route["worker"] not in enabled:
+            continue
+        label = ", ".join([route["label"]] +
+                          [part for part in (route["model"], route["effort"])
+                           if part])
+        # The figures are what gets cut when a row is too long, never the
+        # sentence saying what picking it does.
+        room = LIMIT - len(ROUTE_SUFFIX)
+        rows.append({"model": ident, "label": "Route: " + label,
+                     "description": account_figures(route["worker"], cfg)[:room]
+                     + ROUTE_SUFFIX})
+    return rows
+
+
+def picker_block(description, cfg=None):
     return {
         "_second_wind": True,
         "replaceBuiltInOptions": True,
         "options": [{"model": alias, "label": alias.capitalize(),
-                     "description": description} for alias in ALIASES],
+                     "description": description} for alias in ALIASES]
+        + route_rows(swlib.load_config() if cfg is None else cfg),
     }
 
 
@@ -124,7 +174,7 @@ def apply(cfg=None, on=None):
         swlib.write_json_atomic(path, data, mode=0o600)
         return "removed the model picker from %s." % swlib.tilde(path)
 
-    block = picker_block(describe(cfg))
+    block = picker_block(describe(cfg), cfg)
     if current == block:
         return "the model picker already says this."
     swlib.backup_once(path)

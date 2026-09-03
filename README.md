@@ -34,8 +34,8 @@ account did it.
 
 | Level | Default mode | Handover prompt | What it installs |
 |---|---|---|---|
-| `reviewer` | review | off | the session brief |
-| `worker` | work | off | the brief, plus hooks that notice a limit and refresh the readings |
+| `reviewer` | review | off | the session brief, and routing from the model picker |
+| `worker` | work | off | those, plus hooks that notice a limit and refresh the readings |
 | `relief` | work | on | the above, plus the prompt guard that asks for a handover at a task boundary |
 
 Handover is advice, not automation. At level relief the guard adds one line to
@@ -153,6 +153,13 @@ startup inside the sandbox and the user sees a "quit unexpectedly" dialog with n
 explanation. The runner tells the worker so in the prompt. Keep browser QA on
 your own session.
 
+You can also route from the model picker. Typing `/model second-wind/personal`,
+or `/model second-wind/codex/gpt-5.6/high`, is refused on purpose: the session
+keeps the model it has, and a PreModelSwitch hook records that the next tasks go
+to that worker, with that model and effort, through the runner. Picking any
+normal model deletes the record and hands control back to the usage figures. The
+ids also work typed into the desktop app, whose picker shows no custom rows.
+
 Review what has been delegated, and produce a shareable copy:
 
 ```bash
@@ -170,7 +177,9 @@ the brief is the only surface.
 An opt-in experiment relabels the `/model` picker rows with the current figures:
 `--model-picker on`. It works by writing a `modelPicker` key with
 `replaceBuiltInOptions` into the primary profile's settings, marked as ours so
-uninstall removes it and nothing else.
+uninstall removes it and nothing else. The same key carries one `Route: ...` row
+per connected worker, plus anything listed in `--picker-routes`. The rows are a
+CLI feature: the desktop app's picker ignores them, so there you type the id.
 
 ## How usage is read, and why it is slow
 

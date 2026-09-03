@@ -171,7 +171,28 @@ nothing. It never runs on the secondary profile.
 
 To force it regardless, write `secondary`, `codex`, `grok`, `cursor`, `both` or
 `all` to `~/.second-wind/mode`. Remove the file to go back to usage-based
-handover.
+handover. The model picker writes the same file as JSON, which can also carry a
+model and an effort; both forms are read.
+
+## "Model isn't available" after picking a route
+
+The routing hook is not installed, so the pseudo-model id was treated as a real
+one and the switch went through to the API. Run `setup.py --check`: it lists a
+`primary PreModelSwitch` line, which says `MISSING` when the hook is not in
+`settings.json`. Rerun `--write` to install it, then **restart Claude Code**,
+because settings are read at session start.
+
+The same message from the desktop app means the same thing. That picker never
+shows our rows, so the id has to be typed, and without the hook nothing catches
+it. A route that is refused with "the next tasks route to ..." is the hook
+working: the block is the mechanism, not a fault.
+
+## A route says the worker is not connected
+
+The hook only writes a routing override for a worker the config has enabled, so
+picking `second-wind/grok` with Grok off is refused rather than recorded. Turn
+the worker on with `--write --grok on`, or pick a different route. `--check`
+lists every worker and its state.
 
 ## The model picker rows are wrong or stale
 

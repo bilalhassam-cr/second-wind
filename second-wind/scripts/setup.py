@@ -11,7 +11,8 @@ backwards silently sends their main work to the wrong subscription.
       --level reviewer|worker|relief [--reader ~/.claude-usage]
       [--codex on|off] [--grok on|off] [--cursor on|off]
       [--five-hour N] [--seven-day N] [--refresh-minutes N]
-      [--model-picker on|off] [--no-launchd] [--timeout N] [--force]
+      [--model-picker on|off] [--picker-routes id,id] [--no-launchd]
+      [--timeout N] [--force]
   setup.py --accounts [--live]
   setup.py --check
   setup.py --show
@@ -51,17 +52,25 @@ HOOK_FILES = {
                      "quota_auto_resume_fired|quota_auto_resume_stale|"
                      "quota_auto_resume_disabled"),
     "PostModelSwitch": ("model-switch.py", 10, "Refreshing the usage reading", ""),
+    # No matcher: our routing ids have no canonical model name, and Claude Code
+    # runs every PreModelSwitch hook when it cannot canonicalise a target
+    # anyway. The hook checks to_model itself.
+    "PreModelSwitch": ("model-route.py", 10, "Checking the routing target", ""),
 }
 
+# PreModelSwitch is at every level, including reviewer: routing a task to
+# another account is the one thing every level can do, so the picker rows that
+# start it belong everywhere.
 LEVELS = {
     "reviewer": {"mode": "review", "failover": False,
-                 "events": ("SessionStart",)},
+                 "events": ("SessionStart", "PreModelSwitch")},
     "worker": {"mode": "work", "failover": False,
                "events": ("SessionStart", "StopFailure", "Notification",
-                          "PostModelSwitch")},
+                          "PostModelSwitch", "PreModelSwitch")},
     "relief": {"mode": "work", "failover": True,
                "events": ("SessionStart", "StopFailure", "Notification",
-                          "PostModelSwitch", "UserPromptSubmit")},
+                          "PostModelSwitch", "PreModelSwitch",
+                          "UserPromptSubmit")},
 }
 
 # Names that have ever belonged to second-wind. Any settings entry pointing at
@@ -499,6 +508,16 @@ def cmd_write(a):
     carry("model_picker",
           ("on" if prev_picker else "off") if isinstance(prev_picker, bool) else None,
           "off", "model picker")
+    # Normalised before the comparison, so `a, b` and `a,b` are not reported as
+    # a change on every rerun.
+    if a.picker_routes is not None:
+        a.picker_routes = ",".join(entry.strip()
+                                   for entry in a.picker_routes.split(",")
+                                   if entry.strip())
+    prev_routes = (previous.get("picker") or {}).get("routes")
+    carry("picker_routes",
+          ",".join(prev_routes) if isinstance(prev_routes, list) else None,
+          "", "picker routes")
 
     for name, value in (("--five-hour", a.five_hour), ("--seven-day", a.seven_day)):
         if not isinstance(value, int) or not 1 <= value <= 100:
@@ -509,6 +528,12 @@ def cmd_write(a):
         sys.exit("second-wind: --refresh-minutes must be between 1 and 1440")
     if a.model_picker not in ("on", "off"):
         sys.exit("second-wind: --model-picker must be on or off")
+    routes = [entry.strip() for entry in (a.picker_routes or "").split(",")
+              if entry.strip()]
+    for entry in routes:
+        if not swlib.parse_route(entry):
+            sys.exit("second-wind: --picker-routes takes ids like "
+                     "second-wind/codex/gpt-5.6/high. %s is not one." % entry)
 
     dirs = {"primary": a.primary, "secondary": a.secondary, "reader": a.reader}
     for role, folder in dirs.items():
@@ -630,6 +655,7 @@ def cmd_write(a):
             "model_picker": a.model_picker == "on",
             "cursor": cursor_reads,
         },
+        "picker": {"routes": routes},
         "failover": {"enabled": level["failover"], "announce": True},
         "defaults": {"mode": level["mode"]},
         "log": {
@@ -1110,6 +1136,13 @@ def cmd_uninstall():
         else:
             print("  %s cleaned: our hooks and status line removed, and our "
                   "modelPicker key if it was there" % folder)
+    mode = os.path.join(sw_home(), "mode")
+    if os.path.exists(mode):
+        try:
+            os.unlink(mode)
+            print("  routing override %s removed" % tilde(mode))
+        except OSError:
+            print("  ! could not remove %s. Delete it by hand." % tilde(mode))
     if in_temp_home():
         print("  launchd left alone: SW_HOME points at a temporary directory")
     else:
@@ -1170,6 +1203,9 @@ def build_parser():
     ap.add_argument("--seven-day", type=int, default=None)
     ap.add_argument("--refresh-minutes", type=int, default=None)
     ap.add_argument("--model-picker", choices=["on", "off"], default=None)
+    ap.add_argument("--picker-routes", default=None,
+                    help="comma-separated routing ids to add to the model "
+                         "picker, such as second-wind/codex/gpt-5.6/high")
     ap.add_argument("--no-launchd", action="store_true",
                     help="do not install the scheduled refresh agent")
     ap.add_argument("--timeout", type=int, default=None,

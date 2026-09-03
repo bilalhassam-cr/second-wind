@@ -151,6 +151,91 @@ def role_label(role, cfg=None):
     return label if isinstance(label, str) and label.strip() else role
 
 
+# ---------------------------------------------------------------- routing
+
+# The model picker is the only list of destinations Claude Code puts in front of
+# somebody mid-session, so second-wind borrows it. These ids are not models: a
+# PreModelSwitch hook refuses the switch and writes the routing mode file
+# instead. One parser for all of it, shared by that hook, the prompt guard and
+# the picker, because three copies of "is this one of ours" would disagree.
+ROUTE_PREFIX = "second-wind/"
+# Every spelling of a worker inside a pseudo-model id. `personal` and
+# `secondary` both mean the second Claude account: the config calls it the
+# secondary, a person calls it their personal one.
+ROUTE_WORKERS = {
+    "personal": "secondary",
+    "secondary": "secondary",
+    "codex": "codex",
+    "grok": "grok",
+    "cursor": "cursor",
+}
+# Bare ids accepted as well, because the desktop app's picker does not show our
+# rows and it takes a typed model id without the CLI's lookup. Somebody there
+# types what they would say.
+ROUTE_ALIASES = {
+    "claude-personal": "secondary",
+    "personal": "secondary",
+    "second-wind-personal": "secondary",
+    "codex": "codex",
+    "grok": "grok",
+    "cursor": "cursor",
+}
+ROUTE_LABELS = {
+    "secondary": "the second Claude account",
+    "codex": "Codex",
+    "grok": "Grok Build",
+    "cursor": "Cursor Agent",
+}
+# A model or effort segment. Loose on purpose: the runner passes both straight
+# through to a vendor client, and this is not the place to hold a list of every
+# model name four vendors will ship next month.
+_ROUTE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+
+
+def route_id(worker):
+    """The canonical pseudo-model id for a worker."""
+    return ROUTE_PREFIX + ("personal" if worker == "secondary" else worker)
+
+
+def route_label(worker, cfg=None):
+    """What a picker row and a block message call this worker. A label the user
+    set wins; setup writes the role name itself, which reads as nothing in a
+    sentence, so that falls through to our own wording."""
+    label = role_label(worker, cfg)
+    return ROUTE_LABELS.get(worker, worker) if label == worker else label
+
+
+def parse_route(target, cfg=None):
+    """A second-wind pseudo-model id as a dict, or None for anything else.
+
+    Accepts ``second-wind/<worker>[/<model>[/<effort>]]`` and the bare aliases
+    above. Returns ``{worker, model, effort, label}`` with model and effort None
+    when the id does not name them. Anything unrecognised is somebody's real
+    model and is not ours to touch, so it returns None rather than guessing.
+    """
+    if not isinstance(target, str):
+        return None
+    text = target.strip().strip("/")
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in ROUTE_ALIASES:
+        worker, parts = ROUTE_ALIASES[lowered], []
+    elif lowered.startswith(ROUTE_PREFIX):
+        parts = text[len(ROUTE_PREFIX):].split("/")
+        if parts[0].lower() not in ROUTE_WORKERS:
+            return None
+        worker, parts = ROUTE_WORKERS[parts[0].lower()], parts[1:]
+    else:
+        return None
+    if len(parts) > 2 or any(not _ROUTE_TOKEN.match(part) for part in parts):
+        return None
+    return {"worker": worker,
+            "model": parts[0] if parts else None,
+            "effort": parts[1] if len(parts) == 2 else None,
+            "label": route_label(worker, cfg)}
+
+
 # ---------------------------------------------------------------- writing
 
 

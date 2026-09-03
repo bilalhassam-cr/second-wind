@@ -7,8 +7,8 @@ description: Run work on a second Claude Code account, OpenAI Codex, Grok Build 
 
 Routes work to a second Claude subscription, Codex, Grok Build or Cursor Agent.
 Two reasons, kept apart. **Independence**, because a reviewer that watched you
-build the thing is not independent. **Not waiting**, because each plan has its own
-window, so a job can start elsewhere now rather than at the next reset.
+build the thing is not independent. **Not waiting**, because each plan has its
+own window, so a job can start elsewhere rather than at the next reset.
 
 ## First, resolve $SW
 
@@ -23,11 +23,11 @@ python3 "$SW/scripts/setup.py" --accounts
 ```
 
 `--accounts` prints cached figures and spawns nothing; add `--live` to run the
-readers first. It sorts the accounts by headroom and says where work should go now.
+readers first. It sorts the accounts by headroom and says where work goes now.
 `--check` says whether the chain is wired up and what is blocking it. Both print
 `NOT SET UP` and exit 0 when nothing is configured, so read the output, not the
 exit code, and **offer to set it up in one line before getting on with what the
-user actually asked for.** A missing optional tool never blocks a task.
+user asked for.** A missing optional tool never blocks a task.
 
 ## Setting it up
 
@@ -43,28 +43,19 @@ at a time, one command at a time.
    Premium+, Cursor Agent spends Cursor Pro. Nothing here is free.
 
 3. Ask with **AskUserQuestion, multi-select**: second Claude account, Codex, Grok
-   Build, Cursor. Any combination is valid. Two warnings belong here, not later.
-   Never set `XAI_API_KEY` for Grok Build: `api.x.ai` is a separate paid developer
-   product, while Grok Build spends the consumer subscription. And Cursor's
-   installer removes `~/.local/bin/agent` and takes that generic name, which can
-   delete Grok's alias, so always call the clients `grok` and `cursor-agent`.
+   Build, Cursor. Any combination is valid. `references/setup.md` carries the
+   install and sign-in command for each, and two warnings belong in the
+   conversation: never set `XAI_API_KEY` for Grok Build, since `api.x.ai` is a
+   separate paid developer product, and always call the clients `grok` and
+   `cursor-agent`, since Cursor's installer takes the generic name `agent` and
+   can delete Grok's alias.
 
 4. Walk the chosen workers **one at a time**, giving only the command that is
-   missing, waiting for it, then re-running `--detect` before the next one.
-
-   - Second Claude: `mkdir -p ~/.claude-secondary`, then
-     `CLAUDE_CONFIG_DIR="$HOME/.claude-secondary" claude auth login --claudeai`.
-     Sign-in lands on whichever account the browser already holds and ignores the
-     `--email` hint, so open the printed URL in the right browser profile. Never
-     set `CLAUDE_CONFIG_DIR` for `~/.claude` itself: it breaks a working sign-in.
-   - Codex: `npm i -g @openai/codex`, `codex login`, verify with
-     `codex login status`, which writes to stderr.
-   - Grok Build: `curl -fsSL https://x.ai/cli/install.sh | bash`. Run
-     `grok models` first; success means it is signed in already. Only on failure
-     run `grok login`.
-   - Cursor: `curl https://cursor.com/install -fsS | bash`, `cursor-agent login`,
-     verify with `cursor-agent status --format json`. `CURSOR_API_KEY`
-     authenticates delegated work but cannot read usage.
+   missing, waiting for it, then re-running `--detect` before the next one. A
+   Claude sign-in lands on whichever account the browser already holds and
+   ignores the `--email` hint, so say which browser profile to open the printed
+   URL in. Never set `CLAUDE_CONFIG_DIR` for `~/.claude` itself: it breaks a
+   working sign-in.
 
 5. Ask which Claude profile is primary if more than one is signed in. Primary is
    where the user works day to day, keeps their history and orchestrates from.
@@ -87,17 +78,14 @@ at a time, one command at a time.
    ```
 
    Other options: `--reader ~/.claude-usage`, `--five-hour 85`, `--seven-day 75`,
-   `--refresh-minutes 30`, `--model-picker on`, `--no-launchd`, `--timeout 900`,
-   `--force`. It writes the config, creates and pre-trusts
-   `~/.second-wind/workdir` for each Claude profile and for Codex, installs the
-   hooks and status line after backing the settings up, and schedules the refresh.
+   `--refresh-minutes 30`, `--model-picker on`, `--picker-routes id,id`,
+   `--no-launchd`, `--timeout 900`, `--force`. It writes the config, creates and
+   pre-trusts `~/.second-wind/workdir` for each Claude profile and for Codex,
+   installs the hooks and status line after a backup, and schedules the refresh.
 
 8. Tell the user to **restart Claude Code**, then run `--check` and `--accounts`.
    The restart matters twice: settings are read at session start, and a running
-   session can write its own copy of the project list back over the workdir trust
-   when it exits. `references/setup.md` covers creating a second profile, and the
-   optional reader profile that keeps a background reader off the desktop app's
-   credential.
+   session can write the project list back over the workdir trust when it exits.
 
 ## Running work on another account
 
@@ -111,49 +99,39 @@ command inline turns quoting into the hard part of the job.
 ```
 
 **`--review` blocks file edits and shell work.** Claude loses its edit, write and
-shell tools and loads no MCP servers. Codex runs in a read-only sandbox. Grok
-drops Write, Edit and Bash. Cursor adds `--mode ask`; `--trust` alone is not
-read-only and wrote a file in live testing. Use review mode to have work
+shell tools and loads no MCP servers, Codex runs in a read-only sandbox, Grok
+drops Write, Edit and Bash, and Cursor adds `--mode ask`, since `--trust` alone
+is not read-only and wrote a file in testing. Use review mode to have work
 challenged, and whenever you are still editing the same files.
 
 **`--work` gives the worker read and write access** to the current directory. A
 Claude, Grok or Cursor worker runs with the same reach you have. A Codex worker
 does not: work mode passes `--approve-for-me`, which puts it in the
 workspace-write sandbox, so it edits files in the directory but cannot write
-outside it and cannot launch a browser. Use work mode to build or fix something,
-and when the point is to spend the other allowance. The config sets the default
-mode. Say which mode you used when reporting back.
+outside it and **cannot launch a browser**, which is why browser QA, screenshot
+checks and any CDP, puppeteer or playwright step stay on this session.
+`references/troubleshooting.md` says why. Use work mode to build or fix
+something, and when the point is to spend the other allowance. The config sets
+the default mode. Say which mode you used when reporting back.
 
 **Writing the prompt.** The worker starts blind. Put the question, the relevant
 file contents, the constraint that matters and what finished looks like into the
-prompt. Never point it at skill definitions written for another system. For a
-review:
-
-> You are reviewing work you did not produce. Be direct and specific. Lead with
-> the single biggest problem. No compliments, no summary of what the work does.
-> If something is wrong, say what is wrong, where, and what it should be instead.
+prompt, and never point it at skill definitions written for another system. Open
+a review with: you are reviewing work you did not produce, be direct and
+specific, lead with the single biggest problem, no compliments and no summary of
+what the work does, and where something is wrong say what it should be instead.
 
 **In parallel.** Each call writes its own exchange file and appends one ledger
-line, so parallel calls are safe: background each one and `wait`. Subagents cannot
-be moved this way, since they inherit this session's login and always bill the
-primary account. The runner is what shifts the load.
-
-## What a worker cannot do
-
-**A Codex worker cannot launch a browser.** It is always sandboxed, because the
-runner passes its own sandbox flag in both modes and a command-line sandbox
-overrides the user's Codex config. Chrome aborts at startup inside it and the user
-gets a "quit unexpectedly" dialog explaining nothing, so the runner tells the
-worker not to try. Keep browser QA, screenshot checks and any CDP, puppeteer or
-playwright step on the primary session. This bites hardest in projects whose own
-instructions say to verify rendered output in a real browser.
+line, so parallel calls are safe: background each one and `wait`. Subagents
+inherit this session's login and always bill the primary account, whatever they
+are told, so the runner is the only thing that shifts the load.
 
 ## Reporting back, and the record
 
-**First check whether it worked.** A non-zero exit means the delegation failed and
-the text is an error, not an opinion. Exit 124 means it was killed on the timeout,
-and an empty reply with a zero exit is also a failure. Say so and do the work
-yourself rather than quoting a failure back as judgement.
+**First check whether it worked.** A non-zero exit means the delegation failed
+and the text is an error, not an opinion. Exit 124 is the timeout, and an empty
+reply with a zero exit is also a failure. Say so and do the work yourself rather
+than quoting a failure back as judgement.
 
 1. Show the answer **verbatim**, in a quoted block, labelled with the account
    that produced it. Do not summarise it and do not soften it.
@@ -182,5 +160,21 @@ the user says keep it here, keep it here.
 
 Writing `secondary`, `codex`, `grok`, `cursor`, `both` or `all` to
 `~/.second-wind/mode` forces routing whatever the figures say, and
-`touch ~/.second-wind/no-failover` turns handover off. `references/setup.md`,
-`references/config.md` and `references/troubleshooting.md` carry the rest.
+`touch ~/.second-wind/no-failover` turns handover off.
+
+## Routing from the model picker
+
+Type `/model second-wind/personal`, or `/model second-wind/codex/gpt-5.6/high` to
+name a model and an effort too. The switch is **refused on purpose**: the session
+keeps the model it has and the next tasks go to that worker instead, through the
+runner. Picking any normal model stops it. With `--model-picker on` these are
+rows in the picker, and `--picker-routes` adds parameterised ones.
+
+The desktop app's picker does not show the rows, so type the id there, or ask in
+chat. Asked in chat, offer an **AskUserQuestion** picker of worker, then model,
+then effort, and write the file yourself: `~/.second-wind/mode` as JSON,
+`{"worker": "codex", "model": "gpt-5.6", "effort": "high"}`, model and effort
+null when they were not chosen. Delete it to stop.
+
+`references/setup.md`, `references/config.md` and
+`references/troubleshooting.md` carry the rest.

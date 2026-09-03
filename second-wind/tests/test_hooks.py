@@ -412,6 +412,55 @@ class PromptGuard(Base):
         self.touch("mode", "banana\n")
         self.assertEqual(self.prompt().strip(), "")
 
+    def test_a_json_mode_file_from_the_picker(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.touch("mode", json.dumps({"worker": "secondary", "model": None,
+                                       "effort": None, "set_at": self.now,
+                                       "label": "spare Claude"}))
+        text = self.context(self.prompt(), "UserPromptSubmit")
+        self.assertIn("Manual routing override 'secondary' is active", text)
+        self.assertIn("routing the heavy work to spare Claude",
+                      text.replace("\n", " "))
+        self.assertNotIn("--model", text)
+        self.assertNotIn("--effort", text)
+        self.assertIn("to return to usage-based handover", text)
+
+    def test_a_json_mode_file_carrying_a_model_and_an_effort(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.touch("mode", json.dumps({"worker": "codex", "model": "gpt-5.6",
+                                       "effort": "high", "set_at": self.now,
+                                       "label": "Codex"}))
+        text = self.context(self.prompt(), "UserPromptSubmit").replace("\n", " ")
+        self.assertIn("routing the heavy work to Codex", text)
+        self.assertIn("through second-wind, passing --model gpt-5.6 and "
+                      "--effort high to the runner", text)
+
+    def test_a_json_mode_file_with_a_model_only(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.touch("mode", json.dumps({"worker": "codex", "model": "gpt-5.6",
+                                       "effort": None, "label": "Codex"}))
+        text = self.context(self.prompt(), "UserPromptSubmit").replace("\n", " ")
+        self.assertIn("passing --model gpt-5.6 to the runner", text)
+        self.assertNotIn("--effort", text)
+
+    def test_a_json_mode_file_with_no_label_names_the_worker(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        self.touch("mode", json.dumps({"worker": "grok"}))
+        text = self.context(self.prompt(), "UserPromptSubmit").replace("\n", " ")
+        self.assertIn("routing the heavy work to Grok Build", text)
+
+    def test_a_malformed_mode_file_is_silent(self):
+        self.write_config()
+        self.write_usage("primary", five=2, week=3, age=60)
+        for contents in ("{not json", "{}", "[]", '{"worker": "banana"}',
+                         '{"worker": null}', "", "   \n"):
+            self.touch("mode", contents)
+            self.assertEqual(self.prompt().strip(), "", contents)
+
     def test_handover_pending_fires_on_a_stale_cache(self):
         self.write_config()
         self.write_usage("primary", five=2, week=3, age=7200)
@@ -561,6 +610,120 @@ class ModelSwitch(Base):
         self.write_usage("primary", five=12, week=20, age=3000)
         self.assertEqual(self.fire().strip(), "")
         self.assertEqual(self.wait_for("refresh-args.txt").strip(), "")
+
+
+class ModelRoute(Base):
+    """The PreModelSwitch hook. It refuses a routing id on purpose and writes
+    the mode file; it must never refuse a real model."""
+
+    def switch(self, to_model, requested=None, **kwargs):
+        return self.run_hook("model-route.py", {
+            "hook_event_name": "PreModelSwitch", "from_model": "claude-haiku-4-5",
+            "to_model": to_model,
+            "requested_model": to_model if requested is None else requested,
+            "source": "picker"}, **kwargs)
+
+    def mode(self):
+        with open(os.path.join(self.home, "mode")) as handle:
+            return json.load(handle)
+
+    def blocked(self, stdout):
+        data = json.loads(stdout)
+        self.assertEqual(data["decision"], "block")
+        return data["reason"]
+
+    def test_a_worker_row_blocks_the_switch_and_writes_the_mode_file(self):
+        self.write_config()
+        reason = self.blocked(self.switch("second-wind/personal"))
+        self.assertIn("the next tasks route to spare Claude", reason)
+        self.assertIn("Your session model is unchanged", reason)
+        self.assertIn("Pick any normal model to stop routing", reason)
+        self.assertNotIn(", model", reason)
+        self.assertNotIn(", effort", reason)
+        written = self.mode()
+        self.assertEqual(written["worker"], "secondary")
+        self.assertIsNone(written["model"])
+        self.assertIsNone(written["effort"])
+        self.assertEqual(written["label"], "spare Claude")
+        self.assertGreaterEqual(written["set_at"], self.now)
+
+    def test_a_model_and_effort_row_records_both(self):
+        self.write_config()
+        reason = self.blocked(self.switch("second-wind/codex/gpt-5.6/high"))
+        self.assertIn("route to Codex, model gpt-5.6, effort high", reason)
+        written = self.mode()
+        self.assertEqual((written["worker"], written["model"], written["effort"]),
+                         ("codex", "gpt-5.6", "high"))
+
+    def test_a_bare_alias_typed_in_the_desktop_app(self):
+        self.write_config()
+        # The desktop picker shows no rows of ours, so somebody types an id and
+        # Claude Code passes it through without canonicalising it.
+        reason = self.blocked(self.switch("claude-personal",
+                                          requested="claude-personal"))
+        self.assertIn("route to spare Claude", reason)
+        self.assertEqual(self.mode()["worker"], "secondary")
+
+    def test_the_requested_model_is_read_as_well_as_the_target(self):
+        self.write_config()
+        self.blocked(self.switch("claude-haiku-4-5", requested="second-wind/codex"))
+        self.assertEqual(self.mode()["worker"], "codex")
+
+    def test_a_worker_that_is_not_connected_is_refused_and_writes_nothing(self):
+        self.write_config()
+        reason = self.blocked(self.switch("second-wind/cursor"))
+        self.assertIn("that worker is not connected; run setup", reason)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+
+    def test_an_unconfigured_machine_refuses_the_row(self):
+        reason = self.blocked(self.switch("second-wind/codex"))
+        self.assertIn("not connected", reason)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+
+    def test_a_real_model_turns_routing_off(self):
+        self.write_config()
+        self.blocked(self.switch("second-wind/codex"))
+        out = self.switch("claude-opus-5", requested="opus")
+        self.assertEqual(json.loads(out),
+                         {"systemMessage": "second-wind: routing off, back to "
+                                           "usage-based handover."})
+        self.assertFalse(os.path.exists(os.path.join(self.home, "mode")))
+
+    def test_a_real_model_with_no_routing_on_says_nothing(self):
+        self.write_config()
+        for target in ("claude-opus-5", "haiku", "claude-sonnet-5[1m]",
+                       "some-gateway/model-x"):
+            self.assertEqual(self.switch(target).strip(), "", target)
+
+    def test_a_real_model_is_never_blocked(self):
+        self.write_config()
+        for contents in ("codex\n", "{not json", '{"worker": "codex"}'):
+            self.touch("mode", contents)
+            out = self.switch("claude-opus-5", requested="opus").strip()
+            if out:
+                self.assertNotIn("block", out)
+            self.assertFalse(os.path.exists(os.path.join(self.home, "mode")),
+                             contents)
+
+    def test_rubbish_on_stdin_is_silent(self):
+        self.write_config()
+        path = os.path.join(STAGE, "scripts", "hooks", "model-route.py")
+        environment = dict(os.environ)
+        environment["SW_HOME"] = self.home
+        environment["CLAUDE_CONFIG_DIR"] = self.primary_dir
+        for raw in ("", "not json", "[]", "null"):
+            done = subprocess.run([path], input=raw, text=True,
+                                  capture_output=True, timeout=20,
+                                  env=environment)
+            self.assertEqual(done.returncode, 0, raw)
+            self.assertEqual(done.stdout.strip(), "", raw)
+            self.assertEqual(done.stderr, "", raw)
+
+    def test_it_comes_back_quickly(self):
+        self.write_config()
+        started = time.time()
+        self.blocked(self.switch("second-wind/codex"))
+        self.assertLess(time.time() - started, 5.0)
 
 
 class StatusLine(Base):
@@ -716,7 +879,7 @@ class Installed(unittest.TestCase):
 
     def test_every_hook_is_runnable(self):
         for name in ("session-start.py", "prompt-guard.py", "stop-failure.py",
-                     "notification.py", "model-switch.py"):
+                     "notification.py", "model-switch.py", "model-route.py"):
             path = os.path.join(SCRIPTS, "hooks", name)
             self.assertTrue(os.path.exists(path), path)
             self.assertTrue(os.access(path, os.X_OK), "%s is not executable" % name)

@@ -475,6 +475,78 @@ class CorruptCache(Base):
                          ["P: no current reading, refreshing"])
 
 
+class Routing(Base):
+    """parse_route is the only place that decides what a routing id means, so
+    every spelling the hook, the guard and the picker accept is pinned here."""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.write_config(
+            secondary={"enabled": True, "config_dir": "~/.claude-secondary",
+                       "label": "spare Claude"},
+            codex={"enabled": True, "label": "codex"})
+
+    def test_a_worker_on_its_own(self):
+        for target, worker in (("second-wind/personal", "secondary"),
+                               ("second-wind/secondary", "secondary"),
+                               ("second-wind/codex", "codex"),
+                               ("second-wind/grok", "grok"),
+                               ("second-wind/cursor", "cursor")):
+            found = swlib.parse_route(target, self.cfg)
+            self.assertEqual(found["worker"], worker, target)
+            self.assertIsNone(found["model"], target)
+            self.assertIsNone(found["effort"], target)
+
+    def test_a_model_and_an_effort(self):
+        found = swlib.parse_route("second-wind/codex/gpt-5.6/high", self.cfg)
+        self.assertEqual((found["worker"], found["model"], found["effort"]),
+                         ("codex", "gpt-5.6", "high"))
+        found = swlib.parse_route("second-wind/personal/opus", self.cfg)
+        self.assertEqual((found["worker"], found["model"], found["effort"]),
+                         ("secondary", "opus", None))
+
+    def test_the_bare_aliases_a_desktop_user_types(self):
+        for target, worker in (("claude-personal", "secondary"),
+                               ("personal", "secondary"),
+                               ("second-wind-personal", "secondary"),
+                               ("codex", "codex"), ("grok", "grok"),
+                               ("cursor", "cursor")):
+            self.assertEqual(swlib.parse_route(target, self.cfg)["worker"],
+                             worker, target)
+
+    def test_case_and_stray_slashes_do_not_matter(self):
+        for target in ("Second-Wind/Personal", " second-wind/personal ",
+                       "second-wind/personal/"):
+            self.assertEqual(swlib.parse_route(target, self.cfg)["worker"],
+                             "secondary", target)
+
+    def test_a_real_model_is_not_ours(self):
+        for target in ("opus", "haiku", "claude-opus-5", "claude-sonnet-5[1m]",
+                       "second-wind", "second-wind/", "second-wind/nobody",
+                       "second-wind/codex/a/b/c", "second-wind/codex//high",
+                       "second-wind/codex/-bad", "second-wind/codex/a b",
+                       "", "   ", None, 7, ["second-wind/codex"]):
+            self.assertIsNone(swlib.parse_route(target, self.cfg), repr(target))
+
+    def test_the_label_is_the_users_own_when_they_set_one(self):
+        self.assertEqual(swlib.parse_route("second-wind/personal",
+                                           self.cfg)["label"], "spare Claude")
+        # setup writes the role name as the label, which reads as nothing in a
+        # sentence, so our own wording stands in for it.
+        self.assertEqual(swlib.parse_route("second-wind/codex",
+                                           self.cfg)["label"], "Codex")
+        self.assertEqual(swlib.parse_route("second-wind/grok",
+                                           self.cfg)["label"], "Grok Build")
+
+    def test_the_canonical_id_for_each_worker(self):
+        self.assertEqual(swlib.route_id("secondary"), "second-wind/personal")
+        for worker in ("codex", "grok", "cursor"):
+            self.assertEqual(swlib.route_id(worker), "second-wind/" + worker)
+            self.assertEqual(
+                swlib.parse_route(swlib.route_id(worker), self.cfg)["worker"],
+                worker)
+
+
 class InstalledSettings(Base):
     """What setup actually writes into a profile's settings.json."""
 
@@ -515,6 +587,19 @@ class InstalledSettings(Base):
             self.assertTrue(os.path.isabs(command), command)
             self.assertEqual(os.path.basename(command),
                              sw_setup.HOOK_FILES[event][0])
+
+    def test_the_routing_hook_is_installed_at_every_level(self):
+        for name, level in sw_setup.LEVELS.items():
+            folder = self.profile()
+            sw_setup.merge_settings(folder, events=level["events"],
+                                    statusline=True)
+            groups = self.settings(folder)["hooks"]["PreModelSwitch"]
+            self.assertEqual(len(groups), 1, name)
+            self.assertNotIn("matcher", groups[0], name)
+            inner = groups[0]["hooks"][0]
+            self.assertEqual(os.path.basename(inner["command"]),
+                             "model-route.py", name)
+            self.assertTrue(os.access(inner["command"], os.X_OK), name)
 
     def test_setup_never_creates_the_model_picker_key(self):
         folder = self.profile()
@@ -566,7 +651,8 @@ class TrustStore(Base):
 class SetupDecisions(Base):
     def test_the_level_mapping_matches_the_contract(self):
         self.assertEqual(sorted(sw_setup.LEVELS), ["relief", "reviewer", "worker"])
-        self.assertEqual(sw_setup.LEVELS["reviewer"]["events"], ("SessionStart",))
+        self.assertEqual(sw_setup.LEVELS["reviewer"]["events"],
+                         ("SessionStart", "PreModelSwitch"))
         self.assertFalse(sw_setup.LEVELS["reviewer"]["failover"])
         self.assertEqual(sw_setup.LEVELS["reviewer"]["mode"], "review")
         for level in ("worker", "relief"):
@@ -574,6 +660,12 @@ class SetupDecisions(Base):
             for event in ("SessionStart", "StopFailure", "Notification",
                           "PostModelSwitch"):
                 self.assertIn(event, sw_setup.LEVELS[level]["events"])
+        # Routing from the picker is offered at every level, reviewer included.
+        for level in sw_setup.LEVELS:
+            self.assertIn("PreModelSwitch", sw_setup.LEVELS[level]["events"])
+        self.assertEqual(sw_setup.HOOK_FILES["PreModelSwitch"][0],
+                         "model-route.py")
+        self.assertEqual(sw_setup.HOOK_FILES["PreModelSwitch"][3], "")
         self.assertNotIn("UserPromptSubmit", sw_setup.LEVELS["worker"]["events"])
         self.assertIn("UserPromptSubmit", sw_setup.LEVELS["relief"]["events"])
         self.assertTrue(sw_setup.LEVELS["relief"]["failover"])
@@ -727,6 +819,24 @@ class WriteRerun(Base):
         self.assertEqual(cfg["thresholds"]["seven_day_pct"], 60)
         self.assertEqual(cfg["refresh"]["interval_minutes"], 45)
         self.assertTrue(cfg["refresh"]["model_picker"])
+
+    def test_picker_routes_are_carried_forward_and_validated(self):
+        self.write("--picker-routes",
+                   "second-wind/codex/gpt-5.6/high, second-wind/personal")
+        self.assertEqual(self.config()["picker"]["routes"],
+                         ["second-wind/codex/gpt-5.6/high", "second-wind/personal"])
+        self.write()
+        self.assertEqual(self.config()["picker"]["routes"],
+                         ["second-wind/codex/gpt-5.6/high", "second-wind/personal"])
+        text = self.write("--picker-routes", "second-wind/grok")
+        self.assertEqual(self.config()["picker"]["routes"], ["second-wind/grok"])
+        self.assertIn("picker routes", text)
+        with self.assertRaises(SystemExit):
+            self.write("--picker-routes", "opus")
+
+    def test_a_first_write_takes_no_picker_routes(self):
+        self.write()
+        self.assertEqual(self.config()["picker"], {"routes": []})
 
     def test_a_first_write_still_takes_the_documented_defaults(self):
         self.write()

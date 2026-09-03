@@ -25,6 +25,7 @@ in the repository is a complete sample.
 | `refresh.launchd` | Whether the scheduled refresh agent is installed. macOS only. |
 | `refresh.model_picker` | Whether the `/model` rows are relabelled with the live figures. Setup only records the choice; the refresh writes the `modelPicker` key itself, marked as ours so uninstall can remove it. |
 | `refresh.cursor` | Whether the Cursor usage reader runs. False for an API-key sign-in. |
+| `picker.routes` | Extra routing ids to show in the model picker, as a list. Default empty. Every connected worker already gets a row; this is for parameterised ones such as `second-wind/codex/gpt-5.6/high`, which route and choose a model and an effort in one pick. Set with `--picker-routes id,id`. An id naming a worker that is not connected is dropped from the picker rather than shown. |
 | `failover.enabled` | Master switch for automatic handover. True at level `relief` only. |
 | `failover.announce` | Handover always says so. Kept as a key because silence is never the default. |
 | `defaults.mode` | `review` (read-only) or `work` (full access) when no mode is passed. |
@@ -39,9 +40,9 @@ in the repository is a complete sample.
 
 | Level | Mode | Automatic handover | Hooks installed |
 |---|---|---|---|
-| `reviewer` | review | off | SessionStart brief only |
-| `worker` | work | off | SessionStart, StopFailure, Notification, PostModelSwitch |
-| `relief` | work | on | the four above plus the UserPromptSubmit guard |
+| `reviewer` | review | off | SessionStart brief, PreModelSwitch routing |
+| `worker` | work | off | those two, plus StopFailure, Notification, PostModelSwitch |
+| `relief` | work | on | the five above plus the UserPromptSubmit guard |
 
 The guard also goes into the secondary profile, where it exits at once because it is
 not the primary session. The status line goes into both.
@@ -117,7 +118,8 @@ added. `--check` reads the trust store back for every Claude profile and for Cod
 `trusted` or `NOT TRUSTED`, so a pre-trust that did not survive is visible rather than
 discovered by a reader sitting on a modal.
 
-`--uninstall` removes our hooks, our status line, our `modelPicker` key and the launchd
-agent, restores a status line it replaced, and leaves accounts and logins alone. It leaves
+`--uninstall` removes our hooks, our status line, our `modelPicker` key, the routing
+override at `~/.second-wind/mode` and the launchd agent, restores a status line it
+replaced, and leaves accounts and logins alone. It leaves
 the workdir trust entries in place, because removing them means editing files a running
 client may be writing, and it prints where to delete them by hand.
