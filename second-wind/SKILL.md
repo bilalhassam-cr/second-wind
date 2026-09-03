@@ -1,6 +1,6 @@
 ---
 name: second-wind
-description: Run work on a second Claude Code account, OpenAI Codex, Grok Build or Cursor Agent, either as an independent reviewer or as a full-access worker. Use when the user wants a second opinion, an adversarial review, an independent read of something already built, or competing options from different models, and when they say they are nearly out of usage, running low on their limit, or want to spend the other account or the other subscription. Also for /second-wind and for setting second-wind up.
+description: Run work on a second Claude Code account, OpenAI Codex, Grok Build or Cursor Agent, either as an independent reviewer or as a full-access worker. Use when the user wants a second opinion, an adversarial review, an independent read of something already built, or competing options from different models, and when they say they are nearly out of usage, running low on their limit, or want to spend the other account or the other subscription, and when they ask to route work to the personal account, Codex, Grok or Cursor for the next tasks. Also for /second-wind and for setting second-wind up.
 ---
 
 # Second wind
@@ -170,7 +170,7 @@ keeps the model it has and the next tasks go to that worker instead, through the
 runner. Picking any normal model stops it. With `--model-picker on` these are
 rows in the picker, and `--picker-routes` adds parameterised ones.
 
-The desktop picker does not show the rows, so type the id there, or ask in chat.
+The desktop app runs no hook for a typed id, so never type these ids there: ask in chat.
 Asked in chat, offer an **AskUserQuestion** picker of worker, then model, then
 effort, then write `~/.second-wind/mode` in the shape the hook writes, model and
 effort null when not chosen: `{"worker": "codex", "model": "gpt-5.6", "effort":

@@ -202,9 +202,11 @@ one and the switch went through to the API. Run `setup.py --check`: it lists a
 `settings.json`. Rerun `--write` to install it, then **restart Claude Code**,
 because settings are read at session start.
 
-The same message from the desktop app means the same thing. That picker never
-shows our rows, so the id has to be typed, and without the hook nothing catches
-it. A route that is refused with "the next tasks route to ..." is the hook
+From the desktop app the message means something else: its model menu runs no
+PreModelSwitch hook for a typed id, so a typed `second-wind/...` or
+`claude-personal` becomes the session's model and every prompt fails. Recover by
+picking a real model from the menu. Route from the desktop app by asking in chat
+instead. A route that is refused with "the next tasks route to ..." is the hook
 working: the block is the mechanism, not a fault.
 
 ## A route says the worker is not connected

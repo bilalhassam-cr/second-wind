@@ -157,8 +157,11 @@ You can also route from the model picker. Typing `/model second-wind/personal`,
 or `/model second-wind/codex/gpt-5.6/high`, is refused on purpose: the session
 keeps the model it has, and a PreModelSwitch hook records that the next tasks go
 to that worker, with that model and effort, through the runner. Picking any
-normal model deletes the record and hands control back to the usage figures. The
-ids also work typed into the desktop app, whose picker shows no custom rows.
+normal model deletes the record and hands control back to the usage figures. This
+works in the terminal only. The desktop app's model menu shows no custom rows and
+runs no hook for a typed id, so a typed id there becomes a model that does not
+exist and every prompt fails until you pick a real one. In the desktop app, ask in
+chat to route: the skill offers a picker and writes the same record.
 
 Review what has been delegated, and produce a shareable copy:
 
