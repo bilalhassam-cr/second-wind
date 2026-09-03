@@ -2,50 +2,67 @@
 
 A Claude Code skill that puts your other subscriptions to work.
 
-Many people running Claude Code also pay for another Claude account, a ChatGPT
+Many people running Claude Code also pay for a second Claude account, a ChatGPT
 plan with Codex, SuperGrok or X Premium+, or Cursor Pro. `second-wind` routes
-work to those official clients for two different reasons.
+work to those official clients, for two reasons that are worth keeping apart.
 
 **Independence.** A reviewer that watched you build the thing is not a reviewer.
 The other accounts arrive blind, which is the point when you want work challenged
 rather than confirmed.
 
-**Headroom.** Each subscription has its own usage window. When your main account
-gets close to its limit, the heavy lifting moves across so you can keep working.
+**Not waiting.** Each subscription has its own window. Claude Code 2.1.234 and
+later picks the work up by itself when the limit resets, so this is not about
+rescuing a stalled session. It is about starting the job now, on an account that
+has room, and knowing which one did it.
 
 ## What it does
 
-- **Preflight that asks.** Detects Claude profiles, Codex, Grok Build and Cursor
-  Agent, explains the cost and account-specific warnings, then connects only the
-  workers the user chooses.
+- **A setup wizard that asks.** It detects the Claude profiles, Codex, Grok Build
+  and Cursor Agent, states the cost of each, and connects only what you choose.
+- **Three levels.** Reviewer, worker or relief, chosen at setup and changeable by
+  running setup again.
 - **Two modes.** Read-only for adversarial review, full access for real work.
-- **Automatic failover.** At 90% of your 5-hour window or 80% of your weekly one,
-  a hook asks the model to route the heavy work to another account, and the model
-  usually complies. Both numbers are yours to change.
-- **A status bar** showing which account you are on and how much of each limit is
-  used.
-- **A headroom table** that lists every account, puts readable current figures
-  first, and leaves unavailable figures as `unknown`.
-- **A log of everything delegated**, including the failures, because a delegation
-  that quietly did nothing still returns text that reads like success.
-- **A browser guard** built from a real crash, described below.
+- **A session brief.** One line per account at the start of a session: both
+  windows, how old the reading is, and any fault that makes it unreliable.
+- **A headroom table.** Every account sorted by the strictest window it reported,
+  with unreadable figures marked unknown and sorted last.
+- **A log of everything delegated**, failures included, because a delegation that
+  quietly did nothing still returns text that reads like success.
+
+## The three levels
+
+| Level | Default mode | Automatic handover | What it installs |
+|---|---|---|---|
+| `reviewer` | review | off | the session brief |
+| `worker` | work | off | the brief, plus hooks that notice a limit and refresh the readings |
+| `relief` | work | on | the above, plus the prompt guard that hands over at a task boundary |
+
+Handover at level relief announces itself in one line and happens between tasks,
+never part-way through a job. If you say keep the work here, it stays here.
 
 ## Requirements
 
+- macOS. Linux is expected to work and has not been tested.
 - **Claude Code 2.1.251 or newer on your PATH.** The desktop app alone does not
-  put it there. Without it, account discovery reports every profile as unknown
-  and signed out.
-- `jq`, and Python 3.8 or newer
+  put it there, and without it every profile reads as unknown and signed out.
+- `jq`, and Python 3.9 or newer.
 - At least one of: a second Claude account, Codex on a ChatGPT plan, Grok Build
-  through SuperGrok or X Premium+, or Cursor Agent on Cursor Pro
-- macOS. Linux is expected to work, but has not been tested.
+  through SuperGrok or X Premium+, or Cursor Agent on Cursor Pro.
 
-Static script and repository policy checks have been run on macOS 26.5. Earlier
-end-to-end behaviour was exercised there with Claude Code 2.1.251 and Codex
-0.150.1, but against a divergent local copy. This installable repository has not
-yet been clean-installed and exercised end to end. Flags on both CLIs move, so if
-a worker starts failing immediately, check that the flags in `scripts/run.sh`
-still exist in your version.
+Tested versions:
+
+| Client | Version tested |
+|---|---|
+| Claude Code | 2.1.251 |
+| Codex | 0.152.1 |
+| Grok | 1.0.13 |
+| Cursor Agent | 2026.08.31 |
+| macOS | 26 |
+
+Both CLIs move their flags between releases. If a worker starts failing straight
+away, check that the flags in `second-wind/scripts/run.sh` still exist in your
+version. `setup.py --check` warns when an installed client has moved on from the
+version second-wind was set up against.
 
 ## Install
 
@@ -54,134 +71,139 @@ git clone REPOSITORY_URL second-wind
 cd second-wind && ./install.sh
 ```
 
-Restart Claude Code so a new session can see the copied skill. Then say `set up
-second-wind`. With no setup choices supplied, the skill detects current state,
-asks which workers to connect, and walks through them one at a time. It states
-the cost before the choice: every option uses a paid plan or a second paid
-subscription. Nothing here is free.
+`install.sh` copies the skill into `~/.claude/skills/second-wind`. Pass a
+directory to install somewhere else, and `--link` to symlink the checkout instead
+of copying it, which is what you want if you are editing the skill itself.
 
-The guided flow gives one missing command at a time. Grok Build installs with
-`curl -fsSL https://x.ai/cli/install.sh | bash`, lands at `~/.grok/bin/grok`, and
-signs in with `grok login`. Cursor Agent installs with
-`curl https://cursor.com/install -fsS | bash` and signs in with
-`cursor-agent login`.
+Restart Claude Code so a new session sees it, then say `set up second-wind`.
 
-For a manual setup, inspect the same detection JSON and write the chosen workers:
+## Setup
 
-```bash
-python3 ~/.claude/skills/second-wind/scripts/setup.py --detect
-python3 ~/.claude/skills/second-wind/scripts/setup.py \
-  --write --primary ~/.claude --secondary ~/.claude-secondary \
-  --codex on --grok on --cursor on
-```
-
-Create the second profile **before** running setup: it is one directory and one
-sign-in, described in `second-wind/references/setup.md`. Setup refuses to write a
-config for a profile that does not exist or is not signed in.
-
-After setup writes the profile settings, restart Claude Code once more. Then see
-where the available headroom is and confirm automatic handover is armed:
-
-```bash
-python3 ~/.claude/skills/second-wind/scripts/setup.py --accounts
-python3 ~/.claude/skills/second-wind/scripts/setup.py --check
-```
-
-`--accounts` sorts accounts by the strictest reported pool. Claude and Codex use
-their 5-hour and weekly windows, Grok uses its weekly window, and Cursor uses its
-Included, Auto and API monthly pools. Missing or unreadable figures are `unknown`
-and sort last. The aligned output has no colour. `--check` verifies every
-installed status line, guard entry and enabled worker command.
-
-All four readers open the client's own usage or status panel without sending a
-model prompt. Claude and Codex show 5-hour and weekly usage. Grok has a weekly
-window only. Cursor reports Included, Auto and API pools plus the reset date.
-
-## Using it
-
-Ask in plain language. "Get a second opinion on this before I ship it." "Have the
-other account do the research." "I am nearly out of usage, move this across."
-
-To answer "where should work go right now" directly:
-
-```bash
-python3 ~/.claude/skills/second-wind/scripts/setup.py --accounts
-```
-
-Under the hood every call goes through one runner, which is what records it:
+The wizard detects what is on the machine, states the cost of each option before
+you choose, asks which workers to connect and which level you want, then gives
+one missing command at a time. To do it by hand:
 
 ```bash
 SW=~/.claude/skills/second-wind
+python3 $SW/scripts/setup.py --detect
+python3 $SW/scripts/setup.py --write --level relief \
+  --primary ~/.claude --secondary ~/.claude-secondary --codex on
+python3 $SW/scripts/setup.py --check
+python3 $SW/scripts/setup.py --accounts
+```
+
+Create the second profile before running setup: it is one directory and one
+sign-in, described in `second-wind/references/setup.md`. Setup refuses to write a
+config for a profile that does not exist or is not signed in.
+
+`--write` also creates `~/.second-wind/workdir`, an empty directory the usage
+readers run in, and marks it trusted in each Claude profile and in the Codex
+config. Without that, a reader meets a trust prompt instead of a usage panel.
+**Restart Claude Code afterwards**: a session that was already running holds its
+own copy of the project list and can write it back over the trust entry on exit.
+`--check` reads the trust back rather than assuming it survived.
+
+A third Claude profile, `--reader ~/.claude-usage`, is optional and signed into
+the same account as your primary. It exists because a background reader sharing
+one credential with the desktop app logged the app out every day or two.
+
+On macOS, setup installs a launchd agent that runs
+`scripts/usage-refresh.sh --if-claude-running` every 15 minutes. It does nothing
+unless a `claude` process or the desktop app is running.
+
+## Using it
+
+Ask in plain language. "Get a second opinion before I ship this." "Have the other
+account do the research." "I am nearly out of usage, move this across."
+
+Every call goes through one runner, which is what records it:
+
+```bash
 "$SW/scripts/run.sh" secondary prompt.txt --review   # no edit tools, no shell
 "$SW/scripts/run.sh" codex     prompt.txt --work     # full access, does the job
 "$SW/scripts/run.sh" grok      prompt.txt --review
 "$SW/scripts/run.sh" cursor    prompt.txt --work
 ```
 
-Claude review mode blocks its built-in edit and shell tools, but it cannot
-constrain write-capable MCP servers configured in the secondary profile. Codex
-uses a read-only sandbox. Grok removes Write, Edit and Bash. Cursor uses
-`--mode ask`. Cursor's `--trust` flag alone is not read-only and was observed
-writing a file during testing.
+Claude review mode drops its edit, write and shell tools and loads no MCP
+servers. Codex uses a read-only sandbox. Grok drops Write, Edit and Bash. Cursor
+adds `--mode ask`; its `--trust` flag alone is not read-only and was seen writing
+a file during testing. Work mode is unattended and unrestricted in the current
+directory, so do not point it at a directory you would not let an agent modify.
 
-Work mode uses the client's unattended work command in the current directory.
-Do not point it at a directory you would not let an unattended agent modify.
+A Codex worker is always sandboxed and cannot launch a browser: Chrome aborts at
+startup inside the sandbox and the user sees a "quit unexpectedly" dialog with no
+explanation. The runner tells the worker so in the prompt. Keep browser QA on
+your own session.
 
-To force every task boundary to a worker regardless of usage, write `secondary`,
-`codex`, `grok`, `cursor`, `both` or `all` to `~/.second-wind/mode`. Remove the
-file to return to usage-based handover. The `no-failover` file and
-`failover.enabled: false` remain master switches.
-
-Review what has been delegated:
+Review what has been delegated, and produce a shareable copy:
 
 ```bash
 python3 "$SW/scripts/report.py" 7
+python3 "$SW/scripts/report.py" 7 --share
 ```
 
-## Things worth knowing
+## The brief, the status line and the model picker
 
-**Setting `CLAUDE_CONFIG_DIR` to `~/.claude` breaks authentication.** Leaving it
-unset and setting it explicitly to the default directory are not the same: the
-explicit form looks for a Keychain entry that does not exist and reports a
-signed-in account as signed out. This skill handles it; code you add should too.
+At every level, a SessionStart hook puts one line per account in front of the
+session. In a terminal, the status line shows the same figures live. The desktop
+app runs no status line at all, which is an open issue with Claude Code, so there
+the brief is the only surface.
 
-**Claude usage is read without a prompt.** The reader opens `/usage`, parses the
-account's own panel and exits. It spends no model allowance. The status line can
-also update the same cache during an ordinary terminal session.
+An opt-in experiment relabels the `/model` picker rows with the current figures:
+`--model-picker on`. It works by writing a `modelPicker` key with
+`replaceBuiltInOptions` into the primary profile's settings, marked as ours so
+uninstall removes it and nothing else.
 
-**Never set `XAI_API_KEY` for Grok Build.** The `api.x.ai` developer API is a
-separate paid product. Grok Build must use the consumer allowance included with
-SuperGrok or X Premium+. The runner explicitly removes this variable.
+## How usage is read, and why it is slow
 
-**Always call the clients `grok` and `cursor-agent`.** Cursor's installer removes
-`~/.local/bin/agent` and takes that generic name, which can delete Grok's `agent`
-alias. Grok's `grok` command survives.
+Every reading comes from driving the vendor's own client: a throwaway terminal
+session in the workdir, `/usage` or `/status`, parse the panel, exit. No model
+prompt is sent, so no allowance is spent. Anthropic's February 2026 policy
+forbids using consumer OAuth tokens in any other tool, so second-wind never
+touches a token or calls a usage endpoint.
 
-**Cursor has two authentication paths.** Headless delegated work can use
-`CURSOR_API_KEY`. Reading `/usage` requires the interactive browser login, which
-the key does not cover. On-demand can report unavailable even when the account
-holds credit.
+That choice has a price, and it is worth being honest about it. Driving a
+terminal UI is slower than one HTTP call, it takes tens of seconds per account,
+and it breaks whenever a client renames a label or adds a dialog. The readers are
+built for that: every keystroke waits for a matched string on screen, an
+unrecognised dialog stops the reader and reports `TRUST PROMPT`, and a panel
+whose labels have moved reports `PARSER MISMATCH` rather than a wrong number.
+Faults are named per account in `~/.second-wind/refresh-status-<role>.txt`, so
+one working account cannot hide another one's failure.
 
-**Sign-in ignores the `--email` hint.** It completes against whichever account
-your browser already holds. Open the consent URL yourself in the right browser
-profile.
+Tools that read the usage endpoint directly are faster and will keep being
+faster. They also need your token, which is the thing the policy is about. This
+one stays on the official clients and pays for it in speed.
 
-**A sandboxed worker cannot launch a browser.** Codex runs seatbelt-sandboxed and
-Chrome aborts at startup inside it, which surfaces to you as a "quit unexpectedly"
-dialog with nothing explaining why. The browser guard is always on for Codex
-because the runner always passes its own sandbox flag in both review and work mode.
-That command-line flag overrides `sandbox_mode`, so the user's Codex configuration
-does not change the result. Nothing is launched by this check. The runner tells the
-worker not to attempt browser work. This matters most in projects whose own
-instructions say to verify rendered output in a real browser, because the worker
-will otherwise follow them straight into the crash.
+Claude and Codex report a 5-hour and a weekly window. Grok reports a weekly
+window only. Cursor reports Included, Auto and API monthly pools plus a reset
+date, and on-demand can read as unavailable even when the account holds credit.
+Codex reports what is left, and the parser converts it to what is used so every
+account is measured the same way. Codex monthly credits cap overage only, so they
+do not decide its headroom.
 
-**Codex usage comes from `/status`.** Codex reports percentages remaining;
-second-wind converts them to percentages used so all accounts use the same
-measure. It reads the 5-hour, weekly and monthly credit limits, the account and
-plan, and the credit count. Monthly credits only cap overage. Spending them does
-not mean the plan windows are exhausted, so the 5-hour and weekly windows decide
-Codex headroom.
+## What routing another account is not
+
+Handover here is announced and happens between tasks. It is one person moving
+their own work to their own second subscription, in the open, through each
+vendor's own client, with each account billed to itself. There is no relay, no
+proxy, no pool of tokens behind one endpoint, and nothing that presents several
+subscriptions as one. Silent rotation is a different thing, and it is worse for
+you as well: when nobody can tell which account did which piece of work, you
+cannot audit it, reproduce it or explain it.
+
+## From the author's ledger
+
+The delegation log from building this, 30 August to 2 September 2026:
+
+- 68 delegated calls, 47 to Codex and 21 to a second Claude account
+- 702 minutes of worker time moved off the main account
+- 6 failures, 5 of them timeouts
+- 11 projects
+
+That is four days of one person's use, not a benchmark. It is the whole record
+this repository has.
 
 ## On terms of use, read this before installing
 
@@ -212,11 +234,13 @@ python3 ~/.claude/skills/second-wind/scripts/setup.py --uninstall
 rm -rf ~/.second-wind ~/.claude/skills/second-wind
 ```
 
-Uninstall removes the status-line and guard entries it added and puts back any
-status line it replaced. It does not roll the whole settings file back, though
-setup did leave a timestamped backup of it beside the original. **Run the uninstall before the
-`rm -rf`**, because the replaced status line is stored under `~/.second-wind`.
-Your accounts are untouched.
+Uninstall removes the hooks, the status line and the model picker key it added,
+puts back any status line it replaced, and unloads the launchd agent. It does not
+roll the whole settings file back, though setup left a timestamped backup beside
+the original. It prints the two trust entries to remove by hand, since editing
+those files while a client is running is how they get corrupted. **Run the
+uninstall before the `rm -rf`**, because the replaced status line is stored under
+`~/.second-wind`. Your accounts and their logins are untouched.
 
 ## Licence
 

@@ -1,5 +1,8 @@
 # Setting up the accounts
 
+Config version 4. `references/config.md` describes every key; this file covers the
+accounts themselves and the traps that cost time.
+
 ## Creating a second Claude profile
 
 A Claude Code profile is a config directory. `CLAUDE_CONFIG_DIR` is documented and
@@ -42,12 +45,23 @@ If the wrong account lands in a profile, `claude auth logout` in that profile
 clears the credential, and `oauthAccount` can be restored from the backup. Restore
 that key surgically rather than the whole file, since a running app writes to it.
 
+## The optional reader profile
+
+`--reader ~/.claude-usage` is a third Claude profile, signed into the **same
+account as your primary**, used only to read the primary's usage. Create it the
+same way as the secondary and sign it into the primary account.
+
+It exists for one measured reason: a background reader that shares one credential
+with the desktop app logged the app out every day or two. A separate profile ends
+that. Without it, the primary reader runs with `CLAUDE_CONFIG_DIR` unset, which is
+correct and slightly more fragile.
+
 ## Never set CLAUDE_CONFIG_DIR to the default directory
 
 Leaving it unset and setting it to `~/.claude` are **not** the same thing. Unset
 uses the un-suffixed Keychain entry; setting it explicitly makes the CLI look for a
 hashed entry that does not exist, and an account that is signed in reports
-`loggedIn: false`. Verified on macOS 26.5.
+`loggedIn: false`. Verified on macOS 26.
 
 `discover.py` and `run.sh` both account for this. Any code you add should too.
 
@@ -60,16 +74,58 @@ hashed entry that does not exist, and an account that is signed in reports
 
 Do not symlink one config directory to another. Separate directories are the point.
 
+## The workdir, and why it is pre-trusted
+
+`setup.py --write` creates `~/.second-wind/workdir`, an empty directory, and marks
+it trusted in each Claude profile's `.claude.json` and in `~/.codex/config.toml`.
+Every usage reader runs there.
+
+This is what keeps the readers moving. A client launched in an unknown directory
+opens a trust dialog, and no reader ever answers one: a reader that meets a dialog
+stops and writes `TRUST PROMPT: ...` to its status file. Pre-trusting is a setting
+you asked for at setup, on a directory second-wind created and owns.
+
+**Restart Claude Code after setup.** A session that was already running holds its
+own copy of the project list and can write it back over the new entry when it
+exits. `setup.py --check` reads the trust back from both files rather than
+assuming it survived; if it says `NOT TRUSTED`, restart the client and run
+`--write` again, or open the client once in the workdir yourself.
+
+## The scheduled refresh
+
+On macOS, setup installs a launchd agent, `com.second-wind.refresh`, that runs
+`scripts/usage-refresh.sh --if-claude-running` every `refresh.interval_minutes`,
+15 by default. `--if-claude-running` exits immediately unless a `claude` process
+or the Claude desktop app is running, so nothing starts a client on an idle
+machine. `--no-launchd` at setup skips it; run `usage-refresh.sh` from cron or by
+hand instead. `setup.py --check` reports whether the agent is loaded.
+
+## The model picker experiment
+
+`--model-picker on` is opt-in. Each refresh then writes a `modelPicker` key into
+the primary profile's `settings.json` with the current figures in the description
+of each model row. It needs `replaceBuiltInOptions: true`, so the rows shown are
+the four aliases second-wind writes and not the built-in list. The key carries a
+`_second_wind` marker, and setup and uninstall only ever remove a key carrying it.
+
+To turn it off, run `--write` again with `--model-picker off`, then
+`python3 scripts/model-picker.py --off` to take the rows out now. The setting
+alone only stops the refresh rewriting them; the key it already wrote stays until
+that command or `--uninstall` removes it.
+
 ## Codex
 
 If `codex` is on the PATH and signed in to a ChatGPT plan, setup finds it. Install
 with `npm i -g @openai/codex`; if you already use Codex in the ChatGPT desktop app,
 the CLI reads that same sign-in and needs no separate login.
 
-`codex doctor` is the fast health check.
+Sign in with `codex login` and verify with `codex login status`, which writes to
+stderr. `codex doctor` is the fast health check.
 
-Sign in with `codex login` and verify with `codex login status`. Codex needs a
-ChatGPT plan and spends that plan's allowance.
+Codex 0.152.1 shows a directory-trust modal on launch in an unknown directory, and
+on a trusted one it spends ten to forty seconds starting MCP servers before it
+accepts `/status`. The reader waits for the composer and for the screen to go
+quiet; it never presses a key to dismiss a modal.
 
 ## Grok Build
 
@@ -87,7 +143,7 @@ sends no model prompt.
 product. Grok Build must use the consumer allowance. Work uses
 `grok --permission-mode bypassPermissions -p "<prompt>"`; review uses
 `grok --disallowed-tools "Write,Edit,Bash" -p "<prompt>"`. The prompt must follow
-`-p` immediately.
+`-p` immediately, or Grok reports that `--single` needs a value.
 
 Grok `/usage` has one weekly window and no 5-hour window.
 
@@ -105,9 +161,10 @@ Verify with `cursor-agent status --format json`. Work uses
 not read-only and wrote a file during live testing.
 
 Headless runs can authenticate with `CURSOR_API_KEY`, but `/usage` requires the
-interactive browser login. Its monthly view reports Included, Auto and API pools
-plus a reset date. On-demand may appear unavailable even when the account holds
-credit.
+interactive browser login, so an API-key sign-in is delegation only and
+`refresh.cursor` stays false. The monthly view reports Included, Auto and API
+pools plus a reset date. On-demand may appear unavailable even when the account
+holds credit.
 
 ## The `agent` command collision
 

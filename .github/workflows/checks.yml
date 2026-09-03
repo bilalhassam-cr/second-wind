@@ -11,12 +11,16 @@ jobs:
           shellcheck -s sh second-wind/scripts/*.sh install.sh
       - name: python compiles
         run: python3 -m compileall -q second-wind/scripts
+      - name: unit tests
+        run: python3 -m unittest discover -s second-wind/tests
       - name: no personal data
         run: |
           # An email address is not the only way personal data leaks into a public
           # repo. A home directory path names the author just as clearly, and so
           # does a machine name left in an example.
           fail=0
+          # user@example.com is the address the reader fixtures use, so it stays
+          # allowed. Removing that exclusion breaks the fixtures, not the policy.
           if grep -rniE '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}' \
                --exclude-dir=.git --exclude=LICENSE . \
              | grep -viE 'example\.com|anthropic\.com/legal|openai\.com/policies'; then
