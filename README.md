@@ -10,10 +10,11 @@ work to those official clients, for two reasons that are worth keeping apart.
 The other accounts arrive blind, which is the point when you want work challenged
 rather than confirmed.
 
-**Not waiting.** Each subscription has its own window. Claude Code 2.1.234 and
-later picks the work up by itself when the limit resets, so this is not about
-rescuing a stalled session. It is about starting the job now, on an account that
-has room, and knowing which one did it.
+**Not waiting.** Each subscription has its own window. Claude Code (2.1.234 and
+later) waits for a limit to reset and continues on its own; that version comes
+from Anthropic's changelog, not from anything this repository tests. second-wind
+is for starting the job now, on an account that has room, and knowing which
+account did it.
 
 ## What it does
 
@@ -59,6 +60,9 @@ Tested versions:
 | Cursor Agent | 2026.08.31 |
 | macOS | 26 |
 
+This release has not yet been exercised on a clean machine. The clean-install
+exercise in `TESTING.md` is that test, and it has not been run.
+
 Both CLIs move their flags between releases. If a worker starts failing straight
 away, check that the flags in `second-wind/scripts/run.sh` still exist in your
 version. `setup.py --check` warns when an installed client has moved on from the
@@ -72,8 +76,10 @@ cd second-wind && ./install.sh
 ```
 
 `install.sh` copies the skill into `~/.claude/skills/second-wind`. Pass a
-directory to install somewhere else, and `--link` to symlink the checkout instead
-of copying it, which is what you want if you are editing the skill itself.
+directory to install somewhere else, and `--link` (before the directory) to
+symlink the checkout instead of copying it, which is what you want if you are
+editing the skill itself. Either way it makes sure the shell scripts, `setup.py`
+and the hooks are executable, since Claude Code runs the hooks by path.
 
 Restart Claude Code so a new session sees it, then say `set up second-wind`.
 
@@ -226,6 +232,15 @@ knows how enforcement actually works, and this project makes no claim about it.
 If an account is suspended, it is your account and your risk. Automation driving
 a personal subscription is exactly the case worth checking your own terms on
 before you install this.
+
+## When it goes wrong
+
+Run `python3 "$SW/scripts/setup.py" --check` first. It prints every link in the
+chain and names what is blocking handover, and most faults are quicker to
+identify from that output than from anywhere else.
+`second-wind/references/troubleshooting.md` covers the rest: the `TRUST PROMPT`,
+`PARSER MISMATCH` and `LOGIN EXPIRED` statuses, a blank status bar, a delegation
+that exited zero having done nothing, and handover that will not fire.
 
 ## Uninstall
 

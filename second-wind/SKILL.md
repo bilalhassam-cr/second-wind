@@ -19,13 +19,14 @@ resolve to this skill. Resolve it once and use `$SW` everywhere:
 SW=$(jq -r '.skill_dir // empty' ~/.second-wind/config.json 2>/dev/null)
 SW=${SW/#\~/$HOME}
 [ -d "$SW" ] || SW=$HOME/.claude/skills/second-wind
-python3 "$SW/scripts/setup.py" --accounts 2>/dev/null || echo NOT_SET_UP
+python3 "$SW/scripts/setup.py" --accounts
 ```
 
 `--accounts` prints cached figures and spawns nothing; add `--live` to run the
-readers first. It sorts the accounts by headroom and answers where work should go
-now. `--check` says whether the chain is wired up and what is blocking it. If
-NOT_SET_UP appears, **offer to set it up in one line, then get on with what the
+readers first. It sorts the accounts by headroom and says where work should go now.
+`--check` says whether the chain is wired up and what is blocking it. Both print
+`NOT SET UP` and exit 0 when nothing is configured, so read the output, not the
+exit code, and **offer to set it up in one line before getting on with what the
 user actually asked for.** A missing optional tool never blocks a task.
 
 ## Setting it up
@@ -106,8 +107,7 @@ that reads like success. Write the prompt to a file first, since building the
 command inline turns quoting into the hard part of the job.
 
 ```bash
-"$SW/scripts/run.sh" <secondary|codex|grok|cursor> <prompt-file> \
-    [--review|--work] [--model M] [--effort E]     # cursor takes no --effort
+"$SW/scripts/run.sh" <secondary|codex|grok|cursor> <prompt-file> [--review|--work] [--model M] [--effort E]   # cursor takes no --effort
 ```
 
 **`--review` blocks file edits and shell work.** Claude loses its edit, write and

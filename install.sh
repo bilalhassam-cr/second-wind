@@ -13,15 +13,28 @@ SRC=$(cd "$(dirname "$0")" && pwd)
 LINK=no
 if [ "${1:-}" = "--link" ]; then LINK=yes; shift; fi
 DEST=${1:-$HOME/.claude/skills}
+
+# Three things are run as commands rather than imported: the shell scripts, the
+# setup entry point, and the hooks, which Claude Code executes by absolute path
+# from settings.json. Everything else is imported by python3 and needs no
+# executable bit. Repaired here because a clone copied across a filesystem that
+# drops permissions fails later as a permission error nobody traces back to the
+# install.
+set_exec() {
+  chmod +x "$1/scripts/"*.sh "$1/scripts/setup.py" "$1/scripts/hooks/"*.py 2>/dev/null || true
+}
+
 mkdir -p "$DEST"
 rm -rf "$DEST/second-wind"
 if [ "$LINK" = yes ]; then
   ln -s "$SRC/second-wind" "$DEST/second-wind"
+  # The link points at the checkout, so the bits have to be set there.
+  set_exec "$SRC/second-wind"
   echo "Linked $DEST/second-wind to $SRC/second-wind"
   echo "Edits in the checkout are live. Moving the checkout breaks the link."
 else
   cp -R "$SRC/second-wind" "$DEST/second-wind"
-  chmod +x "$DEST/second-wind/scripts/"*.sh "$DEST/second-wind/scripts/"*.py 2>/dev/null || true
+  set_exec "$DEST/second-wind"
   echo "Installed to $DEST/second-wind"
   echo "This COPIES the skill. Re-run install.sh after editing the checkout."
 fi

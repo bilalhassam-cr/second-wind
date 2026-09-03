@@ -104,10 +104,11 @@ python3 ~/.claude/skills/second-wind/scripts/report.py 7 --share
 ```
 
 That writes `~/second-wind-test-report.md`: the environment, every reader status
-file, the accounts table, the delegation summary and the tail of each failed
-exchange. It replaces email addresses with `<account>` and your home directory
-with `~`. It does **not** redact project or directory names, and the exchange
-files it quotes hold whole prompts and replies, so **read the file before you
+file, the accounts table, the delegation summary, and the last 40 lines of the
+reply from each failed exchange. Prompts are not copied into it, and successful
+exchanges are not quoted at all. It replaces email addresses with `<account>` and
+your home directory with `~`. It does **not** redact project or directory names,
+and those 40 lines are whatever the worker said, so **read the file before you
 send it**.
 
 Exchanges are capped at 200 KB each and deleted after 30 days; the ledger line

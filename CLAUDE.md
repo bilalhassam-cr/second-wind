@@ -28,7 +28,9 @@ govern the repo.
 ## Layout
 
 `second-wind/` is the installable skill. `install.sh` copies it into a skills
-directory, or symlinks it with `--link` when you are editing it. `examples/` and
+directory, or symlinks it with `--link` when you are editing it; both set the
+executable bit on the shell scripts, `setup.py` and the hooks, which Claude Code
+runs by absolute path. Nothing else needs one: the rest is imported by python3. `examples/` and
 `README.md` are for GitHub only. Tests are `python3 -m unittest discover -s
 second-wind/tests`, and CI runs them alongside compileall, shellcheck and the
 policy greps.
