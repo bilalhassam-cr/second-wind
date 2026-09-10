@@ -48,7 +48,9 @@ time, one command at a time.
    boundary when the primary crosses its thresholds.
 
 7. **Write the config with one command**, workers `on` or `off` as chosen, each
-   Codex role with its directory and the name the user gave it, then
+   Codex role with its directory and the name the user gave it, and
+   `--field-notes on` when this is a test round (say in one line what the notes
+   hold and never hold, and recommend on), then
    tell the user to restart Claude Code and run `--check` and `--accounts`. The
    restart matters twice: settings are read at session start, and a running
    session can write the project list back over the workdir trust when it exits.

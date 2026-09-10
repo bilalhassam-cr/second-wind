@@ -29,6 +29,7 @@ mkdir -p "$DEST"
 # or into its parent, makes the target the source, and the rm below would then
 # delete the thing being installed. Refuse instead: there is nothing to recover
 # from afterwards.
+# shellcheck disable=SC1007  # CDPATH= is deliberate: cd must not consult it
 DEST=$(CDPATH= cd "$DEST" && pwd)
 if [ "$DEST/second-wind" = "$SRC/second-wind" ] || [ "$DEST/second-wind" = "$SRC" ]; then
   echo "install.sh: $DEST/second-wind is this checkout. Pick a skills directory" >&2

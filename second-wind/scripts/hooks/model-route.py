@@ -85,6 +85,8 @@ def main():
         return block("second-wind: that worker is not connected; run setup.")
 
     swlib.write_mode(route, session_id=session)
+    swlib.field_note("route", cfg=cfg, source="picker", worker=route["worker"],
+                     model=route.get("model"), effort=route.get("effort"))
     detail = ""
     if route["model"]:
         detail += ", model %s" % route["model"]

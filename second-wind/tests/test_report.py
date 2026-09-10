@@ -21,7 +21,69 @@ import truncate  # noqa: E402
 import report  # noqa: E402
 
 
+class ShareFilePrivacy(unittest.TestCase):
+    """The shared report describes how the accounts were reached, not the work:
+    no directory names, no reply text, unless --with-details asks for them."""
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp(prefix="sw-report-")
+        self.previous = os.environ.get("SW_HOME")
+        os.environ["SW_HOME"] = self.home
+        self.logdir = os.path.join(self.home, "log")
+        os.makedirs(self.logdir)
+        import swlib
+        swlib.write_json_atomic(swlib.config_path(), {
+            "version": 4, "level": "relief",
+            "primary": {"config_dir": "~/.claude"},
+            "codex": {"enabled": True},
+            "log": {"dir": self.logdir},
+            "field_notes": {"enabled": True},
+        })
+        self.exchange = os.path.join(self.logdir, "20260101-000000-1-codex-SecretProject.md")
+        with open(self.exchange, "w") as handle:
+            handle.write("# Delegated to codex\n\n## Prompt sent\n\nthe prompt\n\n"
+                         "## Reply\n\nTHE WORKER WROTE THIS ABOUT THE CLIENT\n")
+        self.rows = [{"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                      "worker": "codex", "mode": "review", "exit": 1, "duration_s": 9,
+                      "cwd": "/somewhere/SecretProject", "exchange": self.exchange,
+                      "prompt_bytes": 100, "reply_bytes": 40}]
+        swlib.field_note("note", text="had to use the standard login flow")
+        swlib.field_note("setup", command="check", args=["--check"], result=0)
+        self.path = os.path.join(self.home, "report.md")
+
+    def tearDown(self):
+        if self.previous is None:
+            os.environ.pop("SW_HOME", None)
+        else:
+            os.environ["SW_HOME"] = self.previous
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def test_by_default_no_project_name_and_no_reply_text(self):
+        report.share_file(self.rows, 7, self.logdir, path=self.path)
+        text = open(self.path).read()
+        self.assertNotIn("SecretProject", text)
+        self.assertNotIn("THE WORKER WROTE", text)
+        self.assertIn("What this file contains, and what it does not", text)
+        self.assertIn("## Field notes", text)
+        self.assertIn("NOTE: had to use the standard login flow", text)
+        self.assertIn("setup --check", text)
+        self.assertIn("1 failed", text)
+
+    def test_with_details_puts_them_back(self):
+        report.share_file(self.rows, 7, self.logdir, path=self.path, details=True)
+        text = open(self.path).read()
+        self.assertIn("SecretProject", text)
+        self.assertIn("THE WORKER WROTE", text)
+
+
 class Redaction(unittest.TestCase):
+    def test_a_timezone_in_a_reset_time_becomes_local_time(self):
+        self.assertEqual(report.redact("week 25% / Sep 14 at 2:59am (Africa/Johannesburg)"),
+                         "week 25% / Sep 14 at 2:59am (local time)")
+        self.assertEqual(report.redact("resets (America/Argentina/Buenos_Aires)"),
+                         "resets (local time)")
+        self.assertEqual(report.redact("(not a zone) and (UTC)"), "(not a zone) and (UTC)")
+
     def test_email_becomes_account(self):
         self.assertEqual(report.redact("signed in as someone@example.com now"),
                          "signed in as <account> now")

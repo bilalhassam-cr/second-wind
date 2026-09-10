@@ -123,6 +123,16 @@ python3 "$SW/scripts/setup.py" --write --level relief \
   --grok off --cursor off
 ```
 
+**If this is a test round, ask whether to keep field notes** and recommend yes:
+`--field-notes on`. Say in one line what they hold and what they never hold:
+setup steps, reader outcomes, routes, handovers and the person's own notes; never
+a prompt, a reply, a path, a project name or an address. Then, throughout setup
+and later use, **whenever a step fails and a workaround gets past it, record it
+yourself** with `python3 "$SW/scripts/setup.py" --note "..."`, one plain
+sentence about the process, and at the end of setup ask the person for anything
+they had to do that you did not see. `setup.py --field-report` writes the file
+they send back.
+
 Other options: `--codex3 on --codex3-dir DIR --codex3-label L`,
 `--codex-full-access on`, `--reader ~/.claude-usage`, `--five-hour 85`, `--seven-day 75`,
 `--refresh-minutes 30`, `--model-picker on`, `--no-launchd`, `--timeout 900`,

@@ -616,6 +616,51 @@ class CodexPinning(Base):
                         row)
 
 
+class FieldNotes(Base):
+    """A test round's diary: process only, scrubbed at write time, off by default."""
+
+    def test_off_by_default_and_nothing_is_written(self):
+        self.write_config()
+        self.assertFalse(swlib.field_note("setup", command="check"))
+        self.assertFalse(os.path.exists(swlib.field_notes_path()))
+
+    def test_on_writes_a_scrubbed_row(self):
+        self.write_config(field_notes={"enabled": True})
+        home = swlib.HOME
+        self.assertTrue(swlib.field_note("note", text="signed in as one@example.com from %s/x" % home,
+                                         args=["--codex-dir", home + "/.codex-work"]))
+        rows = swlib.load_field_notes()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["event"], "note")
+        self.assertEqual(rows[0]["text"], "signed in as <account> from ~/x")
+        self.assertEqual(rows[0]["args"], ["--codex-dir", "~/.codex-work"])
+        self.assertTrue(rows[0]["ts"].endswith("Z"))
+
+    def test_a_refresh_event_records_each_readers_outcome(self):
+        self.write_config(field_notes={"enabled": True}, codex={"enabled": True})
+        swlib.write_text_atomic(swlib.status_path("primary"), "OK\n")
+        swlib.write_text_atomic(swlib.status_path("codex"), "LOGIN EXPIRED: sign in\n")
+        self.assertTrue(swlib.field_note_refresh())
+        row = swlib.load_field_notes()[-1]
+        self.assertEqual(row["event"], "refresh")
+        self.assertEqual(row["outcomes"], {"primary": "ok", "codex": "login"})
+
+    def test_a_broken_notes_file_never_raises(self):
+        self.write_config(field_notes={"enabled": True})
+        os.makedirs(swlib.field_notes_path(), exist_ok=True)   # a directory, not a file
+        self.assertFalse(swlib.field_note("note", text="x"))
+        self.assertEqual(swlib.load_field_notes(), [])
+
+
+class RecordedArgs(Base):
+    def test_labels_are_dropped_and_paths_shortened(self):
+        home = swlib.HOME
+        seen = sw_setup.recorded_args(["--write", "--codex-label", "Work of Someone",
+                                       "--codex-dir", home + "/.codex-work", "--codex", "on"])
+        self.assertEqual(seen, ["--write", "--codex-label", "<label>",
+                                "--codex-dir", "~/.codex-work", "--codex", "on"])
+
+
 class PrimarySession(Base):
     def test_a_symlinked_profile_is_still_the_primary(self):
         real = os.path.join(self.home, "profile")

@@ -16,14 +16,16 @@ umask 077   # exchanges hold whole prompts and replies; they are nobody else's b
 
 SW_HOME="${SW_HOME:-$HOME/.second-wind}"
 CFG="$SW_HOME/config.json"
+# shellcheck disable=SC1007  # CDPATH= is deliberate: cd must not consult it
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" 2>/dev/null && pwd)
 [ -f "$CFG" ] || { echo "second-wind: not set up. Run scripts/setup.py --detect" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "second-wind: jq is required" >&2; exit 2; }
 need_bin() { command -v "$1" >/dev/null 2>&1 || { echo "second-wind: '$1' is not on PATH. Without it a delegation fails as a shell error that gets logged as though it were the worker's reply." >&2; exit 2; }; }
 
 worker=${1:-}; promptfile=${2:-}
-[ -n "$worker" ] && [ -f "$promptfile" ] || {
-  echo "usage: run.sh <secondary|codex|codex2|codex3|grok|cursor> <prompt-file> [--review|--work] [--model M] [--effort E]" >&2; exit 2; }
+if [ -z "$worker" ] || [ ! -f "$promptfile" ]; then
+  echo "usage: run.sh <secondary|codex|codex2|codex3|grok|cursor> <prompt-file> [--review|--work] [--model M] [--effort E]" >&2; exit 2
+fi
 shift 2
 
 cfg() { jq -r "$1 // empty" "$CFG"; }
@@ -156,6 +158,7 @@ mcpfile=""   # empty MCP server list, written below for a Claude review run
 lastmsg=""   # Codex writes its final message here
 fullf=""     # the reply as it came back
 bodyf=""     # the same reply, capped for the log
+# shellcheck disable=SC2317  # invoked through the traps below, not inline
 cleanup() {
   rm -f "$sendfile" 2>/dev/null
   # outf belongs to sw_run and may not exist yet, hence the default. Left

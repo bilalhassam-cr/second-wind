@@ -109,6 +109,9 @@ def cmd_set(a):
         return fail(problem, 1)
     session, note = scope(a)
     swlib.write_mode(route, source="chat", session_id=session)
+    swlib.field_note("route", source="chat", worker=route["worker"],
+                     model=route.get("model"), effort=route.get("effort"),
+                     mode=route.get("mode"))
     print(describe(route, session))
     if note:
         print(note)

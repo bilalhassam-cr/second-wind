@@ -76,6 +76,29 @@ away, check that the flags in `second-wind/scripts/run.sh` still exist in your
 version. `setup.py --check` warns when an installed client has moved on from the
 version second-wind was set up against.
 
+## Test round
+
+This build is being tried by a small group before it goes any wider. If you are
+one of them, turn the field notes on when setup asks, or with
+`--field-notes on` on the `--write` line. They record how the accounts were set
+up and reached: each setup command and what it changed, every `--check` fault or
+warning, what each usage reader reported over time, which worker each route or
+handover went to, and any line you add yourself with
+`python3 ~/.claude/skills/second-wind/scripts/setup.py --note "what you had to do"`.
+
+They do not record your prompts, the workers' replies, any directory or project
+name, any email address or your home path. The exchange logs stay on your
+machine. When you have set it up and used it a few times:
+
+```bash
+python3 ~/.claude/skills/second-wind/scripts/setup.py --field-report
+```
+
+That writes `~/second-wind-test-report.md` with a section at the top saying
+exactly what is in it and what is not. Read it, then send it back with the
+feedback headings in `TESTING.md`. Your own notes go in as you wrote them, so
+keep them about the process.
+
 ## Install
 
 ```bash

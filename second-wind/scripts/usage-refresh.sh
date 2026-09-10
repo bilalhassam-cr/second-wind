@@ -17,6 +17,7 @@ umask 077
 
 SW_HOME="${SW_HOME:-$HOME/.second-wind}"
 CFG="$SW_HOME/config.json"
+# shellcheck disable=SC1007  # CDPATH= is deliberate: cd must not consult it
 HERE=$(CDPATH= cd "$(dirname "$0")" 2>/dev/null && pwd)
 LOCK="$SW_HOME/.refresh.lock"
 
@@ -48,6 +49,7 @@ done
 # Every other caller runs the skill copy and refreshes that mirror here. Nothing
 # below reads the skill directory: every path resolves against $HERE, so the
 # mirrored copy never reaches back into a folder it cannot open.
+# shellcheck disable=SC1007
 RUNTIME=$(CDPATH= cd "$SW_HOME/runtime" 2>/dev/null && pwd)
 if [ "$HERE" != "$RUNTIME" ]; then
   python3 "$HERE/swlib.py" --sync-runtime "$(dirname "$HERE")" >/dev/null 2>&1 || true
@@ -151,6 +153,8 @@ for role in $due; do
   esac
 done
 for pid in $pids; do wait "$pid" || true; done
+# The diary, when it is on: which kind of status each reader ended in this run.
+[ -n "$due" ] && python3 "$HERE/swlib.py" --field-note-refresh >/dev/null 2>&1 || true
 
 # The model picker describes the readings, so it runs after them.
 if [ "$picker" = on ]; then

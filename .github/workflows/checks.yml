@@ -29,7 +29,7 @@ jobs:
           # a real home directory, rather than ~ or $HOME
           if grep -rnE '/(Users|home)/[A-Za-z0-9._-]+' \
                --exclude-dir=.git --exclude=LICENSE . \
-             | grep -viE '/Users/<|/home/<|youruser|yourname'; then
+             | grep -viE '/Users/<|/home/<|youruser|yourname|/Users/you/|/Users/example/'; then
             echo "absolute home path found; use ~ or \$HOME"; fail=1
           fi
           # Names that once appeared in an example label and must not come back.
@@ -37,8 +37,11 @@ jobs:
           # naming anyone. Add to this list, do not edit an entry out of it.
           # This file is excluded because it has to spell the words out to look
           # for them, and would otherwise match itself.
+          # The repository's own GitHub address carries the owner's handle and
+          # is the one place that name is allowed to appear.
           if grep -rniE 'clearoute|humaniti|bilal' \
-               --exclude-dir=.git --exclude=checks.yml .; then
+               --exclude-dir=.git --exclude=checks.yml . \
+             | grep -v 'github.com/bilalhassam-cr/second-wind'; then
             echo "author or employer name found; use a neutral placeholder"; fail=1
           fi
           # An em dash is easy to reintroduce in prose and violates the public

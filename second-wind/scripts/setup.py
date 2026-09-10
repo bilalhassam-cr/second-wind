@@ -690,6 +690,12 @@ def cmd_write(a):
     carry("picker_models",
           picker_models_text((previous.get("picker") or {}).get("models")),
           "", "picker models")
+    # Normalised before the comparison, so ~/.codex-work and its absolute form
+    # are not reported as a change on every rerun.
+    for attr in ("codex_dir", "codex2_dir", "codex3_dir"):
+        given = getattr(a, attr)
+        if isinstance(given, str) and given.strip():
+            setattr(a, attr, tilde(expand(given.strip())))
     prev_codex = previous.get("codex") if isinstance(previous.get("codex"), dict) else {}
     prev_codex2 = previous.get("codex2") if isinstance(previous.get("codex2"), dict) else {}
     carry("codex_dir", prev_codex.get("config_dir") or None, "~/.codex",
@@ -704,6 +710,10 @@ def cmd_write(a):
             setattr(a, attr, given.strip() or None)
         prev_role = previous.get(role) if isinstance(previous.get(role), dict) else {}
         carry(attr, prev_role.get("label"), None, role + " label")
+    prev_notes = (previous.get("field_notes") or {}).get("enabled")
+    carry("field_notes",
+          ("on" if prev_notes else "off") if isinstance(prev_notes, bool) else None,
+          "off", "field notes")
     prev_full = prev_codex.get("full_access")
     carry("codex_full_access",
           ("on" if prev_full else "off") if isinstance(prev_full, bool) else None,
@@ -897,12 +907,16 @@ def cmd_write(a):
             "prune_days": 30,
         },
         "timeout_seconds": a.timeout,
+        "field_notes": {"enabled": a.field_notes == "on"},
         "tested_versions": versions,
         # where the skill lives, so SKILL.md can find its own scripts. Relative
         # paths do not work: a Bash tool call runs in the user's project, not here.
         "skill_dir": tilde(os.path.dirname(HERE)),
     }
     swlib.write_json_atomic(config_file(), cfg)
+    swlib.field_note("write", cfg=cfg, level=a.level,
+                     workers=[role for role in swlib.enabled_roles(cfg) if role != "primary"],
+                     changed=settings_changed, forced=bool(a.force))
 
     print("\nWrote %s" % tilde(config_file()))
     if settings_changed:
@@ -941,6 +955,10 @@ def cmd_write(a):
                  "on" if cursor_reads else "off, an API key cannot read the panel"))
     else:
         print("  cursor    off")
+
+    print("  notes     %s" % ("on, in ~/.second-wind/field-notes.jsonl: setup steps, "
+                               "reader outcomes, routes, handovers and your --note lines"
+                               if a.field_notes == "on" else "off"))
 
     print("\nWorking directory for the readers: %s" % tilde(folder))
     print("  claude %s: %s" % (cfg["primary"]["config_dir"],
@@ -1468,6 +1486,7 @@ def cmd_check():
     warnings = [w for w in dict.fromkeys(warnings) if w not in faults]
     for warning in warnings:
         print("warning: %s" % warning)
+    swlib.field_note("check", cfg=cfg, faults=list(faults), warnings=list(warnings))
     verdict_ok = "ARMED: handover will fire when a threshold is crossed" \
         if level["failover"] else "READY"
     if faults:
@@ -1619,6 +1638,17 @@ def build_parser():
                     help="model and effort rows the /second-wind picker offers "
                          "per worker, as worker=model/effort,... for example "
                          "codex=gpt-5.6/high,codex=gpt-5.6/medium")
+    ap.add_argument("--field-notes", choices=["on", "off"], default=None,
+                    help="keep a diary for a test round: setup steps, reader "
+                         "outcomes, routes and handovers, and your own notes. "
+                         "Process only, never a prompt, a reply, a path or an "
+                         "address (carried forward on a rerun)")
+    ap.add_argument("--note", metavar="TEXT", default=None,
+                    help="add a line to the field notes: something you had to do, "
+                         "change or work around")
+    ap.add_argument("--field-report", action="store_true",
+                    help="write the redacted test report to send back, same as "
+                         "report.py 30 --share")
     ap.add_argument("--no-launchd", action="store_true",
                     help="do not install the scheduled refresh agent")
     ap.add_argument("--timeout", type=int, default=None,
@@ -1628,9 +1658,73 @@ def build_parser():
     return ap
 
 
+def cmd_note(text):
+    """A line from the person: what they had to do, change or get around."""
+    cfg = swlib.load_config()
+    if not swlib.field_notes_enabled(cfg):
+        print("Field notes are off. Turn them on with:  setup.py --write ... "
+              "--field-notes on")
+        return 1
+    if not text.strip():
+        print("Nothing to note.")
+        return 1
+    if swlib.field_note("note", cfg=cfg, text=text.strip()):
+        print("Noted. It goes into the report as written, so keep it about the "
+              "process rather than the work.")
+        return 0
+    print("Could not write the note.")
+    return 1
+
+
+def cmd_field_report():
+    script = os.path.join(HERE, "report.py")
+    done = subprocess.run([sys.executable, script, "30", "--share"],
+                          capture_output=True, text=True)
+    sys.stdout.write(done.stdout)
+    sys.stderr.write(done.stderr)
+    if done.returncode == 0 and done.stdout.strip():
+        print("Read it before sending it. It carries no prompts, replies, paths or "
+              "addresses, but your own --note lines are in it as you wrote them.")
+    return done.returncode
+
+
+SETUP_COMMANDS = ("detect", "write", "check", "uninstall")
+VALUE_FLAGS_DROPPED = ("-label",)
+
+
+def recorded_args(argv):
+    """The setup command line as the diary keeps it: flag names and on/off
+    values, directories with the home folder as ~, and no label text, which is
+    the one value a person writes freely and might name someone in."""
+    out, drop_next = [], False
+    for arg in argv:
+        if drop_next:
+            out.append("<label>")
+            drop_next = False
+            continue
+        if any(arg.startswith("--") and arg.endswith(part) for part in VALUE_FLAGS_DROPPED):
+            drop_next = True
+        out.append(tilde(arg) if arg.startswith(("/", "~")) else arg)
+    return out
+
+
 def main():
     ap = build_parser()
     a = ap.parse_args()
+    if a.note is not None:
+        return cmd_note(a.note)
+    if a.field_report:
+        return cmd_field_report()
+    command = next((name for name in SETUP_COMMANDS if getattr(a, name)), None)
+    result = dispatch(a, ap)
+    if command:
+        # After the command, so a --write that turns the diary on records itself.
+        swlib.field_note("setup", command=command, args=recorded_args(sys.argv[1:]),
+                         result=0 if result in (None, 0) else result)
+    return result
+
+
+def dispatch(a, ap):
     if a.detect:
         return cmd_detect()
     if a.accounts:

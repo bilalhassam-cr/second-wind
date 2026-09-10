@@ -1344,6 +1344,90 @@ def _pct_cell(pct):
     return "n/a".rjust(4) if pct is None else ("%d%%" % round(pct)).rjust(4)
 
 
+# ------------------------------------------------------------ field notes
+
+# A test round's diary: what setup did, what the readers reported over time,
+# what routed where, and what the tester had to do to get past something. It
+# carries process, never content: no prompt, no reply, no directory name, no
+# address. Off unless the config says so, and the report is the only reader.
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def field_notes_enabled(cfg=None):
+    cfg = load_config() if cfg is None else cfg
+    return (cfg.get("field_notes") or {}).get("enabled") is True
+
+
+def field_notes_path():
+    return os.path.join(sw_home(), "field-notes.jsonl")
+
+
+def scrub(value):
+    """Addresses become <account> and the home directory becomes ~, in every
+    string of a nested value. Run at write time, so the file on disk is already
+    safe to send rather than safe only after a report has been over it."""
+    if isinstance(value, str):
+        if HOME and HOME != "/":
+            value = value.replace(HOME, "~")
+        return EMAIL_RE.sub("<account>", value)
+    if isinstance(value, dict):
+        return {str(k): scrub(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [scrub(v) for v in value]
+    return value
+
+
+def field_note(event, cfg=None, **data):
+    """Append one event when field notes are on. Never raises: this runs inside
+    hooks and readers, and a diary must not take a session down."""
+    try:
+        cfg = load_config() if cfg is None else cfg
+        if not field_notes_enabled(cfg):
+            return False
+        row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "event": str(event)}
+        row.update(scrub(data))
+        os.makedirs(sw_home(), exist_ok=True)
+        with open(field_notes_path(), "a") as handle:
+            handle.write(json.dumps(row) + "\n")
+        try:
+            os.chmod(field_notes_path(), 0o600)
+        except OSError:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def load_field_notes():
+    rows = []
+    try:
+        with open(field_notes_path()) as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return rows
+
+
+def field_note_refresh(cfg=None):
+    """One event per refresh run: the status kind each reader reported. The
+    status files are overwritten every run, so without this the diary would
+    only ever hold the latest reading."""
+    cfg = load_config() if cfg is None else cfg
+    outcomes = {}
+    for role in enabled_roles(cfg):
+        if reading_enabled(role, cfg):
+            outcomes[role] = status_kind(role)
+    return field_note("refresh", cfg=cfg, outcomes=outcomes)
+
+
 def brief_card(cfg=None, now=None):
     """The usage panel, as lines to be reproduced verbatim.
 
@@ -1525,8 +1609,11 @@ def has_jq():
 
 
 def _main(argv):
-    """One job only: usage-refresh.sh calls this to keep the runtime mirror
-    current when it is running from the skill folder."""
+    """Two jobs, both for usage-refresh.sh: keep the runtime mirror current when
+    it is running from the skill folder, and record one field-notes event per
+    refresh run."""
+    if len(argv) == 2 and argv[1] == "--field-note-refresh":
+        return 0 if field_note_refresh() or not field_notes_enabled() else 1
     if len(argv) == 3 and argv[1] == "--sync-runtime":
         try:
             sync_runtime(argv[2])
@@ -1535,7 +1622,8 @@ def _main(argv):
                              % problem)
             return 1
         return 0
-    sys.stderr.write("usage: swlib.py --sync-runtime <skill directory>\n")
+    sys.stderr.write("usage: swlib.py --sync-runtime <skill directory> | "
+                     "--field-note-refresh\n")
     return 2
 
 

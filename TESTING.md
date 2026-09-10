@@ -99,17 +99,30 @@ worker runs with its permission prompts disabled or auto-approved.
 
 ## Sending the result back
 
+Turn the field notes on for the whole test (`--field-notes on` on the `--write`
+line, or say yes when setup asks). While testing, record anything you had to
+do, change or get around, at the moment it happens:
+
 ```bash
-python3 ~/.claude/skills/second-wind/scripts/report.py 7 --share
+python3 ~/.claude/skills/second-wind/scripts/setup.py --note "device-code login was blocked by the workspace admin; used the standard flow"
 ```
 
-That writes `~/second-wind-test-report.md`: the environment, every reader status
-file, the accounts table, the delegation summary, and the last 40 lines of the
-reply from each failed exchange. Prompts are not copied into it, and successful
-exchanges are not quoted at all. It replaces email addresses with `<account>` and
-your home directory with `~`. It does **not** redact project or directory names,
-and those 40 lines are whatever the worker said, so **read the file before you
-send it**.
+The assistant running setup should add these itself whenever a step needed a
+workaround, and ask you at the end of setup for anything it missed. Then:
+
+```bash
+python3 ~/.claude/skills/second-wind/scripts/setup.py --field-report
+```
+
+That writes `~/second-wind-test-report.md`: the environment, every reader status,
+the accounts table, the delegation summary by worker and mode, and the field
+notes: setup steps in order, reader outcomes over time, routes and handovers,
+and your notes. It opens with a section saying what is in it and what is not.
+Email addresses become `<account>`, your home directory becomes `~`, and no
+prompt, reply, directory name or project name is copied into it. Your own notes
+are included as written, so **read the file before you send it**. Add
+`--with-details` to `report.py 30 --share` only for a report to yourself: that
+version quotes the last lines of failed replies and names the exchange files.
 
 Exchanges are capped at 200 KB each. Old ones are deleted at the end of the next
 delegation, not on a clock: the runner prunes anything older than 30 days as it

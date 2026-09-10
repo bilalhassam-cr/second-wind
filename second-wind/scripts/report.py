@@ -3,6 +3,7 @@
 
     report.py [days]        default 7
     report.py [days] --share
+    report.py [days] --share --with-details
 
 The reverse check is the point: work handed out and never verified is the risk
 this log exists to expose. A delegated job that half-worked still returns text
@@ -11,7 +12,11 @@ that reads like success, and its exit code is still zero.
 `--share` writes a single file you can hand to someone else, or paste into an
 issue, describing what this machine is running and what the last few
 delegations did. Email addresses become `<account>` and the home directory
-becomes `~`, so the file says what went wrong without saying who you are.
+becomes `~`, so the file says what went wrong without saying who you are. By
+default it also leaves out every directory name and every line a worker wrote:
+it describes how the accounts were reached and how that went, not the work.
+`--with-details` adds the failed replies' last lines and the exchange paths
+back, for a report to yourself.
 """
 import calendar
 import glob
@@ -34,6 +39,9 @@ FAIL_TAIL_LINES = 40
 # Deliberately loose. A pattern that only catches well-formed addresses leaves
 # the malformed ones in, and it is the leftovers that get published.
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# A reset time printed as "(Africa/Johannesburg)" places the person. The hour is
+# useful, the city is not.
+TIMEZONE = re.compile(r"\((?:[A-Z][A-Za-z_]+/)+[A-Za-z_]+\)")
 
 
 def redact(text):
@@ -45,6 +53,7 @@ def redact(text):
     home = os.path.expanduser("~")
     if home and home != "/":
         text = text.replace(home, "~")
+    text = TIMEZONE.sub("(local time)", text)
     return EMAIL.sub("<account>", text)
 
 
@@ -94,9 +103,11 @@ def load_rows(logdir, days):
     return rows
 
 
-def summary_lines(rows, days):
+def summary_lines(rows, days, details=True):
     """The review itself, as lines. Same text on the terminal and in the share
-    file, so nobody has to reconcile two versions of the same finding."""
+    file, so nobody has to reconcile two versions of the same finding. Without
+    details, the directory names and exchange paths stay out: the exchange file
+    is named after the directory it ran in, so the path names the project."""
     if not rows:
         return ["PASS second-wind: nothing delegated in %d days "
                 "(the primary account carried all the work)" % days]
@@ -118,10 +129,15 @@ def summary_lines(rows, days):
         out.append("")
         out.append("Do this: failed delegations to look at")
         for r in fails[-3:]:
-            out.append("  - %s %s exit=%s in %s"
-                       % (r.get("ts", "?")[:16], r.get("worker", "?"),
-                          r.get("exit"), os.path.basename(r.get("cwd", "?"))))
-            out.append("    %s" % r.get("exchange", "?"))
+            if details:
+                out.append("  - %s %s exit=%s in %s"
+                           % (r.get("ts", "?")[:16], r.get("worker", "?"),
+                              r.get("exit"), os.path.basename(r.get("cwd", "?"))))
+                out.append("    %s" % r.get("exchange", "?"))
+            else:
+                out.append("  - %s %s exit=%s, %s mode, %ss"
+                           % (r.get("ts", "?")[:16], r.get("worker", "?"),
+                              r.get("exit"), r.get("mode", "?"), r.get("duration_s", "?")))
 
     if missing:
         out.append("")
@@ -143,10 +159,11 @@ def summary_lines(rows, days):
                    "not just here. Neither worker's own memory is ever read by the "
                    "primary session." % len(big))
         for r in big[-3:]:
-            out.append("  - %s %s %sb -> %s"
+            out.append("  - %s %s %sb%s"
                        % (r.get("ts", "?")[:16], r.get("worker", "?"),
                           r.get("reply_bytes"),
-                          os.path.basename(r.get("exchange", ""))))
+                          " -> %s" % os.path.basename(r.get("exchange", ""))
+                          if details else ""))
 
     thin = [r for r in rows if r.get("prompt_bytes", 0) > 4000
             and r.get("reply_bytes", 0) < 500 and r.get("exit", 0) == 0]
@@ -256,10 +273,91 @@ def fail_tail(path, lines=FAIL_TAIL_LINES):
     return tail or "(no reply recorded)"
 
 
-def share_file(rows, days, logdir, path=SHARE_PATH):
+def field_note_lines():
+    """The diary, summarised. Setup steps and notes in order, reader outcomes
+    tallied per role, routes and handovers counted. Nothing here is copied from
+    a prompt or a reply, because nothing of the kind is ever written to it."""
+    rows = swlib.load_field_notes()
+    if not rows:
+        return ["Field notes are off, or nothing has been recorded. Turn them on "
+                "with `setup.py --write ... --field-notes on`."]
+    out = []
+    steps = [r for r in rows if r.get("event") in ("setup", "write", "check", "note")]
+    if steps:
+        out += ["Setup and notes, in order:", ""]
+        for r in steps:
+            stamp = str(r.get("ts", "?"))[:16].replace("T", " ")
+            kind = r.get("event")
+            if kind == "setup":
+                out.append("- %s  setup --%s  (%s)%s" % (
+                    stamp, r.get("command"), " ".join(r.get("args") or []),
+                    "" if r.get("result") in (0, None) else "  exit %s" % r.get("result")))
+            elif kind == "write":
+                out.append("- %s  wrote config: level %s, workers %s%s%s" % (
+                    stamp, r.get("level"), ", ".join(r.get("workers") or []) or "none",
+                    ", forced" if r.get("forced") else "",
+                    "; changed: " + "; ".join(r.get("changed") or []) if r.get("changed") else ""))
+            elif kind == "check":
+                faults, warnings = r.get("faults") or [], r.get("warnings") or []
+                out.append("- %s  check: %d fault(s), %d warning(s)" % (stamp, len(faults), len(warnings)))
+                for line in faults:
+                    out.append("    fault: %s" % line)
+                for line in warnings:
+                    out.append("    warning: %s" % line)
+            elif kind == "note":
+                out.append("- %s  NOTE: %s" % (stamp, r.get("text", "")))
+        out.append("")
+    refreshes = [r for r in rows if r.get("event") == "refresh"]
+    if refreshes:
+        tally = {}
+        last = {}
+        for r in refreshes:
+            for role, kind in (r.get("outcomes") or {}).items():
+                tally.setdefault(role, Counter())[kind] += 1
+                last[role] = kind
+        out += ["Reader outcomes over %d refresh run(s):" % len(refreshes), ""]
+        for role in sorted(tally):
+            counts = ", ".join("%d %s" % (n, k) for k, n in tally[role].most_common())
+            out.append("- %s: %s; last %s" % (role, counts, last[role]))
+        out.append("")
+    routes = [r for r in rows if r.get("event") == "route"]
+    handovers = [r for r in rows if r.get("event") == "handover"]
+    if routes or handovers:
+        out += ["Routing:", ""]
+        if routes:
+            by = Counter((r.get("source"), r.get("worker")) for r in routes)
+            for (source, worker), n in by.most_common():
+                out.append("- %d route(s) to %s from the %s" % (n, worker, source))
+        if handovers:
+            by = Counter(r.get("reason") for r in handovers)
+            for reason, n in by.most_common():
+                out.append("- %d handover(s) announced, reason: %s" % (n, reason))
+        out.append("")
+    return [line for line in out] or ["Nothing recorded yet."]
+
+
+PRIVACY = [
+    "## What this file contains, and what it does not",
+    "",
+    "In: the operating system and client versions, which workers are enabled and",
+    "at what level, each reader's status, the accounts table with addresses",
+    "replaced, how many delegations went to each worker in each mode and how many",
+    "failed, and the field notes: setup steps, reader outcomes over time, routes",
+    "and handovers, and any lines you added with `setup.py --note`.",
+    "",
+    "Out: every prompt, every reply, every directory or project name, every email",
+    "address, and your home directory path. The exchange logs stay on this machine.",
+    "Your own notes are included as you wrote them, so read them before sending.",
+]
+
+
+def share_file(rows, days, logdir, path=SHARE_PATH, details=False):
     parts = ["# second-wind test report", ""]
     parts.append("Written %s. Home directory shown as ~ and email addresses "
-                 "replaced with <account>." % time.strftime("%Y-%m-%d %H:%M"))
+                 "replaced with <account>.%s" % (
+                     time.strftime("%Y-%m-%d %H:%M"),
+                     " Reply tails and paths included (--with-details)." if details else ""))
+    parts += [""] + PRIVACY
     parts += ["", "## Environment", ""] + environment_lines()
     parts += ["", "## Reader status", ""] + status_lines()
     parts += ["", "## Accounts", "", "```", accounts_table(), "```"]
@@ -267,12 +365,19 @@ def share_file(rows, days, logdir, path=SHARE_PATH):
     if not os.path.isdir(logdir):
         parts.append("There is no log directory at %s." % swlib.tilde(logdir))
     else:
-        parts += ["```"] + summary_lines(rows, days) + ["```"]
+        parts += ["```"] + summary_lines(rows, days, details=details) + ["```"]
+
+    parts += ["", "## Field notes", ""] + field_note_lines()
 
     fails = [r for r in rows if r.get("exit", 0) != 0]
     parts += ["", "## Failed exchanges", ""]
     if not fails:
         parts.append("None in this period.")
+    elif not details:
+        parts.append("%d failed; the workers' replies are not copied into this file. "
+                     "Run report.py with --with-details for their last lines, and read "
+                     "them before sending." % len(fails))
+        fails = []
     for r in fails:
         parts.append("### %s %s, exit %s, %s mode"
                      % (r.get("ts", "?")[:16], r.get("worker", "?"),
@@ -294,21 +399,23 @@ def share_file(rows, days, logdir, path=SHARE_PATH):
 
 
 def main(argv):
-    days, share = 7, False
+    days, share, details = 7, False, False
     for arg in argv:
         if arg == "--share":
             share = True
+        elif arg == "--with-details":
+            details = True
         elif arg.isdigit() and int(arg) > 0:
             days = int(arg)
         else:
-            sys.stderr.write("usage: report.py [days] [--share]\n")
+            sys.stderr.write("usage: report.py [days] [--share] [--with-details]\n")
             return 2
 
     logdir = log_dir()
     rows = load_rows(logdir, days) if os.path.isdir(logdir) else []
 
     if share:
-        path = share_file(rows, days, logdir)
+        path = share_file(rows, days, logdir, details=details)
         print(path)
         return 0
 

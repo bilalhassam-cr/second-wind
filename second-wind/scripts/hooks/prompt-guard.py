@@ -254,6 +254,8 @@ def main():
                         "the menu to get this session working again."
                         % route["label"])
         swlib.write_mode(route, source="desktop", session_id=session)
+        swlib.field_note("route", cfg=cfg, source="desktop", worker=route["worker"],
+                         model=route.get("model"), effort=route.get("effort"))
         return deny("second-wind: routing to %s is armed for your next tasks. "
                     "This session's model is a routing name, not a real model, "
                     "so pick any normal model from the menu and send your "
@@ -275,6 +277,8 @@ def main():
                 # fires if a worker is switched on before it expires.
                 return 0
             drop(pending)
+            swlib.field_note("handover", cfg=cfg, reason="rate limit",
+                             workers=[r for r in swlib.enabled_roles(cfg) if r != "primary"])
             return emit("[second-wind] This account hit its usage limit and the last "
                         "turn stopped there." + ROUTING % workers)
 
@@ -341,6 +345,8 @@ def main():
     except (TypeError, ValueError):
         window = 3600
     swlib.notify("second-wind", body, "handover-primary", window_seconds=window)
+    swlib.field_note("handover", cfg=cfg, reason="threshold", windows=list(hits),
+                     workers=[r for r in swlib.enabled_roles(cfg) if r != "primary"])
 
     return emit("[second-wind] This account is running low: %s.%s%s"
                 % (" and ".join(hits), resets,
