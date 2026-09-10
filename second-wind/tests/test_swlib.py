@@ -686,7 +686,7 @@ class FieldNoteAllowlist(Base):
         self.assertEqual(swlib.load_field_notes(), [])
 
     def test_an_unknown_key_is_dropped_from_a_known_event(self):
-        swlib.field_note("setup", command="check", cwd="/Users/someone/ClientA", prompt="x")
+        swlib.field_note("setup", command="check", cwd="/Volumes/ClientA/work", prompt="x")
         row = self.last()
         self.assertNotIn("cwd", row)
         self.assertNotIn("prompt", row)
