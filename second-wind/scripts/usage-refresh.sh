@@ -154,7 +154,9 @@ for role in $due; do
 done
 for pid in $pids; do wait "$pid" || true; done
 # The diary, when it is on: which kind of status each reader ended in this run.
-[ -n "$due" ] && python3 "$HERE/swlib.py" --field-note-refresh >/dev/null 2>&1 || true
+if [ -n "$due" ]; then
+  python3 "$HERE/swlib.py" --field-note-refresh >/dev/null 2>&1 || true
+fi
 
 # The model picker describes the readings, so it runs after them.
 if [ "$picker" = on ]; then
