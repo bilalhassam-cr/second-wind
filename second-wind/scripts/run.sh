@@ -3,6 +3,8 @@
 #
 #   run.sh secondary <prompt-file> [--review|--work] [--model M] [--effort E]
 #   run.sh codex     <prompt-file> [--review|--work] [--model M] [--effort E]
+#   run.sh codex2    <prompt-file> [--review|--work] [--model M] [--effort E]
+#   run.sh codex3    <prompt-file> [--review|--work] [--model M] [--effort E]
 #   run.sh grok      <prompt-file> [--review|--work] [--model M] [--effort E]
 #   run.sh cursor    <prompt-file> [--review|--work] [--model M]
 #
@@ -21,7 +23,7 @@ need_bin() { command -v "$1" >/dev/null 2>&1 || { echo "second-wind: '$1' is not
 
 worker=${1:-}; promptfile=${2:-}
 [ -n "$worker" ] && [ -f "$promptfile" ] || {
-  echo "usage: run.sh <secondary|codex|grok|cursor> <prompt-file> [--review|--work] [--model M] [--effort E]" >&2; exit 2; }
+  echo "usage: run.sh <secondary|codex|codex2|codex3|grok|cursor> <prompt-file> [--review|--work] [--model M] [--effort E]" >&2; exit 2; }
 shift 2
 
 cfg() { jq -r "$1 // empty" "$CFG"; }
@@ -120,14 +122,31 @@ fi
 # it, the worker follows a project instruction to "verify in a real browser",
 # crashes a browser on the user's desktop, and reports success anyway.
 #
-# For Codex this is a constant, not a measurement. Both modes below pass a
-# sandbox flag on the command line, -s read-only or the workspace-write sandbox
-# that --approve-for-me implies, and a command-line sandbox overrides whatever
-# the user's own Codex config says. A sandboxed process cannot reach the window
-# server, so the guard always applies.
+# For Codex this is decided by what the command line passes, not measured.
+# Review mode passes -s read-only, and work mode passes the workspace-write
+# sandbox that --approve-for-me implies, and a command-line sandbox overrides
+# whatever the user's own Codex config says. A sandboxed process cannot reach
+# the window server, so the guard applies. The one exception is a Codex role
+# whose config grants full_access: in work mode it runs with no sandbox at all,
+# a browser can start, and telling it otherwise would be false.
 guard=""
-if [ "$worker" = codex ]; then
-  guard="You are running inside a sandbox and cannot launch a web browser: it will abort at startup. Do not run any browser, headless browser, CDP harness, puppeteer or playwright step, even if this project's instructions tell you to verify rendered output that way. Hand that step back instead and say which step you skipped."
+codex_full=false
+sandbox_note="the client's own"
+# Plain if, not a case inside $( ): macOS /bin/sh cannot parse a bare ) in a
+# case pattern inside command substitution, and the header line after it was
+# silently lost.
+if [ "$worker" = codex ] || [ "$worker" = codex2 ] || [ "$worker" = codex3 ]; then
+  if [ "$(cfgbool ".$worker.full_access")" = "true" ] && [ "$mode" = work ]; then
+    codex_full=true
+    sandbox_note="none, full access"
+  elif [ "$mode" = review ]; then
+    sandbox_note="read-only"
+  else
+    sandbox_note="workspace-write"
+  fi
+  if [ "$codex_full" != true ]; then
+    guard="You are running inside a sandbox and cannot launch a web browser: it will abort at startup. Do not run any browser, headless browser, CDP harness, puppeteer or playwright step, even if this project's instructions tell you to verify rendered output that way. Hand that step back instead and say which step you skipped."
+  fi
 fi
 
 # The prompt is assembled once. Claude, Codex and Cursor read it on stdin. Grok's
@@ -197,6 +216,8 @@ case "$worker" in
     dir=$(expand "$(cfg '.secondary.config_dir')")
     acct=$(cfg '.secondary.account')
     set -- claude -p --add-dir "$(pwd)"
+    if [ "$mode" = review ]; then sandbox_note="read-only tools, no MCP servers"
+    else sandbox_note="none, bypassPermissions"; fi
     if [ "$mode" = review ]; then
       # Bash has to be blocked too. Without it a "read-only" reviewer can still
       # run sed -i, git checkout or rm, which makes the mode's name a lie and
@@ -222,10 +243,42 @@ case "$worker" in
     else CLAUDE_CONFIG_DIR="$dir"; export CLAUDE_CONFIG_DIR; fi
     sw_run "$tmo" "$@"; rc=$?
     ;;
-  codex)
-    [ "$(cfgbool '.codex.enabled')" = "true" ] || { echo "second-wind: codex is disabled in config" >&2; exit 2; }
+  codex|codex2|codex3)
+    [ "$(cfgbool ".$worker.enabled")" = "true" ] || { echo "second-wind: $worker is disabled in config" >&2; exit 2; }
     need_bin codex
-    acct=$(cfg '.codex.account')
+    acct=$(cfg ".$worker.account")
+    # Each Codex role owns a CODEX_HOME, and with it a sign-in. Only a directory
+    # of its own is exported; the default ~/.codex is left for the client to find
+    # unaided, the same way CLAUDE_CONFIG_DIR is handled above. A role pointed at
+    # a directory that does not exist stops here, because Codex would otherwise
+    # create an empty one, meet no login, and the failure would read as the
+    # worker's opinion.
+    home=$(expand "$(cfg ".$worker.config_dir")")
+    home=${home%/}
+    # Compared by resolved path, as swlib.codex_home does, so a trailing slash
+    # or a symlinked ~/.codex is still the default and never gets the variable.
+    default_home=$(cd "$HOME/.codex" 2>/dev/null && pwd -P)
+    if [ -n "$home" ]; then
+      real_home=$(cd "$home" 2>/dev/null && pwd -P) || real_home=""
+      if [ -z "$real_home" ]; then
+        if [ "$home" = "$HOME/.codex" ]; then home=""
+        else echo "second-wind: $worker's directory $home does not exist. Create it and sign in with CODEX_HOME=$home codex login" >&2; exit 2; fi
+      elif [ -n "$default_home" ] && [ "$real_home" = "$default_home" ]; then
+        home=""
+      fi
+    fi
+    if [ -n "$home" ]; then CODEX_HOME="$home"; export CODEX_HOME
+    else unset CODEX_HOME; fi
+    # Refuse an unsigned role here. Started anyway, Codex retries the API five
+    # times with no bearer token and the 401s get logged as though they were the
+    # worker's reply. `codex login status` writes to stderr and, on some builds,
+    # exits 0 while saying "Not logged in", so both the exit code and the text
+    # are read.
+    login_out=$(codex login status 2>&1); login_rc=$?
+    if [ "$login_rc" -ne 0 ] || printf '%s' "$login_out" | grep -qi "not logged in"; then
+      echo "second-wind: $worker is not signed in${home:+ (CODEX_HOME=$home)}. Run:  ${home:+CODEX_HOME=$home }codex login" >&2
+      exit 2
+    fi
     # Codex prints its whole session to stdout: tool calls, diffs, reasoning and
     # server chatter. Asking it for the final message in a file gives the reply
     # on its own, so what we log and print is the answer rather than a transcript
@@ -234,6 +287,10 @@ case "$worker" in
     set -- codex exec --skip-git-repo-check -C "$(pwd)" -o "$lastmsg"
     if [ "$mode" = review ]; then
       set -- "$@" -s read-only
+    elif [ "$codex_full" = true ]; then
+      # No sandbox and no approval prompts. Only when the config for this role
+      # says full_access, which setup writes only when asked for by name.
+      set -- "$@" --dangerously-bypass-approvals-and-sandbox
     else
       # --approve-for-me implies the workspace-write sandbox, so it cannot be
       # combined with -s
@@ -242,6 +299,9 @@ case "$worker" in
     [ -n "$model" ] && set -- "$@" -m "$model"
     [ -n "$effort" ] && set -- "$@" -c "model_reasoning_effort=\"$effort\""
     sw_run "$tmo" "$@"; rc=$?
+    # The variable was for the worker alone. The refresh started at the end of
+    # this script must not inherit one role's home while reading another's.
+    unset CODEX_HOME
     # A run killed on timeout, or one that died early, may leave the file empty.
     # The stream is then all there is, and it is better than nothing.
     # grep, not test -s: a file holding only a newline is empty for our purposes,
@@ -259,8 +319,10 @@ case "$worker" in
     grok_prompt=$(cat "$sendfile")
     if [ "$mode" = review ]; then
       set -- grok --disallowed-tools "Write,Edit,Bash"
+      sandbox_note="Write, Edit and Bash disallowed"
     else
       set -- grok --permission-mode bypassPermissions
+      sandbox_note="none, bypassPermissions"
     fi
     [ -n "$model" ] && set -- "$@" --model "$model"
     [ -n "$effort" ] && set -- "$@" --reasoning-effort "$effort"
@@ -276,7 +338,8 @@ case "$worker" in
     acct=$(cfg '.cursor.account')
     set -- cursor-agent -p --trust
     # --trust only skips the workspace prompt. It does not prevent writes.
-    [ "$mode" = review ] && set -- "$@" --mode ask
+    if [ "$mode" = review ]; then set -- "$@" --mode ask; sandbox_note="ask mode"
+    else sandbox_note="none, trust with writes"; fi
     [ -n "$model" ] && set -- "$@" --model "$model"
     sw_run "$tmo" "$@"; rc=$?
     ;;
@@ -321,6 +384,7 @@ is_int "$reply_bytes" || reply_bytes=0
   printf -- '- Model: %s\n' "${model:-default}"
   printf -- '- Effort: %s\n' "${effort:-default}"
   printf -- '- Browser guard applied: %s\n' "$([ -n "$guard" ] && echo yes || echo no)"
+  printf -- '- Sandbox: %s\n' "$sandbox_note"
   printf -- '- Credentials cleared: %s\n' "${creds_cleared:-none}"
   printf -- '- Credentials kept: %s\n' \
     "$([ -n "$creds_kept" ] && echo "$creds_kept, this worker's own sign-in" || echo none)"
@@ -341,9 +405,10 @@ line=$(jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg w "$worker" --arg 
       --argjson rcn "$reply_bytes" \
       --argjson trunc "$truncated" \
       --argjson guard "$([ -n "$guard" ] && echo true || echo false)" \
+      --arg sb "$sandbox_note" \
   '{ts:$ts,worker:$w,account:$a,mode:$m,cwd:$cwd,model:$mdl,effort:$eff,
-    browser_guard:$guard,exit:$rc,duration_s:$dur,prompt_bytes:$pc,reply_bytes:$rcn,
-    truncated:$trunc,exchange:$f}')
+    browser_guard:$guard,sandbox:$sb,exit:$rc,duration_s:$dur,prompt_bytes:$pc,
+    reply_bytes:$rcn,truncated:$trunc,exchange:$f}')
 ledger="$LOGDIR/$(date +%Y-%m).jsonl"
 printf '%s\n' "$line" >> "$ledger" || echo "second-wind: could not append to $ledger" >&2
 chmod 600 "$ledger" 2>/dev/null || true

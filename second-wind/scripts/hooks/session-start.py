@@ -18,16 +18,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import swlib  # noqa: E402
 
 # Verbatim, and deliberately so. The wording is the contract between this hook
-# and whatever renders the brief: what to show, what not to offer, and what to
-# do when the same message already carries a task.
+# and whatever renders the brief.
+#
+# It hands over a finished block rather than a description of one. Asking for
+# "one compact card with small bars" produced a different picture every session:
+# columns wandering, bar lengths drifting, 98% drawn as a full bar. The panel is
+# drawn in swlib now, so the only instruction left is to reproduce it and not
+# redecorate it.
 INSTRUCTION = (
-    "Present these as the session brief before anything else. If a widget or "
-    "inline HTML rendering tool is available in this session, render them as "
-    "one compact card: one row per account, two small bars (5h, weekly), the "
-    "age in a footnote, no other decoration. Otherwise print them as a short "
-    "list. Do not offer a model or effort picker unless asked. Do not repeat "
-    "this brief later in the session. If this message already contains a task, "
-    "keep the brief to one line and start the task."
+    "The block above is the usage panel. Print it before anything else, "
+    "verbatim, every line including the header and the age footnote, as "
+    "monospace text so the columns line up. Do not redraw the bars, change "
+    "their width, reorder or drop rows, add colour, bold, emoji or a table "
+    "around it, and do not restate the figures in prose underneath. The bars "
+    "are drawn to scale and a percentage below 100 is deliberately never a "
+    "full bar. Do not offer a model or effort picker unless asked. Do not "
+    "volunteer this panel again later in the session, but if usage, limits or "
+    "where to route work come up again, render it again the same way, "
+    "regenerated with 'python3 \"$SW/scripts/setup.py\" --card' rather than "
+    "retyped from memory or redrawn in a new shape. If this message already "
+    "contains a task, print the panel and then get on with the task without "
+    "further preamble."
 )
 
 SOURCES = ("", "startup", "resume", "fork")
@@ -80,7 +91,7 @@ def main():
            if swlib.reading_enabled(role, cfg)):
         spawn_refresh()
 
-    lines = swlib.brief_lines(cfg)
+    lines = swlib.brief_card(cfg)
     if not lines:
         return 0
     # Where the next tasks are going, and how to change it. The route is read

@@ -68,8 +68,8 @@ def route_from(a):
     """The worker, model and effort as one route, or None with a reason."""
     route = swlib.parse_route(a.set) or swlib.role_route(a.set)
     if not route:
-        return None, ("%s is not a worker. Use personal, codex, grok or cursor."
-                      % a.set)
+        return None, ("%s is not a worker. Use personal, codex, codex2, codex3, grok or "
+                      "cursor." % a.set)
     cfg = swlib.load_config()
     if route["worker"] not in swlib.enabled_roles(cfg):
         return None, ("%s is not connected, so it cannot take the work. Run "
@@ -229,7 +229,7 @@ def build_parser():
     ap = argparse.ArgumentParser(
         prog="route.py", description="arm, show or clear the second-wind route")
     ap.add_argument("--set", metavar="WORKER",
-                    help="personal, codex, grok or cursor")
+                    help="personal, codex, codex2, codex3, grok or cursor")
     ap.add_argument("--model", default=None)
     ap.add_argument("--effort", default=None)
     ap.add_argument("--mode", choices=["review", "work"], default=None)

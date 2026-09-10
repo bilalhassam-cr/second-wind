@@ -44,6 +44,8 @@ GROUP_WORDS = {
 WORKER_NAMES = {
     "secondary": "the secondary Claude account",
     "codex": "Codex",
+    "codex2": "the second Codex account",
+    "codex3": "the third Codex account",
     "grok": "Grok Build",
     "cursor": "Cursor Agent",
 }
@@ -167,11 +169,13 @@ def read_mode(cfg=None, session_id=None):
 def worker_list(cfg):
     """The workers this machine can hand to, in the order the config lists."""
     names = []
-    for role in ("secondary", "codex", "grok", "cursor"):
+    for role in swlib.WORKER_ROLES:
         if role in swlib.enabled_roles(cfg):
             name = WORKER_NAMES[role]
-            if role == "secondary":
-                account = (cfg.get("secondary") or {}).get("account")
+            # With several accounts on one vendor the name alone does not say
+            # which one, so the account goes in the sentence.
+            if role == "secondary" or role in swlib.CODEX_ROLES:
+                account = (cfg.get(role) or {}).get("account")
                 if account:
                     name += " (%s)" % account
             names.append(name)

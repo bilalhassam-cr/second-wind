@@ -47,9 +47,9 @@ sleep 3
 printf '%s\\n' "$*" >> "$SW_HOME/osascript-args.txt"
 """
 
-INSTRUCTION_START = "Present these as the session brief before anything else."
-INSTRUCTION_END = ("If this message already contains a task, keep the brief to "
-                   "one line and start the task.")
+INSTRUCTION_START = "The block above is the usage panel."
+INSTRUCTION_END = ("If this message already contains a task, print the panel and "
+                   "then get on with the task without further preamble.")
 
 
 def setUpModule():
@@ -202,10 +202,16 @@ class SessionStart(Base):
         text = self.context(self.run_hook("session-start.py", {
             "hook_event_name": "SessionStart", "source": "startup"}),
             "SessionStart")
-        self.assertIn("work Claude: 5h 12%, 7d 20% (", text)
-        self.assertIn(" ago)", text)
-        self.assertIn("spare Claude: 5h 3%, 7d 8%", text)
-        self.assertIn("codex: 5h 5%, 7d 11%", text)
+        self.assertIn("5-hour", text)
+        self.assertIn("weekly", text)
+        for label, five, week in (("work Claude", "12%", "20%"),
+                                  ("spare Claude", "3%", "8%"),
+                                  ("codex", "5%", "11%")):
+            row = next(line for line in text.splitlines()
+                       if line.startswith(label))
+            self.assertEqual([five, week],
+                             [part for part in row.split() if part.endswith("%")])
+        self.assertIn(" old.", text)
         self.assertIn(INSTRUCTION_START, text)
         self.assertIn(INSTRUCTION_END, text)
         self.assertNotIn("no current reading", text)
@@ -218,22 +224,28 @@ class SessionStart(Base):
             "source": "startup"}), "SessionStart")
         instruction = text.split("\n\n", 1)[1]
         self.assertEqual(instruction, (
-            "Present these as the session brief before anything else. If a "
-            "widget or inline HTML rendering tool is available in this session, "
-            "render them as one compact card: one row per account, two small "
-            "bars (5h, weekly), the age in a footnote, no other decoration. "
-            "Otherwise print them as a short list. Do not offer a model or "
-            "effort picker unless asked. Do not repeat this brief later in the "
-            "session. If this message already contains a task, keep the brief "
-            "to one line and start the task."))
+            "The block above is the usage panel. Print it before anything else, "
+            "verbatim, every line including the header and the age footnote, as "
+            "monospace text so the columns line up. Do not redraw the bars, "
+            "change their width, reorder or drop rows, add colour, bold, emoji "
+            "or a table around it, and do not restate the figures in prose "
+            "underneath. The bars are drawn to scale and a percentage below 100 "
+            "is deliberately never a full bar. Do not offer a model or effort "
+            "picker unless asked. Do not volunteer this panel again later in "
+            "the session, but if usage, limits or where to route work come up "
+            "again, render it again the same way, regenerated with 'python3 "
+            "\"$SW/scripts/setup.py\" --card' rather than retyped from memory "
+            "or redrawn in a new shape. If this message already contains a "
+            "task, print the panel and then get on with the task without "
+            "further preamble."))
 
     def test_dead_reading_says_so_and_refreshes(self):
         self.write_config(secondary={"enabled": False}, codex={"enabled": False})
         self.write_usage("primary", five=12, week=20, age=7200)
         text = self.context(self.run_hook("session-start.py", {
             "source": "startup"}), "SessionStart")
-        self.assertIn("work Claude: no current reading, refreshing", text)
-        self.assertNotIn("5h 12%", text)
+        self.assertIn("no current reading, refreshing", text)
+        self.assertNotIn("12%", text)
         self.assertEqual(self.wait_for("refresh-args.txt").strip(), "")
 
     def test_missing_reading_refreshes(self):

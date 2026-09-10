@@ -29,19 +29,44 @@ exit 0 when nothing is configured, so read the output, not the exit code, and
 **offer to set it up in one line before getting on with the task.** A missing
 optional tool never blocks one.
 
+## Showing usage: always the panel, never prose
+
+**Whenever usage, limits, headroom or where to route work come up, show the
+panel.** Not a sentence of percentages, not a fresh shape invented for the
+occasion:
+
+```bash
+python3 "$SW/scripts/setup.py" --card
+```
+
+Print what it returns verbatim, as monospace text, every line including the
+header and the age footnote. Do not redraw the bars, change their width, reorder
+or drop rows, wrap it in a table, or add colour, bold or emoji. Do not restate
+the figures in prose underneath either; the panel has already said them.
+
+The bars are drawn in `swlib.usage_bar`, to scale, in eighths of a cell, so a
+reading below 100% is never a full bar and 98% cannot be mistaken for spent. That
+is why it is drawn in Python and not described here in words: the same reading
+has to produce the same picture every time, or the panel is decoration rather
+than a measurement. `·····` means the client reports no such window, which is
+not zero. A row with no usable reading carries the reason instead of a bar.
+
+The `--accounts` table is the different thing and stays as it is: it carries
+plan, version, headroom and reader status, and it is for diagnosis rather than
+for a glance.
+
 ## The command surface
 
 **`/second-wind` with no arguments is the picker.** In the desktop app this is
 the only way to route, since its model menu takes no rows of ours.
 
-1. `setup.py --accounts` for the figures, then
+1. `setup.py --card` for the figures, then
    `python3 "$SW/scripts/route.py" --destinations` for each destination, its
    headroom and its presets with a line each.
-2. Show them all before asking, because the question cannot list them all. If a
-   widget or inline HTML rendering tool is available, render one compact card: a
-   row per destination, its label, two small bars (5h and weekly, or the Cursor
-   pools), a **most headroom** mark on the recommended row and the presets under
-   each. Otherwise a tidy aligned table, then one line of advice.
+2. Show them all before asking, because the question cannot list them all. Print
+   the panel verbatim as above, then the presets under it, one line each, and one
+   line of advice naming the destination with the most headroom. Do not redraw
+   the panel to add the presets into it.
 3. **AskUserQuestion**, "Where should the next tasks run?". **Four options is
    the limit and "Keep it here" takes one**, so page one is "Keep it here" plus
    the destinations with the most headroom, and when more are enabled than fit,
@@ -105,7 +130,7 @@ what this skill exists to prevent, since a half-worked job still returns prose
 reading like success. Write the prompt to a file, or quoting becomes the job.
 
 ```bash
-"$SW/scripts/run.sh" <secondary|codex|grok|cursor> <prompt-file> [--review|--work] [--model M] [--effort E]   # cursor takes no --effort
+"$SW/scripts/run.sh" <secondary|codex|codex2|codex3|grok|cursor> <prompt-file> [--review|--work] [--model M] [--effort E]   # cursor takes no --effort
 ```
 
 **`--review` blocks file edits and shell work.** Claude loses its edit, write and
@@ -118,8 +143,22 @@ whenever you are still editing the same files.
 with the same reach you have, except Codex: work mode puts it in the
 workspace-write sandbox, so it cannot write outside the directory and **cannot
 launch a browser**. Browser QA, screenshots and any CDP, puppeteer or playwright
-step stay here. Use work mode to build or fix something, and when the point is
-to spend the other allowance. Say which mode you used.
+step stay here. The exception is a Codex role whose config carries
+`full_access: true`, set with `setup.py --write --codex-full-access on`: that
+role runs work mode with no sandbox and no approval prompts, a browser can
+start, and the exchange header records `Sandbox: none, full access`. Review
+mode is read-only whatever the config says. Use work mode to build or fix
+something, and when the point is to spend the other allowance. Say which mode
+you used.
+
+**Several Codex accounts.** `codex`, `codex2` and `codex3` are separate sign-ins,
+each in its own `CODEX_HOME`. The desktop app rewrites `~/.codex/auth.json` when its user
+switches workspace, so a role on that default directory changes plan without
+telling anyone; the panel and `--check` say `signed in as X, not the configured
+Y` when a reader sees a different account or plan from the one setup pinned.
+When that appears, stop routing to that role until the sign-in is put back or,
+if the change was meant, the reading is refreshed and `--write` rerun so the new
+sign-in is pinned.
 
 **Writing the prompt.** The worker starts blind. Put the question, the relevant
 file contents, the constraint that matters and what finished looks like into the
@@ -152,9 +191,11 @@ user's memory or a project file. Review the last week with
 
 ## The session brief and handover
 
-At every level a SessionStart hook puts one line per account in front of the
-session: the windows, their age, any reader fault, and whether a route is on
-here. The desktop app runs no status line, so the brief is the only surface.
+At every level a SessionStart hook puts the panel in front of the session: a row
+per account with its windows, the age of the readings, any reader fault, and
+whether a route is on here. It arrives already drawn, and the rules above for
+showing it apply. The desktop app runs no status line, so the brief is the only
+surface.
 
 At level relief the guard adds a line when the primary crosses its thresholds. It
 is a request, not a dispatch: this session has to act on it, **at a task

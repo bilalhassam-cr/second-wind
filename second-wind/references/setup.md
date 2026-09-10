@@ -182,6 +182,48 @@ on a trusted one it spends ten to forty seconds starting MCP servers before it
 accepts `/status`. The reader waits for the composer and for the screen to go
 quiet; it never presses a key to dismiss a modal.
 
+### A second, or third, Codex account
+
+Codex keeps everything about a sign-in under `CODEX_HOME`, default `~/.codex`. A
+second directory is a second sign-in, with its own `auth.json`, its own
+`config.toml`, its own trust list and its own allowance. Tested on 0.153.0: a
+fresh `CODEX_HOME` reports `Not logged in` while `~/.codex` stays signed in, and
+nothing in the default directory is touched.
+
+```bash
+python3 scripts/setup.py --write ... --codex on --codex2 on --codex2-dir ~/.codex-personal --force
+CODEX_HOME=~/.codex-personal codex login
+CODEX_HOME=~/.codex-personal codex login status
+```
+
+A third role is `--codex3 on --codex3-dir <dir>`, the same in every respect.
+`--force` is needed the first time because the new directory is not signed in yet;
+setup creates it, pre-trusts the workdir in it, and prints the login line. Then
+run `--check` without `--force` to confirm.
+
+Two traps, both about which account a login lands on:
+
+- **`codex login` completes against whichever ChatGPT account the browser already
+  holds**, and a ChatGPT login with several workspaces lands on whichever one is
+  selected. Sign the browser into the right account and workspace first, or use
+  a separate browser profile per account.
+- **The desktop app owns `~/.codex`.** Switching workspace in the Codex app
+  rewrites `~/.codex/auth.json`, so a role on the default directory changes plan
+  without telling anyone, and the email in `codex login status` does not change.
+  The reader records the plan it saw and `--check` reports the drift. If you
+  switch workspaces in the app at all, give every second-wind Codex role a
+  directory of its own with `--codex-dir` and `--codex2-dir`, and leave `~/.codex`
+  to the app.
+
+A new `CODEX_HOME` starts empty: no MCP servers, no plugins, and no
+`project_doc_fallback_filenames`, so a worker there reads `AGENTS.md` and not
+`CLAUDE.md` unless you add that line to its `config.toml`. For a headless worker
+the empty start is mostly a gain, because it is what makes the reader fast.
+
+The desktop app's own session store is account-agnostic: a thread carries a
+working directory and an originator, and no account id, which is why its chats
+survive a workspace switch. Nothing in it says which allowance paid for a turn.
+
 ## Grok Build
 
 Grok Build is included with SuperGrok and X Premium+. Install and sign in:

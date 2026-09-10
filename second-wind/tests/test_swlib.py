@@ -330,6 +330,287 @@ class Brief(Base):
                          "cursor: no usage reading available for this sign-in")
 
 
+class UsageBar(Base):
+    """The bar is a function of the number and nothing else, and three of its
+    properties are honesty rules rather than taste."""
+
+    def test_width_is_fixed_whatever_goes_in(self):
+        for pct in (None, 0, 0.4, 1, 33, 50, 97.6, 99, 100, 140, -5):
+            self.assertEqual(len(swlib.usage_bar(pct)), swlib.BAR_CELLS, pct)
+
+    def test_nothing_spent_draws_empty_and_everything_draws_full(self):
+        self.assertEqual(swlib.usage_bar(0), swlib.BAR_EMPTY * swlib.BAR_CELLS)
+        self.assertEqual(swlib.usage_bar(100), swlib.BAR_FULL * swlib.BAR_CELLS)
+
+    def test_below_a_hundred_is_never_a_full_bar(self):
+        # The reason the eighth blocks exist. 99% of a weekly limit rounds to a
+        # full bar in whole cells, and reading it as spent is the mistake the
+        # panel is meant to prevent.
+        for pct in (90, 95, 98, 99, 99.9):
+            self.assertNotEqual(swlib.usage_bar(pct),
+                                swlib.BAR_FULL * swlib.BAR_CELLS, pct)
+
+    def test_something_spent_is_never_an_empty_bar(self):
+        for pct in (0.1, 1, 3):
+            self.assertNotEqual(swlib.usage_bar(pct),
+                                swlib.BAR_EMPTY * swlib.BAR_CELLS, pct)
+
+    def test_a_window_the_client_never_reported_is_not_drawn_as_zero(self):
+        self.assertNotEqual(swlib.usage_bar(None), swlib.usage_bar(0))
+        self.assertEqual(swlib.usage_bar(None), swlib.BAR_ABSENT * swlib.BAR_CELLS)
+
+    def test_the_same_reading_always_draws_the_same_picture(self):
+        self.assertEqual(swlib.usage_bar(48), swlib.usage_bar(48.0))
+
+
+class BriefCard(Base):
+    def card(self):
+        self.write_config(
+            primary={"config_dir": "~/.claude", "label": "Work Claude"},
+            secondary={"enabled": True, "config_dir": "~/.claude-secondary",
+                       "label": "Personal Claude"},
+            codex={"enabled": True, "label": "Codex"},
+            cursor={"enabled": True, "label": "Cursor"},
+        )
+        self.write_usage("primary", age_seconds=60, five_hour_pct=2, seven_day_pct=16)
+        self.write_usage("secondary", age_seconds=60, five_hour_pct=0, seven_day_pct=13)
+        self.write_usage("codex", age_seconds=60, seven_day_pct=98, five_hour_pct=None)
+        self.write_usage("cursor", age_seconds=60,
+                         extra={"included_pct": 1, "auto_pct": 2, "api_pct": 0})
+        return swlib.brief_card(now=NOW)
+
+    @staticmethod
+    def bar_offsets(row):
+        """Where each bar begins in a row, by its glyphs."""
+        offsets, previous = [], -2
+        for i, char in enumerate(row):
+            if char in swlib.BAR_CHARS:
+                if i != previous + 1:
+                    offsets.append(i)
+                previous = i
+        return offsets
+
+    def test_every_row_starts_in_the_same_column(self):
+        # The label field is as wide as the longest label, so whatever follows
+        # it begins in one column on every row, header included.
+        width = len("Personal Claude")
+        for row in self.card()[:-1]:
+            self.assertEqual(row[width:width + 2], "  ", row)
+            self.assertNotEqual(row[width + 2:width + 3], " ", row)
+
+    def test_the_windowed_rows_put_both_bars_in_the_same_two_columns(self):
+        windowed = [row for row in self.card()[1:-1] if self.bar_offsets(row)]
+        self.assertEqual(len(windowed), 3)
+        self.assertEqual(len({tuple(self.bar_offsets(row)) for row in windowed}), 1,
+                          "both bars begin at the same offset on every row")
+
+    def test_a_missing_window_reads_as_not_available_not_as_zero(self):
+        codex = next(row for row in self.card() if row.startswith("Codex"))
+        self.assertIn(swlib.BAR_ABSENT * swlib.BAR_CELLS, codex)
+        self.assertIn("n/a", codex)
+
+    def test_cursor_pools_are_not_filed_under_the_weekly_column(self):
+        cursor = next(row for row in self.card() if row.startswith("Cursor"))
+        self.assertIn("monthly pools: included 1%, auto 2%, api 0%", cursor)
+        self.assertNotIn(swlib.BAR_EMPTY, cursor)
+
+    def test_the_footnote_reports_the_oldest_reading(self):
+        self.assertEqual(self.card()[-1], "Readings 60s old.")
+
+    def test_a_span_of_ages_is_reported_as_a_span(self):
+        self.write_config(
+            primary={"config_dir": "~/.claude", "label": "Work Claude"},
+            codex={"enabled": True, "label": "Codex"},
+        )
+        self.write_usage("primary", age_seconds=60, five_hour_pct=2, seven_day_pct=16)
+        self.write_usage("codex", age_seconds=600, seven_day_pct=98, five_hour_pct=None)
+        self.assertEqual(swlib.brief_card(now=NOW)[-1], "Readings 60s to 10m old.")
+
+    def test_a_dead_reading_carries_the_reason_instead_of_a_bar(self):
+        self.write_config(
+            primary={"config_dir": "~/.claude", "label": "Work Claude"},
+            codex={"enabled": True, "label": "Codex"},
+        )
+        self.write_usage("primary", age_seconds=60, five_hour_pct=2, seven_day_pct=16)
+        self.write_usage("codex", age_seconds=99999, seven_day_pct=98, five_hour_pct=None)
+        codex = next(row for row in swlib.brief_card(now=NOW)
+                     if row.startswith("Codex"))
+        self.assertNotIn(swlib.BAR_FULL, codex)
+        self.assertNotIn("98", codex)
+
+    def test_no_accounts_means_no_card_rather_than_a_bare_header(self):
+        self.assertEqual(swlib.brief_card(), [])
+
+
+class CodexRoles(Base):
+    """Two Codex sign-ins, each its own CODEX_HOME."""
+
+    def test_the_default_directory_is_never_exported(self):
+        self.write_config(codex={"enabled": True})
+        self.assertIsNone(swlib.codex_home("codex"))
+        self.write_config(codex={"enabled": True, "config_dir": "~/.codex"})
+        self.assertIsNone(swlib.codex_home("codex"))
+        self.write_config(codex={"enabled": True, "config_dir": ""})
+        self.assertIsNone(swlib.codex_home("codex"))
+
+    def test_a_directory_of_its_own_is_returned_expanded(self):
+        self.write_config(codex2={"enabled": True, "config_dir": "~/.codex-personal"})
+        self.assertEqual(swlib.codex_home("codex2"),
+                         os.path.join(swlib.HOME, ".codex-personal"))
+
+    def test_full_access_is_off_unless_the_config_says_true(self):
+        self.write_config(codex={"enabled": True},
+                          codex2={"enabled": True, "full_access": "yes"})
+        self.assertFalse(swlib.full_access("codex"))
+        self.assertFalse(swlib.full_access("codex2"))
+        self.write_config(codex2={"enabled": True, "full_access": True})
+        self.assertTrue(swlib.full_access("codex2"))
+
+    def test_the_second_codex_is_a_worker_a_route_and_a_destination(self):
+        cfg = self.write_config(codex2={"enabled": True, "label": "Personal Codex"})
+        self.assertIn("codex2", swlib.enabled_roles())
+        self.assertEqual(swlib.parse_route("second-wind/codex2", cfg)["worker"], "codex2")
+        self.assertEqual(swlib.parse_route("codex-personal", cfg)["worker"], "codex2")
+        self.assertEqual(swlib.parse_route("second-wind/codex2/gpt-5.6/high", cfg),
+                         {"worker": "codex2", "model": "gpt-5.6", "effort": "high",
+                          "label": "Personal Codex"})
+        self.assertEqual(swlib.route_id("codex2"), "second-wind/codex2")
+        self.write_usage("codex2", age_seconds=60, seven_day_pct=40, five_hour_pct=None)
+        self.assertEqual([row["worker"] for row in swlib.destinations(now=NOW)],
+                         ["codex2"])
+        self.assertEqual(swlib.model_menu("codex2"), swlib.model_menu("codex"))
+
+    def test_a_third_codex_role_is_wired_the_same_way(self):
+        cfg = self.write_config(codex3={"enabled": True})
+        self.assertIn("codex3", swlib.enabled_roles())
+        self.assertEqual(swlib.parse_route("second-wind/codex3/gpt-5.6/low", cfg)["worker"],
+                         "codex3")
+        self.assertEqual(swlib.route_label("codex3", cfg), "the third Codex account")
+        self.assertEqual(swlib.model_menu("codex3"), swlib.model_menu("codex"))
+        self.assertEqual(swlib.headroom("codex3", {"seven_day_pct": 25}), 75)
+        self.assertIn("codex3", swlib.CODEX_ROLES)
+
+    def test_headroom_treats_both_codex_roles_alike(self):
+        self.assertEqual(swlib.headroom("codex2", {"seven_day_pct": 13}), 87)
+        self.assertEqual(swlib.headroom("codex2", {"five_hour_pct": 30,
+                                                   "seven_day_pct": 13}), 70)
+
+    def test_a_free_workspace_has_only_a_monthly_window_and_it_counts(self):
+        usage = {"five_hour_pct": None, "seven_day_pct": None,
+                 "extra": {"monthly_pct": 8}}
+        self.assertEqual(swlib.headroom("codex", usage), 92)
+        self.assertEqual(swlib.headroom("codex2", usage), 92)
+        # Claude never reports a monthly window, so for it this is no reading.
+        self.assertIsNone(swlib.headroom("primary", usage))
+        self.write_config(codex={"enabled": True, "label": "Codex"})
+        self.write_usage("codex", age_seconds=60, **usage)
+        self.assertEqual(swlib.brief_lines(now=NOW)[1], "Codex: monthly 8% (60s ago)")
+        row = next(line for line in swlib.brief_card(now=NOW) if line.startswith("Codex"))
+        self.assertIn("monthly limit 8% used", row)
+        self.assertNotIn(swlib.BAR_ABSENT, row)
+
+
+class IdentityDrift(Base):
+    """A reader saw a different sign-in from the one the config pinned."""
+
+    def test_unknown_on_either_side_is_never_a_drift(self):
+        self.write_config(codex={"enabled": True, "account": "unknown", "plan": "unknown"})
+        self.write_usage("codex", account="user@example.com", plan="Business")
+        self.assertIsNone(swlib.identity_drift("codex", now=NOW))
+        self.write_config(codex={"enabled": True, "account": "user@example.com",
+                                 "plan": "Business"})
+        self.write_usage("codex", account=None, plan="")
+        self.assertIsNone(swlib.identity_drift("codex", now=NOW))
+
+    def test_a_workspace_switch_keeps_the_email_and_is_still_caught(self):
+        # The case that happened: same login, Business seat one minute and the
+        # Free personal space the next.
+        self.write_config(codex={"enabled": True, "account": "user@example.com",
+                                 "plan": "Business Premium"})
+        self.write_usage("codex", account="user@example.com", plan="Free")
+        self.assertEqual(swlib.identity_drift("codex", now=NOW),
+                         "signed in as Free, not the configured Business Premium")
+
+    def test_a_dead_reading_is_not_compared(self):
+        # An hours-old file written before a re-login would otherwise report a
+        # drift on a healthy sign-in, and --check would disagree with the panel.
+        self.write_config(codex={"enabled": True, "account": "user@example.com",
+                                 "plan": "Business Premium"})
+        self.write_usage("codex", age_seconds=7200, account="user@example.com", plan="Free")
+        self.assertIsNone(swlib.identity_drift("codex", now=NOW))
+
+    def test_a_changed_account_is_caught_for_any_role(self):
+        self.write_config(secondary={"enabled": True, "config_dir": "~/.claude-secondary",
+                                     "account": "one@example.com", "plan": "max"})
+        self.write_usage("secondary", account="two@example.com", plan="Claude Max")
+        self.assertEqual(swlib.identity_drift("secondary", now=NOW),
+                         "signed in as two@example.com, not the configured one@example.com")
+
+    def test_plan_wording_is_only_compared_for_codex(self):
+        # Setup writes "max" and the reader writes "Claude Max": not a drift.
+        self.write_config(secondary={"enabled": True, "config_dir": "~/.claude-secondary",
+                                     "account": "user@example.com", "plan": "max"})
+        self.write_usage("secondary", account="user@example.com", plan="Claude Max")
+        self.assertIsNone(swlib.identity_drift("secondary", now=NOW))
+
+
+class CodexPinning(Base):
+    """Setup pins the account and plan it will later compare a reading against,
+    newest source first, so a rerun after a deliberate change clears the drift."""
+
+    def block(self, previous, probed, **usage):
+        if usage:
+            self.write_usage("codex", **usage)
+        return sw_setup.codex_block(previous, "codex", True, "~/.codex", True,
+                                    {"account": probed}, False, now=NOW)
+
+    def test_the_live_probe_beats_the_previous_config(self):
+        previous = {"codex": {"account": "a@example.com", "plan": "Business"}}
+        block = self.block(previous, "b@example.com")
+        self.assertEqual(block["account"], "b@example.com")
+
+    def test_a_fresh_reading_beats_the_previous_config(self):
+        previous = {"codex": {"account": "a@example.com", "plan": "Business"}}
+        block = self.block(previous, "unknown", age_seconds=60,
+                           account="b@example.com", plan="Free")
+        self.assertEqual((block["account"], block["plan"]), ("b@example.com", "Free"))
+
+    def test_a_dead_reading_does_not_pin_anything(self):
+        previous = {"codex": {"account": "a@example.com", "plan": "Business"}}
+        block = self.block(previous, "unknown", age_seconds=7200,
+                           account="b@example.com", plan="Free")
+        self.assertEqual((block["account"], block["plan"]), ("a@example.com", "Business"))
+
+    def test_the_rerun_clears_the_drift(self):
+        # The whole point: a drift, then the rerun of --write every message
+        # tells the user to do, then no drift.
+        self.write_config(codex={"enabled": True, "account": "a@example.com",
+                                 "plan": "Business"})
+        self.write_usage("codex", age_seconds=60, account="a@example.com", plan="Free")
+        self.assertIsNotNone(swlib.identity_drift("codex", now=NOW))
+        block = self.block(swlib.load_config(), "unknown")
+        cfg = swlib.load_config()
+        cfg["codex"].update(block)
+        swlib.write_json_atomic(swlib.config_path(), cfg)
+        self.assertIsNone(swlib.identity_drift("codex", now=NOW))
+
+    def test_label_survives_and_full_access_is_only_ever_a_boolean(self):
+        block = self.block({"codex": {"label": "Work Codex"}}, "unknown")
+        self.assertEqual(block["label"], "Work Codex")
+        self.assertIs(block["full_access"], False)
+        self.assertEqual(block["account"], "unknown")
+
+    def test_the_card_row_carries_the_drift(self):
+        self.write_config(codex={"enabled": True, "label": "Codex",
+                                 "account": "user@example.com", "plan": "Business Premium"})
+        self.write_usage("codex", age_seconds=60, seven_day_pct=98, five_hour_pct=None,
+                         account="user@example.com", plan="Free")
+        row = next(line for line in swlib.brief_card(now=NOW) if line.startswith("Codex"))
+        self.assertIn("98%", row)
+        self.assertTrue(row.endswith("signed in as Free, not the configured Business Premium"),
+                        row)
+
+
 class PrimarySession(Base):
     def test_a_symlinked_profile_is_still_the_primary(self):
         real = os.path.join(self.home, "profile")

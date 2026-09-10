@@ -13,9 +13,11 @@ import swlib
 
 HOME = os.path.expanduser("~")
 
-def run(cmd, env=None, timeout=25, want_stderr=False):
+def run(cmd, env=None, timeout=25, want_stderr=False, drop=()):
     try:
         e = dict(os.environ); e.update(env or {})
+        for key in drop:
+            e.pop(key, None)
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=e)
         out = p.stdout.strip()
         if want_stderr and not out:
@@ -89,12 +91,22 @@ def claude_profiles(claude_bin):
         })
     return out
 
-def codex_info():
+def codex_info(home=None):
+    """One Codex sign-in. `home` is a CODEX_HOME of its own; None means the
+    default ~/.codex, which the client finds without being told."""
     b = shutil.which("codex")
     if not b:
         return {"installed": False}
+    env = {"CODEX_HOME": home} if home else None
+    # The default home is probed with the variable unset, whatever the shell
+    # had, or an inherited CODEX_HOME would report another sign-in as this one.
+    drop = () if home else ("CODEX_HOME",)
+    if home and not os.path.isdir(home):
+        return {"installed": True, "bin": b, "status": "%s does not exist" % home,
+                "logged_in": False, "account": "unknown", "config_dir": home}
     # codex writes its login status to stderr, not stdout
-    status = run([b, "login", "status"], want_stderr=True).splitlines()
+    status = run([b, "login", "status"], env=env, want_stderr=True,
+                 drop=drop).splitlines()
     # Whatever the status text volunteers, and nothing more. Reading
     # ~/.codex/auth.json to decode the id_token would be opening a credential
     # store to learn a label, which is a line this repository does not cross.
@@ -112,6 +124,7 @@ def codex_info():
         "status": status[0] if status else "",
         "logged_in": bool(status and "logged in" in status[0].lower()),
         "account": acct or "unknown",
+        "config_dir": home or os.path.join(HOME, ".codex"),
     }
 
 def grok_info():

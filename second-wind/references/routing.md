@@ -84,7 +84,7 @@ Both shapes hold the same fields:
 
 | Field | Meaning |
 |---|---|
-| `worker` | `secondary`, `codex`, `grok` or `cursor`. |
+| `worker` | `secondary`, `codex`, `codex2`, `codex3`, `grok` or `cursor`. |
 | `model` | Passed to the runner as `--model`. Null means pass none. |
 | `effort` | Passed as `--effort`. Null means pass none. |
 | `mode` | `review` or `work`, passed as that flag. Absent means the configured default. |

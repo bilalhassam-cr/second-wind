@@ -524,5 +524,60 @@ class PickerTests(unittest.TestCase):
             self.assertEqual(handle.read(), "{not json")
 
 
+
+
+class CodexFreeWorkspacePanel(unittest.TestCase):
+    """A Free workspace prints one monthly line and no 5h or weekly line."""
+
+    PANEL = (
+        "│  Account:              user@example.com (Free)                                 │\n"
+        "│  Monthly limit:        [██████████████████░░] 92% left (resets 15:50 on 10 Oct) │\n"
+        "│  Monthly credit limit: [██████████░░░░░░░░░░] 50% left (resets 1 Nov)          │\n"
+    )
+
+    def test_the_panel_is_recognised_at_all(self):
+        self.assertIsNotNone(re.search(codex.PANEL, self.PANEL, re.I))
+
+    def test_the_monthly_window_is_read_and_kept_apart_from_credits(self):
+        data = codex.parse_panel(self.PANEL)
+        self.assertEqual(data["plan"], "Free")
+        self.assertIsNone(data["five_hour_pct"])
+        self.assertIsNone(data["seven_day_pct"])
+        self.assertEqual(data["extra"]["monthly_pct"], 8)
+        self.assertEqual(data["extra"]["monthly_resets"], "15:50 on 10 Oct")
+        self.assertEqual(data["extra"]["monthly_credit_pct"], 50)
+
+    def test_a_business_panel_has_no_monthly_window(self):
+        data = codex.parse_panel(fixture(CODEX_FIXTURE))
+        self.assertNotIn("monthly_pct", data["extra"])
+
+class CodexReaderEnvironment(unittest.TestCase):
+    """Which sign-in the reader drives is decided by the environment it builds."""
+
+    def setUp(self):
+        self.previous = os.environ.get("CODEX_HOME")
+        os.environ["CODEX_HOME"] = "/inherited/from/the/shell"
+
+    def tearDown(self):
+        if self.previous is None:
+            os.environ.pop("CODEX_HOME", None)
+        else:
+            os.environ["CODEX_HOME"] = self.previous
+
+    def test_the_default_home_drops_an_inherited_variable_everywhere(self):
+        env, env_set, env_drop = codex.role_env(None)
+        self.assertNotIn("CODEX_HOME", env)
+        self.assertEqual(env_set, {})
+        self.assertIn("CODEX_HOME", env_drop)
+        self.assertIn("OPENAI_API_KEY", env_drop)
+
+    def test_a_home_of_its_own_is_set_for_both_the_check_and_the_panel(self):
+        env, env_set, env_drop = codex.role_env("/tmp/codex-personal")
+        self.assertEqual(env["CODEX_HOME"], "/tmp/codex-personal")
+        self.assertEqual(env_set, {"CODEX_HOME": "/tmp/codex-personal"})
+        self.assertNotIn("CODEX_HOME", env_drop)
+        self.assertNotIn("OPENAI_API_KEY", env)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,12 +10,15 @@ backwards silently sends their main work to the wrong subscription.
   setup.py --write --primary ~/.claude --secondary ~/.claude-secondary
       --level reviewer|worker|relief [--reader ~/.claude-usage]
       [--primary-label TEXT] [--secondary-label TEXT]
-      [--codex on|off] [--grok on|off] [--cursor on|off]
+      [--codex on|off] [--codex-dir DIR] [--codex2 on|off] [--codex2-dir DIR]
+      [--codex3 on|off] [--codex3-dir DIR]
+      [--codex-full-access on|off] [--grok on|off] [--cursor on|off]
       [--five-hour N] [--seven-day N] [--refresh-minutes N]
       [--model-picker on|off] [--picker-routes id,id]
       [--picker-models worker=model/effort,...] [--no-launchd]
       [--timeout N] [--force]
   setup.py --accounts [--live]
+  setup.py --card
   setup.py --check
   setup.py --show
   setup.py --uninstall
@@ -32,6 +35,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import swlib
+import discover as sw_discover
 from swlib import expand, tilde
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -311,13 +315,19 @@ def trust_claude(config_dir, folder):
     return "trusted"
 
 
-def trust_codex(folder):
+def codex_config_path(home=None):
+    return os.path.join(home or os.path.join(HOME, ".codex"), "config.toml")
+
+
+def trust_codex(folder, home=None):
     """Append a trust entry to the Codex config, if it is not there already.
 
     Codex 0.152 shows a trust modal on launch in an unknown directory, which
-    stops the reader before it can ask for /status.
+    stops the reader before it can ask for /status. `home` is the CODEX_HOME of
+    a role with its own directory; each home has its own config and so its own
+    trust list.
     """
-    path = os.path.join(HOME, ".codex", "config.toml")
+    path = codex_config_path(home)
     text = ""
     if os.path.exists(path):
         try:
@@ -359,8 +369,8 @@ def claude_trusted(config_dir, folder):
     return isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True
 
 
-def codex_trusted(folder):
-    path = os.path.join(HOME, ".codex", "config.toml")
+def codex_trusted(folder, home=None):
+    path = codex_config_path(home)
     try:
         with open(path) as handle:
             return ('[projects."%s"]' % folder) in handle.read()
@@ -535,7 +545,40 @@ def cmd_show():
 
 # ---------------------------------------------------------------- write
 
-PICKER_WORKERS = ("secondary", "codex", "grok", "cursor")
+PICKER_WORKERS = swlib.WORKER_ROLES
+
+
+def codex_block(previous, role, on, home, default, info, full_access, now=None):
+    """A Codex role's config block.
+
+    The label survives a rerun. The account and the plan are pinned from the
+    most current source: the live probe, then a reading young enough for the
+    brief to show, then whatever the previous config held. Newest first is the
+    point. Pinned the other way round, the value already in the config always
+    won, and the drift check could never be cleared by the rerun of --write
+    that every message told the user to do.
+    """
+    prev = previous.get(role) if isinstance(previous.get(role), dict) else {}
+    last = swlib.load_usage(role) \
+        if swlib.freshness(role, now=now) in ("fresh", "stale") else {}
+
+    def pin(field, probed=None):
+        for candidate in (probed, last.get(field), prev.get(field)):
+            text = str(candidate or "").strip()
+            if text and text.lower() != "unknown":
+                return text
+        return "unknown"
+
+    return {
+        "kind": "codex",
+        "label": prev.get("label") or {"codex": "Codex", "codex2": "Codex 2"}.get(role, "Codex 3"),
+        "enabled": on,
+        "config_dir": tilde(home) if home else "",
+        "is_default_dir": default,
+        "account": pin("account", (info or {}).get("account")) if on else "",
+        "plan": pin("plan") if on else "",
+        "full_access": full_access is True,
+    }
 
 
 def picker_models_text(models):
@@ -569,8 +612,8 @@ def picker_models_block(text):
         worker, row = [half.strip() for half in entry.split("=", 1)]
         worker = swlib.ROUTE_WORKERS.get(worker.lower())
         if worker not in PICKER_WORKERS:
-            return None, ("--picker-models names personal, codex, grok or "
-                          "cursor. %s is not one." % entry)
+            return None, ("--picker-models names personal, codex, codex2, grok "
+                          "or cursor. %s is not one." % entry)
         if not swlib.parse_model_entry(row):
             return None, ("--picker-models takes model/effort or default. %s is "
                           "not one." % row)
@@ -645,6 +688,17 @@ def cmd_write(a):
     carry("picker_models",
           picker_models_text((previous.get("picker") or {}).get("models")),
           "", "picker models")
+    prev_codex = previous.get("codex") if isinstance(previous.get("codex"), dict) else {}
+    prev_codex2 = previous.get("codex2") if isinstance(previous.get("codex2"), dict) else {}
+    carry("codex_dir", prev_codex.get("config_dir") or None, "~/.codex",
+          "codex directory")
+    carry("codex2_dir", prev_codex2.get("config_dir") or None, "", "codex2 directory")
+    prev_codex3 = previous.get("codex3") if isinstance(previous.get("codex3"), dict) else {}
+    carry("codex3_dir", prev_codex3.get("config_dir") or None, "", "codex3 directory")
+    prev_full = prev_codex.get("full_access")
+    carry("codex_full_access",
+          ("on" if prev_full else "off") if isinstance(prev_full, bool) else None,
+          "off", "codex full access")
 
     for name, value in (("--five-hour", a.five_hour), ("--seven-day", a.seven_day)):
         if not isinstance(value, int) or not 1 <= value <= 100:
@@ -709,18 +763,54 @@ def cmd_write(a):
             sys.exit("second-wind: --%s on was requested, but its command is not "
                      "on PATH." % name)
         if state == "on" and not logged:
-            sys.exit("second-wind: --%s on was requested, but it is not signed in."
-                     % name)
+            if not a.force:
+                sys.exit("second-wind: --%s on was requested, but it is not signed "
+                         "in. Sign it in first, or pass --force." % name)
+            print("  ! %s is not signed in (forced)." % name, file=sys.stderr)
+            return True
         if state == "off":
             return False
         return installed and logged
 
+    # Each Codex role is probed under its own CODEX_HOME. The default home is
+    # probed with the variable unset, the way the client itself runs.
+    codex_home = expand(a.codex_dir)
+    codex_default = (os.path.realpath(codex_home)
+                     == os.path.realpath(os.path.join(HOME, ".codex")))
+    found["codex"] = sw_discover.codex_info(None if codex_default else codex_home)
+    extra_homes = {}
+    for role in ("codex2", "codex3"):
+        state = getattr(a, role)
+        home = getattr(a, role + "_dir")
+        home = expand(home) if home else ""
+        if state == "on" and not home:
+            sys.exit("second-wind: --%s needs --%s-dir, a CODEX_HOME of its own such "
+                     "as ~/.codex-personal. Two Codex roles in one directory would "
+                     "be one sign-in twice." % (role, role))
+        if state == "auto" and not home:
+            # auto means "if it is there", and with no directory there is nothing
+            # to be there, the same as the other workers when their command is absent.
+            setattr(a, role, "off")
+            state = "off"
+        extra_homes[role] = home
+        if state != "off":
+            others = [codex_home] + [other for name, other in extra_homes.items()
+                                     if name != role and other]
+            if any(os.path.realpath(home) == os.path.realpath(other) for other in others):
+                sys.exit("second-wind: --%s-dir resolves to the same directory as "
+                         "another Codex role." % role)
+            found[role] = sw_discover.codex_info(home)
+    codex2_home, codex3_home = extra_homes["codex2"], extra_homes["codex3"]
     codex_on = selected("codex", a.codex)
+    codex2_on = selected("codex2", a.codex2)
+    codex3_on = selected("codex3", a.codex3)
     grok_on = selected("grok", a.grok)
     cursor_on = selected("cursor", a.cursor)
-    if not any((a.secondary, codex_on, grok_on, cursor_on)):
+    if not any((a.secondary, codex_on, codex2_on, codex3_on, grok_on, cursor_on)):
         sys.exit("second-wind: nothing to delegate to. Connect at least one "
                  "worker first.")
+
+    full = a.codex_full_access == "on"
     cursor_reads = bool(cursor_on and (found.get("cursor") or {}).get("can_read_usage"))
 
     level = LEVELS[a.level]
@@ -765,17 +855,18 @@ def cmd_write(a):
             "account": rdr.get("account", "unknown") if a.reader else "",
             "read_for": "primary",
         },
-        "codex": {
-            "kind": "codex", "label": "codex", "enabled": codex_on,
-            "account": (found.get("codex") or {}).get("account", "unknown"),
-            "plan": "unknown",
-        },
+        "codex": codex_block(previous, "codex", codex_on, codex_home, codex_default,
+                             found.get("codex"), full),
+        "codex2": codex_block(previous, "codex2", codex2_on, codex2_home, False,
+                              found.get("codex2"), full),
+        "codex3": codex_block(previous, "codex3", codex3_on, codex3_home, False,
+                              found.get("codex3"), full),
         "grok": {
-            "kind": "grok", "label": "grok", "enabled": grok_on,
+            "kind": "grok", "label": "Grok", "enabled": grok_on,
             "account": "unknown", "plan": "SuperGrok or X Premium+",
         },
         "cursor": {
-            "kind": "cursor", "label": "cursor", "enabled": cursor_on,
+            "kind": "cursor", "label": "Cursor", "enabled": cursor_on,
             "account": (found.get("cursor") or {}).get("account", "unknown"),
             "plan": "Cursor Pro",
             "auth": (found.get("cursor") or {}).get("auth", "none"),
@@ -823,7 +914,14 @@ def cmd_write(a):
     if a.reader:
         print("  reader    %s   (%s)" % (cfg["reader"]["account"],
                                          cfg["reader"]["config_dir"]))
-    print("  codex     %s" % ("on, " + cfg["codex"]["account"] if codex_on else "off"))
+    for role in swlib.CODEX_ROLES:
+        block = cfg[role]
+        if block["enabled"]:
+            print("  %-9s on, %s   (%s%s)" % (
+                role, block["account"], block["config_dir"],
+                ", full access in work mode" if block["full_access"] else ""))
+        else:
+            print("  %-9s off" % role)
     print("  grok      %s" % ("on" if grok_on else "off"))
     if cursor_on:
         print("  cursor    on, %s (%s sign-in, usage reading %s)"
@@ -842,7 +940,18 @@ def cmd_write(a):
         print("  claude %s: %s" % (cfg["reader"]["config_dir"],
                                    trust_claude(a.reader, folder)))
     if codex_on:
-        print("  codex: %s" % trust_codex(folder))
+        print("  codex %s: %s" % (cfg["codex"]["config_dir"],
+                                 trust_codex(folder, None if codex_default else codex_home)))
+    for role, on, home in (("codex2", codex2_on, codex2_home),
+                           ("codex3", codex3_on, codex3_home)):
+        if not on:
+            continue
+        # This also creates the directory when it is new, so the one thing left
+        # for the person is the sign-in.
+        print("  %s %s: %s" % (role, cfg[role]["config_dir"], trust_codex(folder, home)))
+        if not (found.get(role) or {}).get("logged_in"):
+            print("  ! %s is not signed in yet. Run:  CODEX_HOME=%s codex login"
+                  % (role, cfg[role]["config_dir"]))
 
     print("\nProfile settings:")
     # model_picker is passed on every write, not only when it is on: --model-picker
@@ -988,6 +1097,24 @@ def account_row(role, cfg):
     }
 
 
+def cmd_card():
+    """The usage panel on its own, for a session that needs to show it again.
+
+    Nothing is spawned. A caller wanting fresh figures asks for the refresh
+    first; this only ever prints what has already been read, so that showing
+    the panel can never be the thing that holds up a prompt.
+    """
+    if not swlib.is_configured():
+        print("NOT SET UP. Run: setup.py --detect")
+        return
+    lines = swlib.brief_card()
+    if not lines:
+        print("No accounts are enabled.")
+        return
+    for line in lines:
+        print(line)
+
+
 def cmd_accounts(a):
     if not swlib.is_configured():
         print("NOT SET UP. Run: setup.py --detect")
@@ -1080,21 +1207,35 @@ def cmd_check():
                                     profile.get("config_dir", "")))
         else:
             row(role, "off")
-    for role in ("codex", "grok", "cursor"):
+    for role in swlib.CODEX_ROLES + ("grok", "cursor"):
         profile = cfg.get(role) or {}
         if not profile.get("enabled"):
             row(role, "off")
             continue
         note = profile.get("account", "unknown")
+        if role in swlib.CODEX_ROLES:
+            note += "  (%s%s)" % (profile.get("config_dir") or "~/.codex",
+                                 ", full access" if profile.get("full_access") else "")
         if role == "cursor" and not swlib.reading_enabled(role, cfg):
             note += "  (delegation only: this sign-in cannot read usage)"
         row(role, note)
+    # The sign-in a reader last saw against the one the config expects. This is
+    # the check that catches a workspace switch in the desktop app: same email,
+    # different plan, and a role quietly spending a different allowance.
+    for role in swlib.enabled_roles(cfg):
+        drift = swlib.identity_drift(role, cfg)
+        if drift:
+            row(role + " sign-in", "CHANGED: " + drift)
+            warnings.append("%s is %s. Sign that client back in, or, if the change "
+                            "was meant, refresh the reading and rerun --write so "
+                            "the new sign-in is pinned." % (role, drift))
 
     row("jq", "installed" if swlib.has_jq() else "MISSING")
     if not swlib.has_jq():
         faults.append("jq is not on PATH, so the status line and the refresh "
                       "script are inert.")
-    for role, command in (("codex", "codex"), ("grok", "grok"),
+    for role, command in (("codex", "codex"), ("codex2", "codex"), ("codex3", "codex"),
+                          ("grok", "grok"),
                           ("cursor", "cursor-agent")):
         if (cfg.get(role) or {}).get("enabled"):
             found = shutil.which(command) is not None
@@ -1124,15 +1265,24 @@ def cmd_check():
                 warnings.append("the %s profile does not trust the workdir, so "
                                 "its reader will meet a trust prompt instead of "
                                 "a usage panel." % role)
-        if (cfg.get("codex") or {}).get("enabled"):
-            if codex_trusted(folder):
-                row("codex trust", "trusted")
+        for role in swlib.CODEX_ROLES:
+            if not (cfg.get(role) or {}).get("enabled"):
+                continue
+            home = swlib.codex_home(role, cfg)
+            if home and not os.path.isdir(home):
+                row(role + " home", "MISSING: %s" % tilde(home))
+                faults.append("%s's directory %s does not exist. Create it and "
+                              "sign in with CODEX_HOME=%s codex login."
+                              % (role, tilde(home), tilde(home)))
+                continue
+            if codex_trusted(folder, home):
+                row(role + " trust", "trusted")
             else:
-                row("codex trust", "NOT TRUSTED: restart codex then rerun "
-                                   "--write, or open codex once in the workdir")
-                warnings.append("Codex does not trust the workdir, so its reader "
+                row(role + " trust", "NOT TRUSTED: restart codex then rerun "
+                                     "--write, or open codex once in the workdir")
+                warnings.append("%s does not trust the workdir, so its reader "
                                 "will meet a trust modal instead of the status "
-                                "panel.")
+                                "panel." % role)
 
     print()
     for role in ("primary", "secondary"):
@@ -1366,7 +1516,13 @@ def cmd_uninstall():
           "would edit files a running client may be writing:")
     print("  each Claude profile's .claude.json, under \"projects\": delete the "
           "\"%s\" entry" % tilde(folder))
-    print("  ~/.codex/config.toml: delete the [projects.\"%s\"] block" % folder)
+    # Every Codex directory the config ever named, enabled or not: a role turned
+    # off later still has the trust block setup wrote for it.
+    for path in sorted({codex_config_path(swlib.codex_home(role, cfg))
+                        for role in swlib.CODEX_ROLES
+                        if (cfg.get(role) or {}).get("config_dir")
+                        or (cfg.get(role) or {}).get("enabled")}):
+        print("  %s: delete the [projects.\"%s\"] block" % (tilde(path), folder))
     print("Config and logs are still at %s; delete that folder to finish."
           % tilde(sw_home()))
 
@@ -1385,6 +1541,8 @@ def build_parser():
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--accounts", action="store_true",
                     help="show every account sorted by current usage headroom")
+    ap.add_argument("--card", action="store_true",
+                    help="print the usage panel, to be reproduced verbatim")
     ap.add_argument("--live", action="store_true",
                     help="with --accounts, run the readers first")
     ap.add_argument("--check", action="store_true",
@@ -1412,6 +1570,22 @@ def build_parser():
                    "is installed and signed in (default off)")
     ap.add_argument("--codex", choices=["auto", "on", "off"], default="off",
                     help=worker_help)
+    ap.add_argument("--codex2", choices=["auto", "on", "off"], default="off",
+                    help="a second Codex sign-in, in its own CODEX_HOME; " + worker_help)
+    # Both default to None so a rerun carries the previous directory forward.
+    ap.add_argument("--codex-dir", default=None,
+                    help="CODEX_HOME for the first Codex role (default ~/.codex, "
+                         "the directory the desktop app also writes)")
+    ap.add_argument("--codex2-dir", default=None,
+                    help="CODEX_HOME for the second Codex role, required with "
+                         "--codex2 on, for example ~/.codex-personal")
+    ap.add_argument("--codex3", choices=["auto", "on", "off"], default="off",
+                    help="a third Codex sign-in, in its own CODEX_HOME; " + worker_help)
+    ap.add_argument("--codex3-dir", default=None,
+                    help="CODEX_HOME for the third Codex role, required with --codex3 on")
+    ap.add_argument("--codex-full-access", choices=["on", "off"], default=None,
+                    help="let every Codex role run unsandboxed in work mode "
+                         "(default off; carried forward on a rerun)")
     ap.add_argument("--grok", choices=["auto", "on", "off"], default="off",
                     help=worker_help)
     ap.add_argument("--cursor", choices=["auto", "on", "off"], default="off",
@@ -1445,6 +1619,8 @@ def main():
         return cmd_detect()
     if a.accounts:
         return cmd_accounts(a)
+    if a.card:
+        return cmd_card()
     if a.check:
         return cmd_check()
     if a.show:

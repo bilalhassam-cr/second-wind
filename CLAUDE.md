@@ -59,7 +59,14 @@ Do not "simplify" these away; each cost real debugging time.
 - Never set `XAI_API_KEY` for Grok Build; it bills the separate developer API.
 - Cursor's `--trust` is not read-only, and its installer takes the `agent` name.
 - macOS has no `timeout(1)`; the runner has its own watchdog.
-- A Codex worker is always sandboxed and cannot launch a browser, because the
-  runner passes a sandbox flag on the command line in both modes and that
-  overrides `sandbox_mode`. The guard is a constant, not a measurement, and
-  nothing launches a browser to find out.
+- A Codex worker is sandboxed and cannot launch a browser, because the runner
+  passes a sandbox flag on the command line in both modes and that overrides
+  `sandbox_mode`. The guard is decided from the flags, not measured, and nothing
+  launches a browser to find out. The one exception is a role with
+  `full_access: true` in work mode, which runs with no sandbox and no guard.
+- macOS `/bin/sh` cannot parse a bare `)` in a `case` pattern inside `$( )`. The
+  script still runs, and every line after the substitution in that block is
+  silently lost. Compute the value into a variable first.
+- The Codex desktop app owns `~/.codex` and rewrites `auth.json` on a workspace
+  switch, keeping the same email and changing the plan. Each Codex role has its
+  own `CODEX_HOME`; the drift check compares plan as well as account for Codex.

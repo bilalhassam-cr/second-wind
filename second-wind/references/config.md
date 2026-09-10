@@ -15,6 +15,10 @@ in the repository is a complete sample.
 | `secondary.enabled` | Set false to leave it out entirely. |
 | `reader.enabled` | Optional third Claude profile used only to read the primary's usage, so a background reader never shares a credential with the desktop app. When false, the primary reader runs with `CLAUDE_CONFIG_DIR` unset. |
 | `codex.enabled` | Whether Codex is available as a worker. |
+| `codex.config_dir` | The `CODEX_HOME` this role runs under. Default `~/.codex`, which is also the directory the Codex desktop app writes: switching workspace in the app rewrites its `auth.json`, and a role sharing that directory changes sign-in with it. Give the role a directory of its own to stop that. Only a non-default directory is ever exported. |
+| `codex.full_access` | When true, work mode runs Codex with `--dangerously-bypass-approvals-and-sandbox`: no sandbox, no approval prompts, and a browser can start, so the browser guard is not added to the prompt. Default false. Review mode is read-only regardless. Set with `--codex-full-access on`, which applies to every Codex role. |
+| `codex2.enabled`, `codex3.enabled` | A second and a third Codex sign-in, each in its own `CODEX_HOME`. Same fields as `codex`; the `config_dir` is required and must differ from every other Codex role's. `codex3` is set with `--codex3 on --codex3-dir`, routes as `second-wind/codex3`, and reads into `usage-codex3.json`. Set with `--codex2 on --codex2-dir ~/.codex-personal`, then `CODEX_HOME=~/.codex-personal codex login`. Its reader writes `usage-codex2.json`, its runner name is `codex2`, and its routing ids are `second-wind/codex2` and the alias `codex-personal`. |
+| `<role>.account`, `<role>.plan` | What the config expects the sign-in to be. A reader records what it actually saw, and the panel and `--check` say `signed in as X, not the configured Y` when the two differ on either field. The plan is compared as well as the account because a workspace switch keeps the email and changes the plan. `unknown` on either side is never a drift, and neither is a dead reading. Setup pins these from the newest source first: the live probe, then a reading young enough to show, then the previous config. So after a deliberate change, refresh the reading (`usage-refresh.sh --force --only codex`) and rerun `--write`. |
 | `grok.enabled` | Whether Grok Build is available as a worker. Setup checks the login by running `grok models`, which needs a session and sends no prompt. |
 | `cursor.enabled` | Whether Cursor Agent is available as a worker. |
 | `cursor.auth` | `interactive` or `api_key`. An API key authorises delegation only: the usage panel needs a session, so `refresh.cursor` stays false. The runner clears every vendor API key it knows about before starting any worker, whichever vendor the key belongs to, and reads this field for the one exception: `CURSOR_API_KEY` is kept for a Cursor worker on an `api_key` sign-in, or when the field is missing, and cleared on an `interactive` one so the browser session pays. The exchange records what was cleared and what was kept. |
@@ -119,7 +123,7 @@ write either by hand. Both hold the same fields.
 
 | Field | Meaning |
 |---|---|
-| `worker` | `secondary`, `codex`, `grok` or `cursor`. |
+| `worker` | `secondary`, `codex`, `codex2`, `codex3`, `grok` or `cursor`. |
 | `model` | Passed to the runner as `--model`. Null means pass none. |
 | `effort` | Passed as `--effort`. Null means pass none. |
 | `mode` | `review` or `work`, passed as that flag. Absent means `defaults.mode`. |
@@ -139,7 +143,8 @@ rest.
 ## Files it edits, and the backups it leaves
 
 Setup edits the `settings.json` of the primary and secondary profiles, the `.claude.json`
-of each Claude profile it pre-trusts, and `~/.codex/config.toml`. Before the first edit of
+of each Claude profile it pre-trusts, and the `config.toml` in each Codex role's
+`CODEX_HOME` (`~/.codex/config.toml` by default). Before the first edit of
 any of them it writes `<file>.second-wind-original`, which is never overwritten, and it
 writes a timestamped copy on every later write.
 

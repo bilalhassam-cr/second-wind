@@ -7,8 +7,12 @@ spends ten to forty seconds starting MCP servers, and a /status typed during
 that window is swallowed, so the reader waits for the composer to appear and
 the screen to go quiet before it types anything.
 
-  codex-status.py [--cwd DIR] [--out PATH] [--status PATH] [--budget 85]
-                  [--dump PATH]
+  codex-status.py [--role codex|codex2] [--cwd DIR] [--out PATH]
+                  [--status PATH] [--budget 85] [--dump PATH]
+
+The role decides which sign-in is read: a role with its own config_dir is
+driven under that CODEX_HOME, so two Codex accounts on one machine each get
+their own reading and neither one is mistaken for the other.
 """
 import argparse
 import os
@@ -30,7 +34,10 @@ TRUST = r"Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory"
 LOGIN = (r"Not\s+logged\s+in|Sign\s+in\s+with\s+ChatGPT|/login\s+to|"
          r"session\s+(?:has\s+)?expired")
 STARTING = r"Starting\s+MCP\s+servers"
-PANEL = r"Weekly\s+limit|5h\s+limit"
+# A Business or Plus panel prints a 5h and a weekly line. A Free workspace
+# prints one monthly line and nothing else, and a reader that did not know that
+# reported "no panel" at the exact moment a role had silently dropped to Free.
+PANEL = r"Weekly\s+limit|5h\s+limit|Monthly\s+limit"
 MENU = r"show\s+current\s+session\s+configuration"
 
 
@@ -61,10 +68,15 @@ def parse_panel(text):
     five = _limit(text, r"5h\s+limit")
     week = _limit(text, r"Weekly\s+limit")
     month = _limit(text, r"Monthly\s+credit\s+limit")
+    # "Monthly limit" and "Monthly credit limit" are different lines: the first
+    # is a Free workspace's only window, the second is purchased credits.
+    monthly = _limit(text, r"Monthly\s+limit")
     credits = re.search(r"Credits:\s+(.+?)\s*$", text, re.M)
     extra = {}
     if month:
         extra["monthly_credit_pct"], extra["monthly_credit_resets"] = month
+    if monthly:
+        extra["monthly_pct"], extra["monthly_resets"] = monthly
     if credits:
         extra["credits"] = credits.group(1).strip()
     return {
@@ -79,12 +91,32 @@ def parse_panel(text):
     }
 
 
-def login_state():
+def role_env(home):
+    """(env for subprocesses, env_set and env_drop for the PTY) for one role.
+
+    A role with its own home gets CODEX_HOME set to it. The role on the default
+    home gets the variable removed, whatever the shell had, or an inherited
+    CODEX_HOME would point both the login check and the panel at another role's
+    sign-in and file that reading under this role's name.
+    """
+    env = dict(os.environ)
+    env.pop("OPENAI_API_KEY", None)
+    env_set, env_drop = {}, ["OPENAI_API_KEY"]
+    if home:
+        env["CODEX_HOME"] = home
+        env_set["CODEX_HOME"] = home
+    else:
+        env.pop("CODEX_HOME", None)
+        env_drop.append("CODEX_HOME")
+    return env, env_set, env_drop
+
+
+def login_state(env=None):
     """True, False, or None when the CLI will not say. Codex writes this to
     stderr, so both streams are read."""
     try:
         done = subprocess.run(["codex", "login", "status"], capture_output=True,
-                              text=True, timeout=15)
+                              text=True, timeout=15, env=env)
     except Exception:
         return None
     text = ((done.stdout or "") + " " + (done.stderr or "")).lower()
@@ -95,13 +127,16 @@ def login_state():
     return None
 
 
-def read_screen(cwd, budget):
+def read_screen(cwd, budget, env_set=None, env_drop=("OPENAI_API_KEY",)):
     """Drive the client. Returns (outcome, screen text)."""
     # A key left in the environment makes the CLI bill it rather than the
     # ChatGPT subscription this reader exists to measure. Codex prefers
-    # OPENAI_API_KEY over the login whenever it is set, so it goes.
-    screen = ptyreader.Screen(["codex"], cwd=cwd,
-                              env_drop=("OPENAI_API_KEY",))
+    # OPENAI_API_KEY over the login whenever it is set, so it goes. The caller
+    # adds CODEX_HOME to the drop list for the role on the default directory,
+    # or a variable inherited from the shell would point the panel at another
+    # role's sign-in and the reading would be filed under the wrong name.
+    screen = ptyreader.Screen(["codex"], cwd=cwd, env_set=env_set,
+                              env_drop=tuple(env_drop))
     ends = time.time() + budget
 
     def left(cap):
@@ -196,6 +231,7 @@ def note(path, message):
 def main():
     os.umask(0o077)
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--role", default="codex", choices=swlib.CODEX_ROLES)
     ap.add_argument("--cwd", default="")
     ap.add_argument("--out", default="")
     ap.add_argument("--status", default="")
@@ -204,21 +240,31 @@ def main():
     a = ap.parse_args()
 
     cfg = swlib.load_config()
+    role = a.role
     refresh = cfg.get("refresh") or {}
     cwd = swlib.expand(a.cwd or refresh.get("workdir")
                        or refresh.get("working_dir") or "~")
-    out = a.out or swlib.usage_path(CLIENT)
-    status = a.status or swlib.status_path(CLIENT)
+    out = a.out or swlib.usage_path(role)
+    status = a.status or swlib.status_path(role)
+    # The same environment for the login check and the panel, so both look at
+    # the one sign-in this role owns.
+    home = swlib.codex_home(role, cfg)
+    env, env_set, env_drop = role_env(home)
     if not os.path.isdir(cwd):
         note(status, "FAILED: the readers' working directory %s does not exist. "
                      "Rerun setup.py --write." % swlib.tilde(cwd))
         return 1
-    if login_state() is False:
-        note(status, "LOGIN EXPIRED: run codex in a terminal and sign in again.")
+    if home and not os.path.isdir(home):
+        note(status, "FAILED: %s does not exist. Create it and sign in with "
+                     "CODEX_HOME=%s codex login." % (swlib.tilde(home), swlib.tilde(home)))
+        return 1
+    if login_state(env) is False:
+        note(status, "LOGIN EXPIRED: run codex in a terminal%s and sign in again."
+             % (" with CODEX_HOME=%s" % swlib.tilde(home) if home else ""))
         return 2
 
     try:
-        outcome, text = read_screen(cwd, a.budget)
+        outcome, text = read_screen(cwd, a.budget, env_set=env_set, env_drop=env_drop)
     except Exception as exc:
         # A PTY that cannot be allocated, or a client that cannot be executed,
         # must still leave a status behind. A traceback tells the refresh
@@ -244,15 +290,19 @@ def main():
         note(status, "FAILED: status panel did not appear. Last of the screen: %s"
              % tail(text))
         return 1
-    if data["five_hour_pct"] is None and data["seven_day_pct"] is None:
+    if (data["five_hour_pct"] is None and data["seven_day_pct"] is None
+            and data["extra"].get("monthly_pct") is None):
         note(status, "PARSER MISMATCH: client %s, expected labels not found"
              % (data["client_version"] or "unknown"))
         return 1
 
+    # Only what the panel said. Seeding a silent field from the config would
+    # make the later comparison of reading against config a comparison of the
+    # config with itself.
     record = {
-        "role": CLIENT, "worker": CLIENT,
-        "account": data["account"] or (cfg.get(CLIENT) or {}).get("account") or None,
-        "plan": data["plan"] or (cfg.get(CLIENT) or {}).get("plan") or None,
+        "role": role, "worker": CLIENT,
+        "account": data["account"] or None,
+        "plan": data["plan"] or None,
         "five_hour_pct": data["five_hour_pct"],
         "seven_day_pct": data["seven_day_pct"],
         "five_hour_resets": data["five_hour_resets"],

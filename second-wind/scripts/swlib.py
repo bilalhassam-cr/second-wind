@@ -29,8 +29,15 @@ import tempfile
 import time
 
 HOME = os.path.expanduser("~")
-ROLES = ("primary", "secondary", "codex", "grok", "cursor")
+ROLES = ("primary", "secondary", "codex", "codex2", "codex3", "grok", "cursor")
 CLAUDE_ROLES = ("primary", "secondary")
+# Up to three Codex roles, each its own CODEX_HOME and so its own ChatGPT sign-in. The
+# desktop app rewrites ~/.codex/auth.json whenever its user switches workspace,
+# so a role that shares that directory changes identity without anyone telling
+# second-wind; a role with its own directory does not.
+CODEX_ROLES = ("codex", "codex2", "codex3")
+# Every role that can take delegated work, in the order the picker lists them.
+WORKER_ROLES = ("secondary", "codex", "codex2", "codex3", "grok", "cursor")
 # A reading older than this is not shown as a figure at all. The guard ignores
 # it and the brief says so, because a wrong percentage is worse than no figure.
 DEAD_SECONDS = 3600
@@ -131,7 +138,7 @@ def enabled_roles(cfg=None):
     if not cfg:
         return []
     roles = ["primary"]
-    for role in ("secondary", "codex", "grok", "cursor"):
+    for role in WORKER_ROLES:
         if (cfg.get(role) or {}).get("enabled") is True:
             roles.append(role)
     return roles
@@ -153,6 +160,69 @@ def role_label(role, cfg=None):
     return label if isinstance(label, str) and label.strip() else role
 
 
+def codex_home(role, cfg=None):
+    """The CODEX_HOME a Codex role runs under, or None for the default.
+
+    None means ~/.codex, and the caller leaves the variable alone. Only a
+    directory of its own is ever exported, the same rule the Claude side keeps
+    for CLAUDE_CONFIG_DIR: the default is what the client finds unaided.
+    """
+    cfg = load_config() if cfg is None else cfg
+    configured = (cfg.get(role) or {}).get("config_dir")
+    if not isinstance(configured, str) or not configured.strip():
+        return None
+    path = expand(configured.strip())
+    if os.path.realpath(path) == os.path.realpath(os.path.join(HOME, ".codex")):
+        return None
+    return path
+
+
+def full_access(role, cfg=None):
+    """Whether this worker may run unsandboxed in work mode. Off unless the
+    config says so in as many words: the skill ships to strangers."""
+    cfg = load_config() if cfg is None else cfg
+    return (cfg.get(role) or {}).get("full_access") is True
+
+
+def _known(value):
+    text = str(value or "").strip()
+    return text if text and text.lower() != "unknown" else ""
+
+
+def identity_drift(role, cfg=None, now=None):
+    """A sentence when the sign-in a reader saw is not the one the config
+    expects, or None.
+
+    Only a reading the brief would show is compared. A dead one, hours old and
+    possibly written before a re-login, would report a drift on a healthy
+    sign-in, and the panel and --check would then disagree with each other.
+
+    The account is compared for every role. The plan is compared for the Codex
+    roles as well, because the case that bit was a workspace switch inside one
+    login: same email, Business seat one minute and Free the next, and a check
+    on the email alone waved it through. The other clients' plan labels come
+    from setup's own vocabulary rather than from a panel, so comparing them
+    would report a drift on every machine. Only fields both sides know are
+    compared, so an unknown is never a drift.
+    """
+    cfg = load_config() if cfg is None else cfg
+    if freshness(role, now=now, cfg=cfg) not in ("fresh", "stale"):
+        return None
+    wanted = cfg.get(role) or {}
+    seen = load_usage(role)
+    changes = []
+    fields = ("account", "plan") if role in CODEX_ROLES else ("account",)
+    for field in fields:
+        expected, observed = _known(wanted.get(field)), _known(seen.get(field))
+        if expected and observed and expected.lower() != observed.lower():
+            changes.append((field, observed, expected))
+    if not changes:
+        return None
+    return "signed in as %s, not the configured %s" % (
+        ", ".join(observed for _, observed, _ in changes),
+        ", ".join(expected for _, _, expected in changes))
+
+
 # ---------------------------------------------------------------- routing
 
 # The model picker is the only list of destinations Claude Code puts in front of
@@ -168,6 +238,9 @@ ROUTE_WORKERS = {
     "personal": "secondary",
     "secondary": "secondary",
     "codex": "codex",
+    "codex2": "codex2",
+    "codex-personal": "codex2",
+    "codex3": "codex3",
     "grok": "grok",
     "cursor": "cursor",
 }
@@ -179,12 +252,17 @@ ROUTE_ALIASES = {
     "personal": "secondary",
     "second-wind-personal": "secondary",
     "codex": "codex",
+    "codex2": "codex2",
+    "codex-personal": "codex2",
+    "codex3": "codex3",
     "grok": "grok",
     "cursor": "cursor",
 }
 ROUTE_LABELS = {
     "secondary": "the second Claude account",
     "codex": "Codex",
+    "codex2": "the second Codex account",
+    "codex3": "the third Codex account",
     "grok": "Grok Build",
     "cursor": "Cursor Agent",
 }
@@ -206,6 +284,8 @@ PICKER_MODELS = {
     "secondary": ("opus/high", "opus/medium", "sonnet/medium", "sonnet/low",
                   "haiku/low"),
     "codex": ("gpt-5.6/high", "gpt-5.6/medium", "gpt-5.6/low"),
+    "codex2": ("gpt-5.6/high", "gpt-5.6/medium", "gpt-5.6/low"),
+    "codex3": ("gpt-5.6/high", "gpt-5.6/medium", "gpt-5.6/low"),
     "grok": ("default/high", "default/medium"),
     "cursor": ("default",),
 }
@@ -327,7 +407,7 @@ def destinations(cfg=None, now=None):
     """
     cfg = load_config() if cfg is None else cfg
     rows = []
-    for worker in ("secondary", "codex", "grok", "cursor"):
+    for worker in WORKER_ROLES:
         if worker not in enabled_roles(cfg):
             continue
         usage = load_usage(worker)
@@ -1139,9 +1219,14 @@ def headroom(role, usage):
     """
     if not usage:
         return None
-    if role in CLAUDE_ROLES or role == "codex":
+    if role in CLAUDE_ROLES or role in CODEX_ROLES:
         windows = [w for w in (number(usage.get("five_hour_pct")),
                                number(usage.get("seven_day_pct"))) if w is not None]
+        # A Free Codex workspace has one monthly window and no other. It counts,
+        # because a role that has dropped to Free still has to sort somewhere.
+        if not windows and role in CODEX_ROLES:
+            monthly = pool(usage, "monthly_pct")
+            windows = [monthly] if monthly is not None else []
         if not windows:
             return None
         spent = max(windows)
@@ -1180,6 +1265,8 @@ def _windows_text(role, usage):
         parts.append("5h %d%%" % round(five))
     if week is not None:
         parts.append("7d %d%%" % round(week))
+    if not parts and role in CODEX_ROLES and pool(usage, "monthly_pct") is not None:
+        parts.append("monthly %d%%" % round(pool(usage, "monthly_pct")))
     return ", ".join(parts)
 
 
@@ -1211,6 +1298,118 @@ def brief_lines(cfg=None, now=None):
     cfg = load_config() if cfg is None else cfg
     return ["%s: %s" % (role_label(role, cfg), usage_summary(role, cfg=cfg, now=now))
             for role in enabled_roles(cfg)]
+
+
+# ------------------------------------------------------------------ the card
+
+# The card is drawn here, in Python, and not described to a model in prose. The
+# reason is uniformity: prose asking for "small bars" produced a different
+# picture every session, with the columns wandering and 98% drawn as full. A
+# reading is a number, so its picture should be a function of that number and
+# nothing else.
+BAR_CELLS = 12
+BAR_FULL = "█"                 # a filled cell
+BAR_EMPTY = "░"                # spent nothing here yet
+BAR_ABSENT = "·"               # this client reports no such window
+BAR_EIGHTHS = "▏▎▍▌▋▊▉"  # 1/8 .. 7/8
+BAR_CHARS = BAR_FULL + BAR_EMPTY + BAR_ABSENT + BAR_EIGHTHS
+
+
+def usage_bar(pct, cells=BAR_CELLS):
+    """A fixed-width bar for one percentage. Same number, same picture, always.
+
+    Three guarantees, each of them an honesty rule rather than a style choice:
+    0 draws empty, 100 draws full, and anything in between draws neither. That
+    last one is why the eighth-block characters are here at all: 98% rounded to
+    whole cells is indistinguishable from 100%, and the whole point of the panel
+    is to tell those two apart. None means the client reported no such window,
+    which is not the same as zero and must not look like it.
+    """
+    if pct is None:
+        return BAR_ABSENT * cells
+    pct = min(100.0, max(0.0, float(pct)))
+    eighths = int(round(pct / 100.0 * cells * 8))
+    if pct > 0:
+        eighths = max(1, eighths)
+    if pct < 100:
+        eighths = min(cells * 8 - 1, eighths)
+    full, remainder = divmod(eighths, 8)
+    bar = BAR_FULL * full
+    if remainder:
+        bar += BAR_EIGHTHS[remainder - 1]
+    return bar + BAR_EMPTY * (cells - len(bar))
+
+
+def _pct_cell(pct):
+    return "n/a".rjust(4) if pct is None else ("%d%%" % round(pct)).rjust(4)
+
+
+def brief_card(cfg=None, now=None):
+    """The usage panel, as lines to be reproduced verbatim.
+
+    One row per enabled account, a fixed label column, and the same two windows
+    in the same two columns on every row, so the rows can be compared by eye.
+    Cursor spans, because monthly pools are not the 5-hour and weekly windows
+    and pretending otherwise would file a number under the wrong heading. Rows
+    with no usable reading carry the reason instead of a bar, never a stale
+    figure redrawn as if it were current.
+    """
+    cfg = load_config() if cfg is None else cfg
+    roles = enabled_roles(cfg)
+    if not roles:
+        return []
+    labels = {role: role_label(role, cfg) for role in roles}
+    width = max(len(label) for label in labels.values())
+
+    rows, ages = [], []
+    for role in roles:
+        label = labels[role].ljust(width)
+        if not reading_enabled(role, cfg):
+            rows.append("%s  no usage reading available for this sign-in" % label)
+            continue
+        usage = load_usage(role)
+        state = freshness(role, now=now, cfg=cfg)
+        if state not in ("fresh", "stale"):
+            reason = status_phrase(status_kind(role)) or "no current reading, refreshing"
+            rows.append("%s  %s" % (label, reason))
+            continue
+        age = cache_age(role, now=now)
+        if age is not None:
+            ages.append(age)
+        if role == "cursor":
+            pools = ", ".join(
+                "%s %d%%" % (name, round(value))
+                for name, key in (("included", "included_pct"), ("auto", "auto_pct"),
+                                  ("api", "api_pct"))
+                for value in [pool(usage, key)] if value is not None)
+            rows.append("%s  monthly pools: %s" % (label, pools or "none reported"))
+            continue
+        five, week = number(usage.get("five_hour_pct")), number(usage.get("seven_day_pct"))
+        notes = [status_phrase(status_kind(role)), identity_drift(role, cfg, now=now)]
+        if five is None and week is None and role in CODEX_ROLES \
+                and pool(usage, "monthly_pct") is not None:
+            # A Free workspace: one monthly window, which is not the 5-hour or
+            # the weekly column, so it spans like the Cursor pools do.
+            row = "%s  monthly limit %d%% used" % (label, round(pool(usage, "monthly_pct")))
+            rows.append("  ".join([row] + [note for note in notes if note]))
+            continue
+        cells = [usage_bar(five), usage_bar(week)]
+        pcts = [_pct_cell(five), _pct_cell(week)]
+        row = "%s  %s %s  %s %s" % (label, cells[0], pcts[0], cells[1], pcts[1])
+        # A reader fault or a changed sign-in goes on the row it belongs to. The
+        # figures are still shown, because they are real; what the note says is
+        # whose figures they are.
+        rows.append("  ".join([row] + [note for note in notes if note]))
+
+    header = "%s  %s  %s" % (" " * width,
+                             "5-hour".ljust(BAR_CELLS + 5),
+                             "weekly".ljust(BAR_CELLS + 5))
+    lines = [header.rstrip()] + rows
+    if ages:
+        oldest, newest = short_age(max(ages)), short_age(min(ages))
+        lines.append("Readings %s old." % oldest if oldest == newest
+                     else "Readings %s to %s old." % (newest, oldest))
+    return lines
 
 
 # ---------------------------------------------------------------- session

@@ -4,7 +4,7 @@
 #   usage-refresh.sh [--force] [--only ROLE ...] [--if-claude-running]
 #
 #   --force               read even when the cached figure is still fresh
-#   --only ROLE ...       only these roles: primary secondary codex grok cursor
+#   --only ROLE ...       only these roles: primary secondary codex codex2 codex3 grok cursor
 #   --if-claude-running   do nothing unless Claude is actually in use, which is
 #                         what the launchd timer passes
 #
@@ -102,7 +102,7 @@ picker=$(printf '%s\n' "$plan" | sed -n 's/^picker //p')
 due=$(printf '%s\n' "$plan" | sed -n 's/^role //p')
 
 if [ -z "$workdir" ] || [ ! -d "$workdir" ]; then
-  for role in primary secondary codex grok cursor; do
+  for role in primary secondary codex codex2 codex3 grok cursor; do
     status "$role" "FAILED: no readers' working directory exists. Rerun setup.py --write."
   done
   exit 1
@@ -144,7 +144,8 @@ for role in $due; do
   case "$role" in
     primary|secondary)
       start "$role" claude "$HERE/claude-usage.py" --role "$role" ;;
-    codex)  start codex codex "$HERE/codex-status.py" ;;
+    codex|codex2|codex3)
+      start "$role" codex "$HERE/codex-status.py" --role "$role" ;;
     grok)   start grok grok "$HERE/grok-usage.py" ;;
     cursor) start cursor cursor-agent "$HERE/cursor-usage.py" ;;
   esac
