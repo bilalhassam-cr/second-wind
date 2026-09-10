@@ -2353,11 +2353,13 @@ class Check(Base):
         self.assertIn("the launchd agent has nothing to run", text)
         self.assertIn("NOT ARMED", text)
 
+    @unittest.skipUnless(sys.platform == "darwin", "launchd is macOS only")
     def test_the_loaded_job_is_reported_as_running_the_mirror(self):
         self.configure(refresh={"interval_minutes": 15, "launchd": True})
         text = self.check()
         self.assertIn("loaded, runs the mirror", text)
 
+    @unittest.skipUnless(sys.platform == "darwin", "launchd is macOS only")
     def test_a_loaded_job_running_a_path_that_moved_is_a_fault(self):
         self.configure(level="relief",
                        refresh={"interval_minutes": 15, "launchd": True})
@@ -2368,6 +2370,7 @@ class Check(Base):
         self.assertIn("runs a path that is not the mirror", text)
         self.assertIn("NOT ARMED", text)
 
+    @unittest.skipUnless(sys.platform == "darwin", "launchd is macOS only")
     def test_output_that_cannot_be_parsed_says_so_and_raises_nothing(self):
         self.configure(refresh={"interval_minutes": 15, "launchd": True})
         self.printed = lambda: "Could not find service"
