@@ -102,11 +102,12 @@ keep them about the process.
 ## Install
 
 ```bash
-git clone https://github.com/bilalhassam-cr/second-wind second-wind
+git clone https://github.com/<owner>/second-wind second-wind
 cd second-wind && ./install.sh
 ```
 
-`install.sh` copies the skill into `~/.claude/skills/second-wind`. Pass a
+Use the repository address you were given for `<owner>`; the private repository
+page shows it. `install.sh` copies the skill into `~/.claude/skills/second-wind`. Pass a
 directory to install somewhere else, and `--link` (before the directory) to
 symlink the checkout instead of copying it, which is what you want if you are
 editing the skill itself. Either way it makes sure the shell scripts, `setup.py`

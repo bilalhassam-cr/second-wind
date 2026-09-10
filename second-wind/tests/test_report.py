@@ -58,9 +58,28 @@ class ShareFilePrivacy(unittest.TestCase):
             os.environ["SW_HOME"] = self.previous
         shutil.rmtree(self.home, ignore_errors=True)
 
+    def read(self):
+        with open(self.path) as handle:
+            return handle.read()
+
+    def test_a_label_and_a_reader_error_path_never_leave_by_default(self):
+        import swlib
+        swlib.field_note("write", level="relief", workers=["codex"],
+                         changed=["codex label Old Client to New Client", "codex label"])
+        swlib.write_text_atomic(swlib.status_path("codex"),
+                                "FAILED: budget exhausted. Last of the screen: /Volumes/ClientA/notes\n")
+        report.share_file(self.rows, 7, self.logdir, path=self.path)
+        text = self.read()
+        self.assertNotIn("Old Client", text)
+        self.assertNotIn("ClientA", text)
+        self.assertIn("- codex: failed", text)
+        self.assertNotIn("Log directory", text)
+        report.share_file(self.rows, 7, self.logdir, path=self.path, details=True)
+        self.assertIn("Last of the screen", self.read())
+
     def test_by_default_no_project_name_and_no_reply_text(self):
         report.share_file(self.rows, 7, self.logdir, path=self.path)
-        text = open(self.path).read()
+        text = self.read()
         self.assertNotIn("SecretProject", text)
         self.assertNotIn("THE WORKER WROTE", text)
         self.assertIn("What this file contains, and what it does not", text)
@@ -71,7 +90,7 @@ class ShareFilePrivacy(unittest.TestCase):
 
     def test_with_details_puts_them_back(self):
         report.share_file(self.rows, 7, self.logdir, path=self.path, details=True)
-        text = open(self.path).read()
+        text = self.read()
         self.assertIn("SecretProject", text)
         self.assertIn("THE WORKER WROTE", text)
 

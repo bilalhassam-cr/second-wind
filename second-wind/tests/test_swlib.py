@@ -627,13 +627,14 @@ class FieldNotes(Base):
     def test_on_writes_a_scrubbed_row(self):
         self.write_config(field_notes={"enabled": True})
         home = swlib.HOME
-        self.assertTrue(swlib.field_note("note", text="signed in as one@example.com from %s/x" % home,
+        self.assertTrue(swlib.field_note("note", text="signed in as one@example.com from %s/x" % home))
+        self.assertTrue(swlib.field_note("setup", command="write",
                                          args=["--codex-dir", home + "/.codex-work"]))
         rows = swlib.load_field_notes()
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["event"], "note")
         self.assertEqual(rows[0]["text"], "signed in as <account> from ~/x")
-        self.assertEqual(rows[0]["args"], ["--codex-dir", "~/.codex-work"])
+        self.assertEqual(rows[1]["args"], ["--codex-dir", "~/.codex-work"])
         self.assertTrue(rows[0]["ts"].endswith("Z"))
 
     def test_a_refresh_event_records_each_readers_outcome(self):
@@ -653,12 +654,72 @@ class FieldNotes(Base):
 
 
 class RecordedArgs(Base):
-    def test_labels_are_dropped_and_paths_shortened(self):
+    def test_labels_are_dropped_and_home_dotdirs_kept(self):
         home = swlib.HOME
         seen = sw_setup.recorded_args(["--write", "--codex-label", "Work of Someone",
-                                       "--codex-dir", home + "/.codex-work", "--codex", "on"])
-        self.assertEqual(seen, ["--write", "--codex-label", "<label>",
-                                "--codex-dir", "~/.codex-work", "--codex", "on"])
+                                       "--codex-dir", home + "/.codex-work", "--codex", "on",
+                                       "--timeout", "900", "--level", "relief"])
+        self.assertEqual(seen, ["--write", "--codex-label", "<value>",
+                                "--codex-dir", "~/.codex-work", "--codex", "on",
+                                "--timeout", "900", "--level", "relief"])
+
+    def test_the_equals_form_and_paths_elsewhere_are_hidden_too(self):
+        seen = swlib.safe_args(["--codex-label=Some Client", "--codex-dir",
+                                "/Volumes/ClientA/.codex", "--primary", "~/Documents/ClientB",
+                                "--picker-models", "codex=gpt-5.6/high"])
+        self.assertEqual(seen, ["--codex-label", "<value>", "--codex-dir", "<path>",
+                                "--primary", "<path>", "--picker-models", "<value>"])
+
+
+class FieldNoteAllowlist(Base):
+    """The promise is kept by the table in swlib, not by each caller."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config(field_notes={"enabled": True}, codex={"enabled": True})
+
+    def last(self):
+        return swlib.load_field_notes()[-1]
+
+    def test_an_unknown_event_is_not_written(self):
+        self.assertFalse(swlib.field_note("prompt", text="the whole prompt"))
+        self.assertEqual(swlib.load_field_notes(), [])
+
+    def test_an_unknown_key_is_dropped_from_a_known_event(self):
+        swlib.field_note("setup", command="check", cwd="/Users/someone/ClientA", prompt="x")
+        row = self.last()
+        self.assertNotIn("cwd", row)
+        self.assertNotIn("prompt", row)
+        self.assertEqual(row["command"], "check")
+
+    def test_a_label_change_is_recorded_by_name_not_value(self):
+        swlib.field_note("write", level="relief", workers=["codex"],
+                         changed=["codex label", "codex label Old Client to New Client",
+                                  "five-hour threshold"])
+        self.assertEqual(self.last()["changed"], ["codex label", "five-hour threshold"])
+
+    def test_check_lines_become_kinds(self):
+        swlib.field_note("check",
+                         faults=["codex2's directory ~/Documents/ClientA/.codex does not exist."],
+                         warnings=["codex is signed in as Free, not the configured Business.",
+                                   "grok is 1.0.25 now, 1.0.13 when set up."])
+        row = self.last()
+        self.assertEqual(row["faults"], ["directory-missing"])
+        self.assertEqual(row["warnings"], ["sign-in-changed", "client-version-moved"])
+        self.assertNotIn("ClientA", json.dumps(row))
+
+    def test_routes_keep_worker_and_model_tokens_only(self):
+        swlib.field_note("route", source="chat", worker="codex2", model="gpt-5.6",
+                         effort="high", mode="work", cwd="/x")
+        row = self.last()
+        self.assertEqual((row["worker"], row["model"], row["effort"]), ("codex2", "gpt-5.6", "high"))
+        self.assertNotIn("cwd", row)
+        swlib.field_note("route", source="chat", worker="nonsense", model="a model with spaces")
+        self.assertEqual((self.last()["worker"], self.last()["model"]), ("<role>", "<value>"))
+
+    def test_the_file_is_created_private(self):
+        swlib.field_note("note", text="x")
+        self.assertEqual(oct(os.stat(swlib.field_notes_path()).st_mode & 0o777), "0o600")
 
 
 class PrimarySession(Base):

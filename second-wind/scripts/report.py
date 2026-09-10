@@ -179,26 +179,29 @@ def summary_lines(rows, days, details=True):
 # ---------------------------------------------------------------- share file
 
 
-def environment_lines():
+def environment_lines(details=True):
     cfg = swlib.load_config()
     versions = swlib.client_versions()
     clients = ", ".join("%s %s" % (name, version or "not installed")
                         for name, version in sorted(versions.items()))
     roles = swlib.enabled_roles(cfg)
-    return [
+    lines = [
         "- OS: %s" % platform.platform(),
         "- Python: %s" % platform.python_version(),
         "- Clients: %s" % clients,
         "- Level: %s" % (cfg.get("level") or "not set in config"),
         "- Config version: %s" % (cfg.get("version") or "unknown"),
         "- Enabled workers: %s" % (", ".join(roles) if roles else "none"),
-        "- Log directory: %s" % swlib.tilde(log_dir()),
     ]
+    if details:
+        lines.append("- Log directory: %s" % swlib.tilde(log_dir()))
+    return lines
 
 
-def status_lines():
-    """Every refresh-status file, in full. One stale line explains most of the
-    faults people report, and it is the first thing worth reading."""
+def status_lines(details=True):
+    """Every refresh-status file. In full with details, because one stale line
+    explains most of the faults people report. Without them, the kind of status
+    only: a FAILED line can quote the client's screen or an exception's path."""
     out = []
     for path in sorted(glob.glob(os.path.join(swlib.sw_home(),
                                               "refresh-status-*.txt"))):
@@ -214,13 +217,16 @@ def status_lines():
         if not lines:
             out.append("- %s: empty (%s ago)" % (role, age))
             continue
+        if not details:
+            out.append("- %s: %s (%s ago)" % (role, swlib.status_kind(message=lines[0]), age))
+            continue
         out.append("- %s: %s (%s ago)" % (role, lines[0], age))
         for extra in lines[1:]:
             out.append("    %s" % extra)
     return out or ["- no status files; the readers have not run"]
 
 
-def accounts_table():
+def accounts_table(details=True):
     script = os.path.join(HERE, "setup.py")
     if not os.path.exists(script):
         return "setup.py is not next to report.py, so no table could be produced."
@@ -231,6 +237,9 @@ def accounts_table():
         return "The accounts table could not be produced (%s)." % exc
     text = (done.stdout or "").strip()
     if done.returncode != 0:
+        if not details:
+            # stderr from a failed run can carry a path; the exit code is enough.
+            return "The accounts table could not be produced (exit %d)." % done.returncode
         text = "%s\n[exit %d]\n%s" % (text, done.returncode,
                                       (done.stderr or "").strip())
     return keep_columns(text) or "The accounts table came back empty."
@@ -340,14 +349,18 @@ PRIVACY = [
     "## What this file contains, and what it does not",
     "",
     "In: the operating system and client versions, which workers are enabled and",
-    "at what level, each reader's status, the accounts table with addresses",
-    "replaced, how many delegations went to each worker in each mode and how many",
-    "failed, and the field notes: setup steps, reader outcomes over time, routes",
-    "and handovers, and any lines you added with `setup.py --note`.",
+    "at what level, the kind of status each reader last reported, the accounts",
+    "table with addresses replaced and timezones removed, how many delegations",
+    "went to each worker in each mode and how many failed, and the field notes:",
+    "setup commands with flags and fixed values only, which settings changed",
+    "(names, not values), --check faults and warnings reduced to a kind, reader",
+    "outcomes over time, routes and handovers by worker, and any lines you added",
+    "with `setup.py --note`.",
     "",
-    "Out: every prompt, every reply, every directory or project name, every email",
-    "address, and your home directory path. The exchange logs stay on this machine.",
-    "Your own notes are included as you wrote them, so read them before sending.",
+    "Out: every prompt, every reply, every directory or project name, every label",
+    "you gave an account, every email address, and your home directory path. The",
+    "exchange logs stay on this machine. Your own notes are included as you wrote",
+    "them, so read them before sending.",
 ]
 
 
@@ -358,9 +371,9 @@ def share_file(rows, days, logdir, path=SHARE_PATH, details=False):
                      time.strftime("%Y-%m-%d %H:%M"),
                      " Reply tails and paths included (--with-details)." if details else ""))
     parts += [""] + PRIVACY
-    parts += ["", "## Environment", ""] + environment_lines()
-    parts += ["", "## Reader status", ""] + status_lines()
-    parts += ["", "## Accounts", "", "```", accounts_table(), "```"]
+    parts += ["", "## Environment", ""] + environment_lines(details=details)
+    parts += ["", "## Reader status", ""] + status_lines(details=details)
+    parts += ["", "## Accounts", "", "```", accounts_table(details=details), "```"]
     parts += ["", "## Delegations, last %d days" % days, ""]
     if not os.path.isdir(logdir):
         parts.append("There is no log directory at %s." % swlib.tilde(logdir))

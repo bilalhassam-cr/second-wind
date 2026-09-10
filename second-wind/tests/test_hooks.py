@@ -365,6 +365,7 @@ class PromptGuard(Base):
         self.assertIn("the secondary account is also at 97% of its 5-hour "
                       "window", text)
 
+    @unittest.skipUnless(sys.platform == "darwin", "the notification is macOS only")
     def test_notifies_once_per_window(self):
         self.write_config()
         self.write_usage("primary", five=93, week=40, age=60,
@@ -629,6 +630,7 @@ class StopFailure(Base):
             "error_details": "429 Too Many Requests",
             "last_assistant_message": "API Error: Rate limit reached"}, **kwargs)
 
+    @unittest.skipUnless(sys.platform == "darwin", "the notification is macOS only")
     def test_relief_refreshes_notifies_and_leaves_a_note(self):
         self.write_config()
         self.write_usage("primary", five=99, week=40, age=60)

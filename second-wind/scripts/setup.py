@@ -643,6 +643,7 @@ def cmd_write(a):
     # and both thresholds back. Anything not passed on the command line now
     # carries over from the config that is already there.
     settings_changed = []
+    changed_names = []   # the same changes, names only, for the field notes
 
     def carry(attr, previous_value, constant, label):
         chosen = getattr(a, attr)
@@ -651,6 +652,7 @@ def cmd_write(a):
         setattr(a, attr, chosen)
         if previous_value is not None and chosen != previous_value:
             settings_changed.append("%s %s to %s" % (label, previous_value, chosen))
+            changed_names.append(label)
 
     for attr in ("primary_label", "secondary_label"):
         given = getattr(a, attr)
@@ -916,7 +918,7 @@ def cmd_write(a):
     swlib.write_json_atomic(config_file(), cfg)
     swlib.field_note("write", cfg=cfg, level=a.level,
                      workers=[role for role in swlib.enabled_roles(cfg) if role != "primary"],
-                     changed=settings_changed, forced=bool(a.force))
+                     changed=changed_names, forced=bool(a.force))
 
     print("\nWrote %s" % tilde(config_file()))
     if settings_changed:
@@ -1689,29 +1691,22 @@ def cmd_field_report():
 
 
 SETUP_COMMANDS = ("detect", "write", "check", "uninstall")
-VALUE_FLAGS_DROPPED = ("-label",)
 
 
 def recorded_args(argv):
-    """The setup command line as the diary keeps it: flag names and on/off
-    values, directories with the home folder as ~, and no label text, which is
-    the one value a person writes freely and might name someone in."""
-    out, drop_next = [], False
-    for arg in argv:
-        if drop_next:
-            out.append("<label>")
-            drop_next = False
-            continue
-        if any(arg.startswith("--") and arg.endswith(part) for part in VALUE_FLAGS_DROPPED):
-            drop_next = True
-        out.append(tilde(arg) if arg.startswith(("/", "~")) else arg)
-    return out
+    """The setup command line as the diary keeps it; the rule lives in
+    swlib.safe_args so the report and the tests read the same one."""
+    return swlib.safe_args(argv)
 
 
 def main():
     ap = build_parser()
     a = ap.parse_args()
     if a.note is not None:
+        if any(getattr(a, name) for name in SETUP_COMMANDS + ("accounts", "card", "show")):
+            # Otherwise the note is written and the other command silently is not.
+            sys.exit("second-wind: --note is a command of its own. Run it on its "
+                     "own line.")
         return cmd_note(a.note)
     if a.field_report:
         return cmd_field_report()

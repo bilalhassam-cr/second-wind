@@ -1377,23 +1377,140 @@ def scrub(value):
     return value
 
 
+# What a diary row may carry, by event, and how each value is coerced. Anything
+# not listed here is dropped before it reaches the file, whatever a caller passed.
+# The promise to testers ("no prompt, reply, path, project name or address") is
+# kept by this table, not by the care of each call site.
+_WORD = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+_HOME_DOTDIR = re.compile(r"^~/\.[A-Za-z0-9_.-]{1,60}$")
+_KEPT_VALUES = {"on", "off", "auto", "review", "work", "relief", "worker", "reviewer"}
+# The settings carry() can report as changed. Names, never values.
+FIELD_SETTINGS = {
+    "primary label", "secondary label", "five-hour threshold", "seven-day threshold",
+    "refresh interval", "timeout", "model picker", "picker routes", "picker models",
+    "codex directory", "codex2 directory", "codex3 directory",
+    "codex label", "codex2 label", "codex3 label", "codex full access", "field notes",
+}
+FIELD_EVENTS = {
+    "setup": {"command": "word", "args": "args", "result": "int"},
+    "write": {"level": "word", "workers": "roles", "changed": "settings", "forced": "bool"},
+    "check": {"faults": "codes", "warnings": "codes"},
+    "refresh": {"outcomes": "outcomes"},
+    "route": {"source": "word", "worker": "role", "model": "token", "effort": "token",
+              "mode": "word"},
+    "handover": {"reason": "word", "windows": "words", "workers": "roles"},
+    "note": {"text": "text"},
+}
+# A --check line reduced to what kind of thing it reports. The line itself can
+# name a directory, an account or a version, so only the kind is kept.
+FAULT_CODES = (
+    ("signed in as", "sign-in-changed"),
+    ("not trusted", "workdir-not-trusted"), ("does not trust", "workdir-not-trusted"),
+    ("does not exist", "directory-missing"),
+    ("not on path", "command-missing"),
+    ("not signed in", "not-signed-in"), ("login", "not-signed-in"),
+    ("status line", "statusline"),
+    ("hook", "hooks"),
+    ("launchd", "launchd"), ("scheduled", "launchd"),
+    ("reading is", "reading-stale"), ("over an hour old", "reading-stale"),
+    ("now,", "client-version-moved"),
+    ("jq", "jq-missing"),
+    ("no-failover", "failover-off"),
+)
+
+
+def fault_code(text):
+    lowered = str(text or "").lower()
+    for needle, code in FAULT_CODES:
+        if needle in lowered:
+            return code
+    return "other"
+
+
+def safe_args(argv):
+    """A setup command line as the diary keeps it. Flags stay. A value stays
+    only when it is one of the fixed words setup takes, a number, or a dotfile
+    directory directly under the home folder written as ~/.name. Everything
+    else, a label, a path anywhere else, a picker string, becomes <value> or
+    <path>. `--flag=value` is split so the value gets the same treatment."""
+    out = []
+    for arg in [str(a) for a in (argv or [])]:
+        if arg.startswith("--"):
+            flag, sep, value = arg.partition("=")
+            out.append(flag if re.match(r"^--[a-z0-9-]{1,40}$", flag) else "<flag>")
+            if sep:
+                out.append(_safe_value(value))
+            continue
+        out.append(_safe_value(arg))
+    return out
+
+
+def _safe_value(value):
+    text = str(value)
+    if text in _KEPT_VALUES or re.match(r"^[0-9]{1,6}$", text):
+        return text
+    if text.startswith(("/", "~")):
+        short = tilde(text)
+        return short if _HOME_DOTDIR.match(short) else "<path>"
+    return "<value>"
+
+
+def _coerce(kind, value):
+    if value is None:
+        return None
+    if kind == "word":
+        return value if isinstance(value, str) and _WORD.match(value) else "<value>"
+    if kind == "words":
+        return [v for v in (_coerce("word", x) for x in value) if v] \
+            if isinstance(value, (list, tuple)) else []
+    if kind == "int":
+        return int(value) if isinstance(value, (int, bool)) else None
+    if kind == "bool":
+        return bool(value)
+    if kind == "role":
+        return value if value in ROLES else "<role>"
+    if kind == "roles":
+        return [v for v in value if v in ROLES] if isinstance(value, (list, tuple)) else []
+    if kind == "token":
+        return value if isinstance(value, str) and _ROUTE_TOKEN.match(value) else "<value>"
+    if kind == "settings":
+        return [v for v in value if isinstance(v, str) and v in FIELD_SETTINGS] \
+            if isinstance(value, (list, tuple)) else []
+    if kind == "codes":
+        return [fault_code(v) for v in value] if isinstance(value, (list, tuple)) else []
+    if kind == "outcomes":
+        return {role: (kind_ if kind_ in STATUS_KINDS else "other")
+                for role, kind_ in value.items() if role in ROLES} \
+            if isinstance(value, dict) else {}
+    if kind == "args":
+        return safe_args(value)
+    if kind == "text":
+        return scrub(str(value))
+    return None
+
+
 def field_note(event, cfg=None, **data):
     """Append one event when field notes are on. Never raises: this runs inside
-    hooks and readers, and a diary must not take a session down."""
+    hooks and readers, and a diary must not take a session down. An event or a
+    key not in FIELD_EVENTS is dropped, not written."""
     try:
         cfg = load_config() if cfg is None else cfg
         if not field_notes_enabled(cfg):
             return False
+        allowed = FIELD_EVENTS.get(str(event))
+        if allowed is None:
+            return False
         row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                "event": str(event)}
-        row.update(scrub(data))
+        for key, kind in allowed.items():
+            if key in data:
+                row[key] = _coerce(kind, data[key])
         os.makedirs(sw_home(), exist_ok=True)
-        with open(field_notes_path(), "a") as handle:
+        # Created with the mode it will keep, rather than chmod'd after a write
+        # under whatever umask the calling hook happened to have.
+        fd = os.open(field_notes_path(), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "a") as handle:
             handle.write(json.dumps(row) + "\n")
-        try:
-            os.chmod(field_notes_path(), 0o600)
-        except OSError:
-            pass
         return True
     except Exception:
         return False
