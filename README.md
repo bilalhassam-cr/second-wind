@@ -20,11 +20,15 @@ account did it.
 
 - **A setup wizard that asks.** It detects the Claude profiles, Codex, Grok Build
   and Cursor Agent, states the cost of each, and connects only what you choose.
+  Codex can be up to three sign-ins, a work workspace, the personal space on
+  that login and a separate personal account, each in its own directory, and
+  the wizard walks the browser side of each sign-in.
 - **Three levels.** Reviewer, worker or relief, chosen at setup and changeable by
   running setup again.
 - **Two modes.** Read-only for adversarial review, full access for real work.
-- **A session brief.** One line per account at the start of a session: both
-  windows, how old the reading is, and any fault that makes it unreliable.
+- **A usage panel.** One row per account at the start of a session, the two
+  windows drawn to scale, how old the readings are, any fault that makes one
+  unreliable, and a note when a sign-in is not the one it was set up as.
 - **A headroom table.** Every account sorted by the strictest window it reported,
   with unreadable figures marked unknown and sorted last.
 - **A log of everything delegated**, failures included, because a delegation that
@@ -59,7 +63,7 @@ Tested versions:
 | Client | Version tested |
 |---|---|
 | Claude Code | 2.1.251 |
-| Codex | 0.152.1 |
+| Codex | 0.153.0 |
 | Grok | 1.0.13 |
 | Cursor Agent | 2026.08.31 |
 | macOS | 26 |
@@ -98,7 +102,8 @@ SW=~/.claude/skills/second-wind
 python3 $SW/scripts/setup.py --detect
 python3 $SW/scripts/setup.py --write --level relief \
   --primary ~/.claude --secondary ~/.claude-secondary \
-  --codex on --grok off --cursor off
+  --codex on --codex-dir ~/.codex-work --codex-label "Codex work" \
+  --grok off --cursor off
 python3 $SW/scripts/setup.py --check
 python3 $SW/scripts/setup.py --accounts
 ```
@@ -138,6 +143,7 @@ Every call goes through one runner, which is what records it:
 ```bash
 "$SW/scripts/run.sh" secondary prompt.txt --review   # no edit tools, no shell
 "$SW/scripts/run.sh" codex     prompt.txt --work     # full access, does the job
+"$SW/scripts/run.sh" codex2    prompt.txt --review   # a second Codex sign-in
 "$SW/scripts/run.sh" grok      prompt.txt --review
 "$SW/scripts/run.sh" cursor    prompt.txt --work
 ```
@@ -148,10 +154,12 @@ adds `--mode ask`; its `--trust` flag alone is not read-only and was seen writin
 a file during testing. Work mode is unattended and unrestricted in the current
 directory, so do not point it at a directory you would not let an agent modify.
 
-A Codex worker is always sandboxed and cannot launch a browser: Chrome aborts at
+A Codex worker is sandboxed and cannot launch a browser: Chrome aborts at
 startup inside the sandbox and the user sees a "quit unexpectedly" dialog with no
 explanation. The runner tells the worker so in the prompt. Keep browser QA on
-your own session.
+your own session. The one exception is a Codex role set up with
+`--codex-full-access on`, which runs work mode with no sandbox at all and no
+guard; review mode stays read-only whatever the flag says.
 
 Type **`/second-wind`** and press Enter to be shown every destination with its
 current usage and a recommendation, then pick: the account first, then a model

@@ -11,7 +11,7 @@ backwards silently sends their main work to the wrong subscription.
       --level reviewer|worker|relief [--reader ~/.claude-usage]
       [--primary-label TEXT] [--secondary-label TEXT]
       [--codex on|off] [--codex-dir DIR] [--codex2 on|off] [--codex2-dir DIR]
-      [--codex3 on|off] [--codex3-dir DIR]
+      [--codex3 on|off] [--codex3-dir DIR] [--codex-label L] [--codex2-label L] [--codex3-label L]
       [--codex-full-access on|off] [--grok on|off] [--cursor on|off]
       [--five-hour N] [--seven-day N] [--refresh-minutes N]
       [--model-picker on|off] [--picker-routes id,id]
@@ -548,7 +548,8 @@ def cmd_show():
 PICKER_WORKERS = swlib.WORKER_ROLES
 
 
-def codex_block(previous, role, on, home, default, info, full_access, now=None):
+def codex_block(previous, role, on, home, default, info, full_access, now=None,
+                label=None):
     """A Codex role's config block.
 
     The label survives a rerun. The account and the plan are pinned from the
@@ -571,7 +572,8 @@ def codex_block(previous, role, on, home, default, info, full_access, now=None):
 
     return {
         "kind": "codex",
-        "label": prev.get("label") or {"codex": "Codex", "codex2": "Codex 2"}.get(role, "Codex 3"),
+        "label": (label or prev.get("label")
+                  or {"codex": "Codex", "codex2": "Codex 2"}.get(role, "Codex 3")),
         "enabled": on,
         "config_dir": tilde(home) if home else "",
         "is_default_dir": default,
@@ -695,6 +697,13 @@ def cmd_write(a):
     carry("codex2_dir", prev_codex2.get("config_dir") or None, "", "codex2 directory")
     prev_codex3 = previous.get("codex3") if isinstance(previous.get("codex3"), dict) else {}
     carry("codex3_dir", prev_codex3.get("config_dir") or None, "", "codex3 directory")
+    for role in swlib.CODEX_ROLES:
+        attr = role + "_label"
+        given = getattr(a, attr)
+        if isinstance(given, str):
+            setattr(a, attr, given.strip() or None)
+        prev_role = previous.get(role) if isinstance(previous.get(role), dict) else {}
+        carry(attr, prev_role.get("label"), None, role + " label")
     prev_full = prev_codex.get("full_access")
     carry("codex_full_access",
           ("on" if prev_full else "off") if isinstance(prev_full, bool) else None,
@@ -856,11 +865,11 @@ def cmd_write(a):
             "read_for": "primary",
         },
         "codex": codex_block(previous, "codex", codex_on, codex_home, codex_default,
-                             found.get("codex"), full),
+                             found.get("codex"), full, label=a.codex_label),
         "codex2": codex_block(previous, "codex2", codex2_on, codex2_home, False,
-                              found.get("codex2"), full),
+                              found.get("codex2"), full, label=a.codex2_label),
         "codex3": codex_block(previous, "codex3", codex3_on, codex3_home, False,
-                              found.get("codex3"), full),
+                              found.get("codex3"), full, label=a.codex3_label),
         "grok": {
             "kind": "grok", "label": "Grok", "enabled": grok_on,
             "account": "unknown", "plan": "SuperGrok or X Premium+",
@@ -910,6 +919,9 @@ def cmd_write(a):
     labels = ['primary "%s"' % a.primary_label]
     if a.secondary:
         labels.append('secondary "%s"' % a.secondary_label)
+    for role in swlib.CODEX_ROLES:
+        if cfg[role]["enabled"]:
+            labels.append('%s "%s"' % (role, cfg[role]["label"]))
     print("  labels    %s" % ", ".join(labels))
     if a.reader:
         print("  reader    %s   (%s)" % (cfg["reader"]["account"],
@@ -1583,6 +1595,10 @@ def build_parser():
                     help="a third Codex sign-in, in its own CODEX_HOME; " + worker_help)
     ap.add_argument("--codex3-dir", default=None,
                     help="CODEX_HOME for the third Codex role, required with --codex3 on")
+    for role in swlib.CODEX_ROLES:
+        ap.add_argument("--%s-label" % role, default=None,
+                        help="what the panel calls this Codex sign-in, for example "
+                             "\"Codex work\" (carried forward on a rerun)")
     ap.add_argument("--codex-full-access", choices=["on", "off"], default=None,
                     help="let every Codex role run unsandboxed in work mode "
                          "(default off; carried forward on a rerun)")

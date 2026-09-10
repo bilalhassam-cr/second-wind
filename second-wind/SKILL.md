@@ -104,8 +104,13 @@ naming in the conversation.
 The shape of it. Run `setup.py --detect` before asking anything. State the cost,
 because nothing here is free: a second Claude worker needs a second Claude
 subscription, Codex a ChatGPT plan, Grok Build SuperGrok or X Premium+, Cursor
-Agent Cursor Pro. Ask with **AskUserQuestion, multi-select** which to connect,
-then sign them in one at a time, re-running `--detect` between each. Ask which
+Agent Cursor Pro. Ask with **AskUserQuestion, multi-select** which to connect.
+**If Codex is chosen, ask a second multi-select**: a work or team workspace, the
+personal space on that same login, a separate personal account. Each becomes its
+own Codex role in its own `CODEX_HOME`, with a name the user gives it; ask which
+browser profile holds which account before any sign-in, and follow the Codex
+section of `references/setup.md` for the flow, one directory at a time. Then
+sign everything in one at a time, re-running `--detect` between each. Ask which
 Claude profile is primary and which level to run at: **reviewer** is read-only
 delegation with no handover, **worker** is full access plus the hooks that notice
 a limit, **relief** adds handover at a task boundary. Then write it all at once:
@@ -113,10 +118,13 @@ a limit, **relief** adds handover at a task boundary. Then write it all at once:
 ```bash
 python3 "$SW/scripts/setup.py" --write --level relief \
   --primary ~/.claude --secondary ~/.claude-secondary \
-  --codex on --grok off --cursor off
+  --codex on --codex-dir ~/.codex-work --codex-label "Codex work" \
+  --codex2 on --codex2-dir ~/.codex-personal --codex2-label "Codex personal" \
+  --grok off --cursor off
 ```
 
-Other options: `--reader ~/.claude-usage`, `--five-hour 85`, `--seven-day 75`,
+Other options: `--codex3 on --codex3-dir DIR --codex3-label L`,
+`--codex-full-access on`, `--reader ~/.claude-usage`, `--five-hour 85`, `--seven-day 75`,
 `--refresh-minutes 30`, `--model-picker on`, `--no-launchd`, `--timeout 900`,
 `--force`, and the picker flags in `references/setup.md`. Finally, tell the user
 to **restart Claude Code**, then run `--check` and `--accounts`: settings are

@@ -127,6 +127,21 @@ def codex_info(home=None):
         "config_dir": home or os.path.join(HOME, ".codex"),
     }
 
+def codex_homes():
+    """Every ~/.codex-* directory and whether it is signed in, so the wizard can
+    offer what already exists instead of asking for a directory that is there.
+    The default ~/.codex is reported by codex_info() and left out here."""
+    if not shutil.which("codex"):
+        return []
+    out = []
+    for name in sorted(os.listdir(HOME)):
+        path = os.path.join(HOME, name)
+        if name.startswith(".codex-") and os.path.isdir(path):
+            info = codex_info(path)
+            out.append({"config_dir": path, "logged_in": info.get("logged_in", False),
+                        "account": info.get("account", "unknown")})
+    return out
+
 def grok_info():
     """`grok models` is the login check. Grok has no status command, but listing
     models needs a session, so exit 0 means signed in. It sends no prompt."""
@@ -191,6 +206,7 @@ def main():
         "claude_bin": cb or "",
         "claude_profiles": claude_profiles(cb),
         "codex": codex_info(),
+        "codex_homes": codex_homes(),
         "grok": grok_info(),
         "cursor": cursor_info(),
         "client_versions": swlib.client_versions(),

@@ -17,7 +17,12 @@ time, one command at a time.
    or X Premium+, Cursor Agent spends Cursor Pro. Nothing here is free.
 
 3. **Ask with AskUserQuestion, multi-select**: second Claude account, Codex, Grok
-   Build, Cursor. Any combination is valid. Two warnings belong in the
+   Build, Cursor. Any combination is valid. **If Codex is chosen, ask a second
+   multi-select**, because one ChatGPT login can carry more than one allowance:
+   a work or team workspace, the personal space on that same login, and a
+   separate personal account. Each one chosen becomes a Codex role of its own
+   with its own directory; the Codex section below carries the whole flow,
+   including the browser side. Two warnings belong in the
    conversation: never set `XAI_API_KEY` for Grok Build, since `api.x.ai` is a
    separate paid developer product, and always call the clients `grok` and
    `cursor-agent`, since Cursor's installer takes the generic name `agent` and
@@ -29,6 +34,8 @@ time, one command at a time.
    ignores the `--email` hint, so say which browser profile to open the printed
    URL in. Never set `CLAUDE_CONFIG_DIR` for `~/.claude` itself: it breaks a
    working sign-in.
+   Codex sign-ins go one at a time and each needs the browser to hold the right
+   account when the consent page loads; follow the Codex section for those.
 
 5. **Ask which Claude profile is primary** if more than one is signed in. Primary
    is where the user works day to day, keeps their history and orchestrates from.
@@ -40,7 +47,8 @@ time, one command at a time.
    the hooks that notice a limit. Relief: full access, and handover at a task
    boundary when the primary crosses its thresholds.
 
-7. **Write the config with one command**, workers `on` or `off` as chosen, then
+7. **Write the config with one command**, workers `on` or `off` as chosen, each
+   Codex role with its directory and the name the user gave it, then
    tell the user to restart Claude Code and run `--check` and `--accounts`. The
    restart matters twice: settings are read at session start, and a running
    session can write the project list back over the workdir trust when it exits.
@@ -182,43 +190,124 @@ on a trusted one it spends ten to forty seconds starting MCP servers before it
 accepts `/status`. The reader waits for the composer and for the screen to go
 quiet; it never presses a key to dismiss a modal.
 
-### A second, or third, Codex account
+## Codex: which accounts, and signing each one in
 
-Codex keeps everything about a sign-in under `CODEX_HOME`, default `~/.codex`. A
-second directory is a second sign-in, with its own `auth.json`, its own
-`config.toml`, its own trust list and its own allowance. Tested on 0.153.0: a
+One ChatGPT login can carry more than one Codex allowance, and a person can hold
+more than one login. Ask, multi-select, which of these to connect:
+
+- **A work or team workspace**, on ChatGPT Business or Enterprise: the seat an
+  employer pays for. Its panel prints a weekly limit.
+- **The personal space on that same login.** Every Business login also has a
+  "Personal account" with its own plan and its own limits. With no paid plan of
+  its own it prints a monthly limit only; on Plus it prints a 5-hour and a weekly
+  one.
+- **A separate personal account**, a different email on Plus or Pro.
+
+Each one chosen is a Codex role of its own, `codex`, `codex2` or `codex3`, in its
+own `CODEX_HOME`. Codex keeps everything about a sign-in under that directory:
+`auth.json`, `config.toml`, the trust list and the allowance. Tested on 0.153.0: a
 fresh `CODEX_HOME` reports `Not logged in` while `~/.codex` stays signed in, and
 nothing in the default directory is touched.
 
+Ask two things per role, in one question if you like: **what to call it** (this
+is the label on the panel, set with `--codex-label`, `--codex2-label`,
+`--codex3-label`) and **where to keep it**, suggesting a directory named for the
+account, such as `~/.codex-work`, `~/.codex-work-personal`, `~/.codex-personal`.
+`--detect` lists any `~/.codex-*` directory that already exists and whether it is
+signed in, so offer those before creating new ones.
+
+**Do not put a role on `~/.codex` itself if the Codex desktop app is in use.** The
+app owns that directory and rewrites `auth.json` when its user switches
+workspace, keeping the same email and changing the plan; the CLI's own token
+refresh can then write it back to the default workspace. Whichever process last
+refreshed decides which allowance a role on `~/.codex` is spending, and nothing
+tells second-wind. The reader records the plan it saw and `--check` reports the
+drift, but a directory of its own is the fix.
+
+### Before the sign-ins: the browser
+
+`codex login` completes against whichever ChatGPT account the browser already
+holds, and a login with several workspaces lands on the one chosen on the
+consent page. So, before any command:
+
+- **One login, two workspaces** (a work workspace and its personal space): one
+  browser is enough. The consent page has a workspace chooser, work workspaces
+  listed by name and the personal space as "Personal account", and that choice
+  is what the directory gets bound to.
+- **Two logins**: the browser has to be signed into the right one when the
+  consent page loads. A browser profile per ChatGPT account is the clean way and
+  worth setting up first: in Chrome, the profile icon, then Add, then sign that
+  profile into chatgpt.com as the second account. A private window, or signing
+  out and back in, also works but has to be repeated every time.
+- **If the assistant can drive the browser**, through the Claude in Chrome
+  extension, it can open the printed URL in the named profile and click through.
+  Connected browsers may show as unnamed "Browser 1" and "Browser 2": open
+  chatgpt.com in one and read the account button to tell them apart, and ask
+  the user rather than guess if that does not settle it.
+
+### The sign-in, one directory at a time
+
+Try the device-code flow first, because it opens nothing and works from any
+browser the user chooses:
+
 ```bash
-python3 scripts/setup.py --write ... --codex on --codex2 on --codex2-dir ~/.codex-personal --force
-CODEX_HOME=~/.codex-personal codex login
-CODEX_HOME=~/.codex-personal codex login status
+mkdir -p ~/.codex-work
+CODEX_HOME=~/.codex-work codex login --device-auth
 ```
 
-A third role is `--codex3 on --codex3-dir <dir>`, the same in every respect.
-`--force` is needed the first time because the new directory is not signed in yet;
-setup creates it, pre-trusts the workdir in it, and prints the login line. Then
-run `--check` without `--force` to confirm.
+It prints a URL and a one-time code; the user opens the URL where the right
+account is signed in and enters the code. Two things stop it, both shown on the
+consent page: a work workspace whose admin has not enabled device authorisation
+("contact your workspace admin"), and a personal account that has not turned it
+on under ChatGPT Security settings. Do not change that setting for the user.
+Fall back to the standard flow:
 
-Two traps, both about which account a login lands on:
+```bash
+CODEX_HOME=~/.codex-work codex login
+```
 
-- **`codex login` completes against whichever ChatGPT account the browser already
-  holds**, and a ChatGPT login with several workspaces lands on whichever one is
-  selected. Sign the browser into the right account and workspace first, or use
-  a separate browser profile per account.
-- **The desktop app owns `~/.codex`.** Switching workspace in the Codex app
-  rewrites `~/.codex/auth.json`, so a role on the default directory changes plan
-  without telling anyone, and the email in `codex login status` does not change.
-  The reader records the plan it saw and `--check` reports the drift. If you
-  switch workspaces in the app at all, give every second-wind Codex role a
-  directory of its own with `--codex-dir` and `--codex2-dir`, and leave `~/.codex`
-  to the app.
+It prints an `auth.openai.com/oauth/authorize` URL, opens the default browser
+with it whatever `BROWSER` says, and holds port 1455 until it finishes, so
+logins go one at a time. If the default browser is not signed into the right
+account, leave the tab it opened alone and paste the URL into the right profile.
+The page asks for the account, then the workspace (the work one is selected by
+default; pick "Personal account" for the personal space), then Continue. The
+consent page always needs that click, so a tab in the wrong profile cannot
+finish the sign-in by itself. Close the stray tab afterwards.
+
+Then verify, never assume:
+
+```bash
+CODEX_HOME=~/.codex-work codex login status
+```
+
+and, once the config is written, run that role's reader
+(`usage-refresh.sh --force --only codex`) and read the `Account:` line and the
+plan in parentheses back from `~/.second-wind/usage-codex.json`. The panel is the
+only place this repository reads an identity from; it does not open `auth.json`.
+
+### Writing the config
+
+```bash
+python3 scripts/setup.py --write ... \
+  --codex on  --codex-dir  ~/.codex-work          --codex-label  "Codex work" \
+  --codex2 on --codex2-dir ~/.codex-work-personal --codex2-label "Codex work personal" \
+  --codex3 on --codex3-dir ~/.codex-personal      --codex3-label "Codex personal" \
+  --force
+```
+
+`--force` is needed on the first write when a directory is not signed in yet;
+setup creates it, pre-trusts the workdir in it, and prints the login line for
+it. Sign in, run the readers, then rerun `--write` without `--force`: setup pins
+the account and plan each reader saw, and from then on a reading that disagrees
+with the pin shows on the panel as `signed in as X, not the configured Y`.
 
 A new `CODEX_HOME` starts empty: no MCP servers, no plugins, and no
 `project_doc_fallback_filenames`, so a worker there reads `AGENTS.md` and not
-`CLAUDE.md` unless you add that line to its `config.toml`. For a headless worker
-the empty start is mostly a gain, because it is what makes the reader fast.
+`CLAUDE.md` unless that line is added to its `config.toml`, above the
+`[projects]` table (a TOML key after a table header belongs to that table). For
+a headless worker the empty start is mostly a gain: it is what makes the reader
+fast.
 
 The desktop app's own session store is account-agnostic: a thread carries a
 working directory and an originator, and no account id, which is why its chats

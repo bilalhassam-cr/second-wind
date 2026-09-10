@@ -597,6 +597,11 @@ class CodexPinning(Base):
     def test_label_survives_and_full_access_is_only_ever_a_boolean(self):
         block = self.block({"codex": {"label": "Work Codex"}}, "unknown")
         self.assertEqual(block["label"], "Work Codex")
+        given = sw_setup.codex_block({"codex": {"label": "Work Codex"}}, "codex", True,
+                                     "~/.codex", True, {}, False, now=NOW,
+                                     label="Codex work")
+        self.assertEqual(given["label"], "Codex work", "a label passed on the "
+                         "command line beats the one already in the config")
         self.assertIs(block["full_access"], False)
         self.assertEqual(block["account"], "unknown")
 
