@@ -244,6 +244,10 @@ whose wording the reader recognises as a trust or login screen is reported as
 appearing and the reading ends as `FAILED: usage panel did not appear`, and a
 panel whose labels have moved reports `PARSER MISMATCH` rather than a wrong
 number.
+A Claude account is asked `claude auth status` before any of that, which answers
+in about a second where the panel takes a minute. A profile with no sign-in of
+its own reports `NO CLI SIGN-IN` and names the command that fixes it, rather
+than spending the budget to find out and then calling it an expired token.
 Faults are named per account in `~/.second-wind/refresh-status-<role>.txt`, so
 one working account cannot hide another one's failure.
 
@@ -308,8 +312,9 @@ Run `python3 "$SW/scripts/setup.py" --check` first. It prints every link in the
 chain and names what is blocking handover, and most faults are quicker to
 identify from that output than from anywhere else.
 `second-wind/references/troubleshooting.md` covers the rest: the `TRUST PROMPT`,
-`PARSER MISMATCH` and `LOGIN EXPIRED` statuses, a blank status bar, a delegation
-that exited zero having done nothing, and handover that will not fire.
+`PARSER MISMATCH`, `LOGIN EXPIRED` and `NO CLI SIGN-IN` statuses, a blank status
+bar, a delegation that exited zero having done nothing, and handover that will
+not fire.
 
 ## Uninstall
 

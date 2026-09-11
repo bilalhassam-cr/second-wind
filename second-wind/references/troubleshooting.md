@@ -63,13 +63,38 @@ on one credential log each other out. The cure is the optional reader profile, a
 third Claude profile signed into the same account, used only for reading:
 `setup.py --write ... --reader ~/.claude-usage`.
 
+## A reading says NO CLI SIGN-IN
+
+That profile has no Claude Code credential of its own, which is a different
+fault from an expired one. Run the command the status line prints, which is
+`claude auth login` for the default profile and
+`CLAUDE_CONFIG_DIR=<profile> claude auth login` for any other.
+
+The reason it is worth its own status: the Claude desktop app holds its
+credential itself and hands it to the session it starts, over a socket rather
+than through the keychain. So an account can be signed in in the app, with the
+app's own sessions working perfectly, while every profile on disk reports
+`loggedIn: false` and no separate reader can borrow that credential. Reported as
+an expired token this reads as the tool being broken, because the person looking
+at it is signed in.
+
+Team and enterprise seats hit this more than personal plans do, because a seat
+carries fewer concurrent Claude Code credentials, so a sign-in in one place can
+retire the copy somewhere else. A profile that has been reading for a week and
+then stops, with no expiry in sight, is usually this.
+
+When a reader profile is configured, the role's own directory is tried behind
+it, so only a role with no signed-in profile at all reports the fault.
+
 ## A profile says it is signed out, but it is signed in
 
 Almost always `CLAUDE_CONFIG_DIR` set to `~/.claude`. Unset it for the default
 profile. See `setup.md`.
 
 The desktop app and CLI keep separate credentials for the same profile, so the
-app can work while the CLI's Keychain entry is expired.
+app can work while the CLI's keychain entry is expired or empty. `claude auth
+status` under that profile's `CLAUDE_CONFIG_DIR` is the answer that settles it;
+what the app shows is not evidence about the CLI.
 
 ## The sign-in put the wrong account in the profile
 

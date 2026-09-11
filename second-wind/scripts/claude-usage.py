@@ -10,8 +10,10 @@ prompt and it never answers a dialog: a trust prompt is reported, not accepted.
                   [--dump PATH]
 """
 import argparse
+import json
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -32,6 +34,13 @@ LOGIN = (r"Login:\s*Expired|/login\s+to|please\s+(?:sign|log)\s+in|"
          r"OAuth\s+token\s+(?:has\s+)?expired|credentials\s+(?:have\s+)?expired")
 USED = r"\d+%\s*used"
 RIGHT = b"\x1b[C"
+# A nested session inherits markers that change how the client behaves, and a
+# key in the environment would bill the API instead of the plan being measured.
+# The preflight and the panel drop the same list, or the two would be answering
+# about different sign-ins.
+ENV_DROP = ("CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDECODE", "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")
 # Claude's own names for the two windows second-wind reports.
 FIVE_HOUR = r"Current\s+session"
 SEVEN_DAY = r"Current\s+week\s+\(all\s+models\)"
@@ -65,14 +74,83 @@ def parse_panel(text):
     return data
 
 
-def profile_dir(role, cfg):
-    """Which profile this role's usage is read through. A configured reader
-    profile exists so a background reader never shares the desktop app's
-    credential, and when it is on, the primary is read through it."""
+def profile_candidates(role, cfg):
+    """Which profiles this role's usage can be read through, best first.
+
+    A configured reader profile exists so a background reader never shares the
+    desktop app's credential, and when it is on the primary is read through it.
+    The role's own directory stays on the list behind it, because a reader
+    profile whose sign-in has gone must not hide a profile whose sign-in is
+    fine. One hard-coded choice did exactly that, and the panel reported the
+    account unreadable while a working sign-in sat one directory away.
+    """
+    own = (cfg.get(role) or {}).get("config_dir") or "~/.claude"
     reader = cfg.get("reader") or {}
     if role == "primary" and reader.get("enabled") and reader.get("config_dir"):
-        return reader["config_dir"]
-    return (cfg.get(role) or {}).get("config_dir") or "~/.claude"
+        return [reader["config_dir"], own]
+    return [own]
+
+
+def profile_env(config_dir):
+    """The environment one profile is read under, for a subprocess.
+
+    Setting CLAUDE_CONFIG_DIR for the default profile breaks its keychain
+    lookup, so the default profile is read with the variable removed rather
+    than set to its own path.
+    """
+    resolved = swlib.expand(config_dir)
+    env = dict(os.environ)
+    for name in ENV_DROP:
+        env.pop(name, None)
+    if resolved == os.path.join(swlib.HOME, ".claude"):
+        env.pop("CLAUDE_CONFIG_DIR", None)
+    else:
+        env["CLAUDE_CONFIG_DIR"] = resolved
+    return env
+
+
+def auth_state(config_dir):
+    """(signed in, address) for one profile, from the client's own answer.
+
+    `claude auth status` prints JSON and costs about a second. Driving the
+    terminal UI to learn the same thing costs a minute and then reads it off a
+    dialog, which is how a signed-out profile used to spend the whole refresh
+    budget before saying so. None means the client would not answer, and the
+    caller then tries the panel rather than declaring a fault it cannot prove.
+    """
+    try:
+        done = subprocess.run(["claude", "auth", "status"], capture_output=True,
+                              text=True, timeout=20, env=profile_env(config_dir))
+    except Exception:
+        return None, None
+    try:
+        data = json.loads(done.stdout or "")
+    except ValueError:
+        return None, None
+    if not isinstance(data, dict) or "loggedIn" not in data:
+        return None, None
+    return bool(data.get("loggedIn")), data.get("email") or None
+
+
+def no_sign_in_message(dirs):
+    """What to say when no profile for this role has a Claude Code sign-in.
+
+    This is not an expired token, and the old wording called it one: it asked
+    for a fresh sign-in on an account already signed in, which reads as the
+    tool being broken. The Claude desktop app keeps its own credential and
+    hands it to the session it starts, over a socket rather than through the
+    keychain, so an account can be signed in in the app while every profile on
+    disk is signed out and no separate reader can borrow it. The one thing that
+    fixes it is a sign-in in the profile the reader uses, so the message is
+    that command.
+    """
+    first = swlib.expand(dirs[0])
+    shown = swlib.tilde(first)
+    command = ("claude auth login" if first == os.path.join(swlib.HOME, ".claude")
+               else "CLAUDE_CONFIG_DIR=%s claude auth login" % shown)
+    return ("NO CLI SIGN-IN: %s has no Claude Code sign-in of its own. Being "
+            "signed in to the desktop app is not enough, because the app keeps "
+            "that credential to itself. Run: %s" % (shown, command))
 
 
 def read_screen(config_dir, cwd, budget):
@@ -85,14 +163,7 @@ def read_screen(config_dir, cwd, budget):
     screen = ptyreader.Screen(
         ["claude", "--model", "haiku"], cwd=cwd,
         env_set={} if default_dir else {"CLAUDE_CONFIG_DIR": resolved},
-        # A nested session inherits markers that change how the CLI behaves.
-        # A key in the environment would bill the API instead of the plan
-        # this reader is measuring, so those go too.
-        env_drop=("CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID",
-                  "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDECODE",
-                  "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
-                  "ANTHROPIC_AUTH_TOKEN") +
-                 (("CLAUDE_CONFIG_DIR",) if default_dir else ()))
+        env_drop=ENV_DROP + (("CLAUDE_CONFIG_DIR",) if default_dir else ()))
     ends = time.time() + budget
 
     def left(cap):
@@ -175,16 +246,33 @@ def main():
     a = ap.parse_args()
 
     cfg = swlib.load_config()
-    config_dir = a.config_dir or profile_dir(a.role, cfg)
     refresh = cfg.get("refresh") or {}
     cwd = swlib.expand(a.cwd or refresh.get("workdir")
                        or refresh.get("working_dir") or "~")
     out = a.out or swlib.usage_path(a.role)
     status = a.status or swlib.status_path(a.role)
-    if not os.path.isdir(swlib.expand(config_dir)):
-        note(status, "FAILED: the %s profile directory %s does not exist."
-             % (a.role, swlib.tilde(swlib.expand(config_dir))))
+    wanted = [a.config_dir] if a.config_dir else profile_candidates(a.role, cfg)
+    present = [d for d in wanted if os.path.isdir(swlib.expand(d))]
+    if not present:
+        note(status, "FAILED: no profile directory for %s exists: %s."
+             % (a.role, ", ".join(swlib.tilde(swlib.expand(d)) for d in wanted)))
         return 1
+    # Ask each profile whether it is signed in before spending the budget on
+    # one. A profile the client will not answer about is still tried, because a
+    # silent client is not evidence of a signed-out profile.
+    config_dir, silent = None, []
+    for candidate in present:
+        signed_in, _ = auth_state(candidate)
+        if signed_in:
+            config_dir = candidate
+            break
+        if signed_in is None:
+            silent.append(candidate)
+    if config_dir is None:
+        if not silent:
+            note(status, no_sign_in_message(present))
+            return 2
+        config_dir = silent[0]
     if not os.path.isdir(cwd):
         note(status, "FAILED: the readers' working directory %s does not exist. "
                      "Rerun setup.py --write." % swlib.tilde(cwd))

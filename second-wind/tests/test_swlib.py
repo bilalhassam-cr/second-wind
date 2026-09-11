@@ -217,6 +217,9 @@ class Status(Base):
             "OK": "ok",
             "OK: prompt-free usage panel read.": "ok",
             "LOGIN EXPIRED: sign in to primary": "login",
+            "NO CLI SIGN-IN: ~/.claude-usage has no Claude Code sign-in of "
+            "its own. Run: CLAUDE_CONFIG_DIR=~/.claude-usage claude auth login":
+                "nologin",
             "TRUST PROMPT: codex asked to trust the directory": "trust",
             "PARSER MISMATCH: client 0.152.1, expected labels not found": "parser",
             "FAILED: the panel never appeared": "failed",
@@ -289,6 +292,8 @@ class Brief(Base):
         cases = {
             "PARSER MISMATCH: client 2.1.251, expected labels not found":
                 "Work Claude: the usage panel labels moved, the parser needs an update",
+            "NO CLI SIGN-IN: ~/.claude-usage has no Claude Code sign-in":
+                "Work Claude: no Claude Code sign-in for its reader profile",
             "FAILED: the panel never appeared":
                 "Work Claude: the last refresh failed",
             "OK": "Work Claude: no current reading, refreshing",

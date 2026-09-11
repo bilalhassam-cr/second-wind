@@ -43,7 +43,7 @@ WORKER_ROLES = ("secondary", "codex", "codex2", "codex3", "grok", "cursor")
 DEAD_SECONDS = 3600
 DEFAULT_INTERVAL_MINUTES = 15
 CONFIG_VERSION = 4
-STATUS_KINDS = ("ok", "login", "trust", "parser", "failed", "none")
+STATUS_KINDS = ("ok", "login", "nologin", "trust", "parser", "failed", "none")
 
 
 # ---------------------------------------------------------------- paths
@@ -412,7 +412,8 @@ def destinations(cfg=None, now=None):
             continue
         usage = load_usage(worker)
         live = (freshness(worker, now=now, cfg=cfg) in ("fresh", "stale")
-                and status_kind(worker) not in ("login", "trust", "parser"))
+                and status_kind(worker) not in ("login", "nologin", "trust",
+                                                "parser"))
         rows.append({"worker": worker,
                      "label": route_label(worker, cfg),
                      "usage": usage_summary(worker, cfg=cfg, now=now),
@@ -1114,6 +1115,11 @@ def status_kind(role=None, message=None):
         return "none"
     if upper.startswith("OK"):
         return "ok"
+    # Ordered before the expiry test: a profile that never had a sign-in is a
+    # different fault from one whose token ran out, and only the first is
+    # explained by the credential living in the desktop app.
+    if "NO CLI SIGN-IN" in upper:
+        return "nologin"
     if "LOGIN EXPIRED" in upper:
         return "login"
     if "TRUST PROMPT" in upper:
@@ -1128,6 +1134,7 @@ def status_words(kind):
     return {
         "ok": "ready",
         "login": "login expired",
+        "nologin": "no CLI sign-in",
         "trust": "trust prompt blocked",
         "parser": "parser mismatch",
         "failed": "refresh failed",
@@ -1139,6 +1146,7 @@ def status_phrase(kind):
     """A sentence fragment for the session brief."""
     return {
         "login": "login expired, sign in again",
+        "nologin": "no Claude Code sign-in for its reader profile",
         "trust": "a trust prompt blocked the reader",
         "parser": "the usage panel labels moved, the parser needs an update",
         "failed": "the last refresh failed",
@@ -1409,6 +1417,7 @@ FAULT_CODES = (
     ("does not exist", "directory-missing"),
     ("not on path", "command-missing"),
     ("not signed in", "not-signed-in"), ("login", "not-signed-in"),
+    ("no cli sign-in", "not-signed-in"),
     ("status line", "statusline"),
     ("hook", "hooks"),
     ("launchd", "launchd"), ("scheduled", "launchd"),

@@ -1098,8 +1098,8 @@ def account_row(role, cfg):
     # "none" means no status file, which is the ordinary case: statusline.sh
     # writes a reading without writing a status. Only the four real faults
     # override what the reading itself says.
-    problem = kind in ("login", "trust", "parser", "failed")
-    blocking = kind in ("login", "trust", "parser")
+    problem = kind in ("login", "nologin", "trust", "parser", "failed")
+    blocking = kind in ("login", "nologin", "trust", "parser")
     live = state in ("fresh", "stale") and not blocking
     head = swlib.headroom(role, usage) if live else None
     if not enabled:
@@ -1459,10 +1459,11 @@ def cmd_check():
         kind = swlib.status_kind(role)
         detail = "%s (%s old)" % (state, swlib.short_age(age)) if age is not None \
             else "none"
-        if kind in ("login", "trust", "parser", "failed"):
+        if kind in ("login", "nologin", "trust", "parser", "failed"):
             detail += ", %s" % swlib.status_phrase(kind)
         row(role + " reading", detail)
-        if state in ("dead", "none") or kind in ("login", "trust", "parser"):
+        if state in ("dead", "none") or kind in ("login", "nologin", "trust",
+                                                 "parser"):
             message = "the %s reading is %s." % (
                 role, "missing or over an hour old" if state in ("dead", "none")
                 else swlib.status_phrase(kind))

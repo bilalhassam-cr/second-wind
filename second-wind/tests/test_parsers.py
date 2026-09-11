@@ -314,9 +314,16 @@ class ReaderMainTests(unittest.TestCase):
         self.status = os.path.join(self.tmp, "status.txt")
         self.out = os.path.join(self.tmp, "usage.json")
         self.real = claude.read_screen
+        # The sign-in preflight starts the real client, which would make these
+        # tests depend on whichever accounts this machine happens to hold. It
+        # is stubbed to "signed in" so each test exercises the reporting it is
+        # about; the preflight has tests of its own below.
+        self.real_auth = claude.auth_state
+        claude.auth_state = lambda config_dir: (True, "user@example.com")
 
     def tearDown(self):
         claude.read_screen = self.real
+        claude.auth_state = self.real_auth
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def run_main(self):
@@ -364,6 +371,89 @@ class ReaderMainTests(unittest.TestCase):
         self.assertEqual(record["seven_day_pct"], 35)
         self.assertEqual(record["client_version"], "2.1.251")
         self.assertIsInstance(record["cached_at"], int)
+
+    def test_a_profile_with_no_sign_in_says_so_without_starting_the_client(self):
+        """The fault found on 11 September 2026: the panel said "login
+        expired, sign in again" for an account that was signed in, because the
+        desktop app holds that credential and the reader profile had none of
+        its own. Expired and never-signed-in are different faults and the
+        reader now names the second one, with the command that fixes it, and
+        without spending a minute of budget finding out."""
+        claude.auth_state = lambda config_dir: (False, None)
+        started = []
+        claude.read_screen = lambda *args: started.append(args) or ("panel", "")
+        self.assertEqual(self.run_main(), 2)
+        self.assertEqual(started, [])
+        line = self.first_line()
+        self.assertTrue(line.startswith("NO CLI SIGN-IN:"), line)
+        self.assertIn("claude auth login", line)
+        self.assertEqual(swlib.status_kind(message=line), "nologin")
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_a_client_that_will_not_answer_still_gets_the_panel_tried(self):
+        """A silent client is not evidence of a signed-out profile, so the
+        reader falls through to the panel rather than reporting a fault it
+        cannot prove."""
+        claude.auth_state = lambda config_dir: (None, None)
+        claude.read_screen = lambda *args: ("panel", fixture(CLAUDE_FIXTURE))
+        self.assertEqual(self.run_main(), 0)
+        self.assertEqual(self.first_line(), "OK")
+
+
+class ProfileChoiceTests(unittest.TestCase):
+    """Which profile a role is read through, and in what order.
+
+    The reader profile is preferred when it is configured, and the role's own
+    directory stays behind it as the fallback. A reader profile whose sign-in
+    has gone used to hide a profile whose sign-in was fine, and the panel then
+    reported the account unreadable with a working sign-in one directory away.
+    """
+
+    def test_the_reader_profile_is_tried_first_then_the_role_s_own(self):
+        cfg = {"primary": {"config_dir": "~/.claude"},
+               "reader": {"enabled": True, "config_dir": "~/.claude-usage"}}
+        self.assertEqual(claude.profile_candidates("primary", cfg),
+                         ["~/.claude-usage", "~/.claude"])
+
+    def test_a_disabled_reader_leaves_the_role_on_its_own(self):
+        cfg = {"primary": {"config_dir": "~/.claude"},
+               "reader": {"enabled": False, "config_dir": "~/.claude-usage"}}
+        self.assertEqual(claude.profile_candidates("primary", cfg), ["~/.claude"])
+
+    def test_the_reader_profile_is_only_for_the_primary(self):
+        cfg = {"secondary": {"config_dir": "~/.claude-critic"},
+               "reader": {"enabled": True, "config_dir": "~/.claude-usage"}}
+        self.assertEqual(claude.profile_candidates("secondary", cfg),
+                         ["~/.claude-critic"])
+
+    def test_the_default_profile_is_read_with_the_variable_removed(self):
+        """Setting CLAUDE_CONFIG_DIR for the default profile breaks its
+        keychain lookup, so the preflight removes it rather than setting it to
+        the same path."""
+        env = claude.profile_env(os.path.join(swlib.HOME, ".claude"))
+        self.assertNotIn("CLAUDE_CONFIG_DIR", env)
+
+    def test_another_profile_is_read_with_the_variable_set(self):
+        env = claude.profile_env("~/.claude-usage")
+        self.assertEqual(env["CLAUDE_CONFIG_DIR"],
+                         os.path.join(swlib.HOME, ".claude-usage"))
+
+    def test_the_preflight_drops_the_same_variables_as_the_panel(self):
+        """Both look at one sign-in or they are answering about different
+        ones."""
+        env = claude.profile_env("~/.claude-usage")
+        for name in claude.ENV_DROP:
+            self.assertNotIn(name, env, name)
+
+    def test_the_command_names_the_profile_it_has_to_run_under(self):
+        message = claude.no_sign_in_message(["~/.claude-usage"])
+        self.assertIn("CLAUDE_CONFIG_DIR=~/.claude-usage claude auth login",
+                      message)
+
+    def test_the_default_profile_needs_no_variable_in_the_command(self):
+        message = claude.no_sign_in_message([os.path.join(swlib.HOME, ".claude")])
+        self.assertIn("Run: claude auth login", message)
+        self.assertNotIn("CLAUDE_CONFIG_DIR", message)
 
 
 class PickerTests(unittest.TestCase):

@@ -101,7 +101,8 @@ On-demand availability is context and does not override those pools. Unknown sor
 ├── usage-grok.json            last Grok weekly reading
 ├── usage-cursor.json          last Cursor monthly-pools reading
 ├── refresh-status-*.txt       one outcome line per role: OK, LOGIN EXPIRED,
-│                              TRUST PROMPT, PARSER MISMATCH or FAILED
+│                              NO CLI SIGN-IN, TRUST PROMPT, PARSER MISMATCH
+│                              or FAILED
 ├── replaced-statusline.json   any status line we replaced, restored on uninstall
 ├── no-failover                present = automatic handover off
 ├── mode                       the one route armed for every session
