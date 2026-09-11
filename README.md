@@ -255,8 +255,11 @@ Tools that read the usage endpoint directly are faster and will keep being
 faster. They also need your token, which is the thing the policy is about. This
 one stays on the official clients and pays for it in speed.
 
-Claude and Codex report a 5-hour and a weekly window. Grok reports a weekly
-window only. Cursor reports Included, Auto and API monthly pools plus a reset
+Claude and Codex report a 5-hour and a weekly window. Some Claude plans print a
+third window for a single model alongside the all-models week, and it can be the
+fuller of the two. That one is read under the model's own name and shown at the
+end of that account's row, never in the weekly column, where it would be taken
+for the weekly figure. Grok reports a weekly window only. Cursor reports Included, Auto and API monthly pools plus a reset
 date, and on-demand can read as unavailable even when the account holds credit.
 Codex reports what is left, and the parser converts it to what is used so every
 account is measured the same way. Codex monthly credits cap overage only, so they
