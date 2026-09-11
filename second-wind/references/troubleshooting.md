@@ -63,6 +63,22 @@ on one credential log each other out. The cure is the optional reader profile, a
 third Claude profile signed into the same account, used only for reading:
 `setup.py --write ... --reader ~/.claude-usage`.
 
+## The dashboard cannot read the account the desktop app is signed into
+
+The Claude desktop app runs status line scripts, but its payload carries no
+`rate_limits` object: measured on 11 September 2026 it held `context_window`,
+`cost`, `model`, `thinking`, `fast_mode`, `session_id`, `transcript_path`,
+`version` and `workspace`, and nothing about plan limits. A terminal session on
+the same profile does supply them. So the status line route cannot read an
+account whose only session is in the app, whatever its credentials, and the app
+keeps its own credential private besides. The account needs a Claude Code
+sign-in of its own in some profile. See NO CLI SIGN-IN below.
+
+Use `claude auth login --claudeai`, not `claude setup-token`. The token flow
+asks for `user:inference` alone, and the usage panel needs `user:profile`: a
+token from it authenticates and then reports API usage billing with no plan
+windows at all.
+
 ## A reading says NO CLI SIGN-IN
 
 That profile has no Claude Code credential of its own, which is a different

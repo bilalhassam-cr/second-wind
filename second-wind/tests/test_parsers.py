@@ -124,6 +124,58 @@ class ClaudeTests(unittest.TestCase):
         self.assertIn("Current week (Fable)", fixture(CLAUDE_FIXTURE))
         self.assertEqual(self.data["seven_day_pct"], 35)
 
+    def test_the_per_model_week_is_kept_under_its_own_name(self):
+        """Not winning is not the same as being thrown away. A model week can
+        be much the fuller of the two, and it was dropped entirely."""
+        self.assertEqual(self.data["model_weeks"],
+                         {"Fable": {"pct": 42,
+                                    "resets": "Sep 7 at 2:59am (UTC)"}})
+
+    def test_a_window_never_takes_the_next_window_s_reset(self):
+        """The fault that shipped a wrong reset time: each window was read
+        from a fixed-width slice, which ran past its own reset line into the
+        next window's. A window with no reset line of its own reports none,
+        rather than borrowing the week's."""
+        panel = "\n".join([
+            "  Current session", "", "  17% used", "",
+            "  Current week (all models)", "", "  48% used", "",
+            "  Resets Sep 14 at 3am (Africa/Johannesburg)", ""])
+        data = claude.parse_panel(panel)
+        self.assertEqual(data["five_hour_pct"], 17)
+        self.assertIsNone(data["five_hour_resets"])
+        self.assertEqual(data["seven_day_pct"], 48)
+        self.assertEqual(data["seven_day_resets"],
+                         "Sep 14 at 3am (Africa/Johannesburg)")
+
+    def test_a_widely_padded_panel_still_reads_both_windows(self):
+        """A real terminal pads every line to the width of the window, which
+        is what pushed the figures outside the old slice: the live panel that
+        exposed this is far wider than the captured fixtures."""
+        pad = " " * 400
+        panel = "\n".join([
+            "  Current session" + pad, pad, "  34% used" + pad, pad,
+            "  Resets 12pm (Africa/Johannesburg)" + pad, pad,
+            "  Current week (all models)" + pad, pad, "  48% used" + pad, pad,
+            "  Resets Sep 14 at 3am (Africa/Johannesburg)" + pad, pad])
+        data = claude.parse_panel(panel)
+        self.assertEqual(data["five_hour_pct"], 34)
+        self.assertEqual(data["five_hour_resets"], "12pm (Africa/Johannesburg)")
+        self.assertEqual(data["seven_day_pct"], 48)
+        self.assertEqual(data["seven_day_resets"],
+                         "Sep 14 at 3am (Africa/Johannesburg)")
+
+    def test_a_half_drawn_repaint_does_not_replace_a_full_one(self):
+        """The panel repaints while it scans local sessions, so the buffer
+        holds several renders. A later render with no figure under a label
+        leaves the earlier reading alone."""
+        good = "\n".join(["Current session", "34% used",
+                           "Resets 12pm (Africa/Johannesburg)",
+                           "Current week (all models)", "48% used",
+                           "Resets Sep 14 at 3am (Africa/Johannesburg)"])
+        data = claude.parse_panel(good + "\nCurrent session\n")
+        self.assertEqual(data["five_hour_pct"], 34)
+        self.assertEqual(data["five_hour_resets"], "12pm (Africa/Johannesburg)")
+
     def test_nothing_parsed_from_nothing(self):
         empty = claude.parse_panel("")
         self.assertIsNone(empty["five_hour_pct"])

@@ -443,6 +443,36 @@ class BriefCard(Base):
         self.assertNotIn(swlib.BAR_FULL, codex)
         self.assertNotIn("98", codex)
 
+    def test_a_model_week_goes_on_the_row_and_never_in_a_column(self):
+        """Some plans carry a weekly window named after one model, and it can
+        be the fuller of the two. It belongs on the row, not in the weekly
+        column, where it would be read as the weekly figure."""
+        self.write_config(primary={"config_dir": "~/.claude",
+                                   "label": "Work Claude"})
+        self.write_usage("primary", age_seconds=60, five_hour_pct=35,
+                         seven_day_pct=48,
+                         extra={"model_weeks": {"Fable": {"pct": 81}}})
+        row = [line for line in swlib.brief_card(now=NOW)
+               if line.startswith("Work Claude")][0]
+        self.assertIn("Fable week 81%", row)
+        self.assertIn(" 35%", row)
+        self.assertIn(" 48%", row)
+        # the note sits after both bars, not inside them
+        self.assertLess(row.index("48%"), row.index("Fable week"))
+
+    def test_the_fullest_model_week_is_named_first(self):
+        note = swlib.model_week_note(
+            {"extra": {"model_weeks": {"Quiet": {"pct": 12},
+                                       "Loud": {"pct": 91}}}})
+        self.assertEqual(note, "Loud week 91%, Quiet week 12%")
+
+    def test_no_model_week_adds_nothing_to_the_row(self):
+        self.assertEqual(swlib.model_week_note({"extra": {}}), "")
+        self.assertEqual(swlib.model_week_note({}), "")
+        self.assertEqual(
+            swlib.model_week_note({"extra": {"model_weeks":
+                                             {"Fable": {"pct": None}}}}), "")
+
     def test_no_accounts_means_no_card_rather_than_a_bare_header(self):
         self.assertEqual(swlib.brief_card(), [])
 

@@ -44,27 +44,72 @@ ENV_DROP = ("CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID",
 # Claude's own names for the two windows second-wind reports.
 FIVE_HOUR = r"Current\s+session"
 SEVEN_DAY = r"Current\s+week\s+\(all\s+models\)"
+# Any weekly window named after a model rather than after all of them.
+MODEL_WEEK = r"Current\s+week\s+\(([^)]+)\)"
+# Where one window's text stops: at the next window's heading.
+NEXT_WINDOW = r"Current\s+(?:session|week)"
+# The same figure as USED above, with the number captured.
+USED_PCT = r"(\d+)%\s*used"
+RESETS = r"Resets\s+([^\n]{1,60})"
+
+
+def window(text, start):
+    """One window's own text, from its label to the next window's label.
+
+    A fixed-width slice was used here, and it reached past the window's reset
+    line into the next window's. The five-hour figure then carried the week's
+    reset date, cut off wherever the slice happened to end. A reset line
+    belongs to exactly one window, so the boundary is the next heading.
+    """
+    following = re.search(NEXT_WINDOW, text[start:])
+    return text[start:start + following.start()] if following else text[start:]
+
+
+def read_window(text, label):
+    """(percentage used, reset string) for one window, or None.
+
+    The panel repaints while it scans local sessions, so the buffer holds
+    several renders and the later ones can be half drawn. Every render is read
+    and the last one carrying a figure wins.
+    """
+    found = None
+    for hit in re.finditer(label, text):
+        block = window(text, hit.end())
+        used = re.search(USED_PCT, block)
+        if not used:
+            continue
+        resets = re.search(RESETS, block)
+        found = (int(used.group(1)),
+                 resets.group(1).strip() if resets else None)
+    return found
 
 
 def parse_panel(text):
-    """Pull the two windows out of the panel text, by label.
-
-    The panel repaints while it scans local sessions, so the buffer holds
-    several renders and the later ones can be half drawn. Read every render and
-    keep the last one that carried a figure for that label.
-    """
+    """Pull the windows out of the panel text, by label."""
     data = {"five_hour_pct": None, "five_hour_resets": None,
             "seven_day_pct": None, "seven_day_resets": None,
-            "plan": None, "client_version": ""}
+            "model_weeks": {}, "plan": None, "client_version": ""}
     for key, label in (("five_hour", FIVE_HOUR), ("seven_day", SEVEN_DAY)):
-        for hit in re.finditer(label, text):
-            chunk = text[hit.end():hit.end() + 240]
-            found = re.search(r"(\d+)%\s*used", chunk)
-            if not found:
-                continue
-            resets = re.search(r"Resets\s+([^\n]{1,60})", chunk)
-            data[key + "_pct"] = int(found.group(1))
-            data[key + "_resets"] = resets.group(1).strip() if resets else None
+        got = read_window(text, label)
+        if got:
+            data[key + "_pct"], data[key + "_resets"] = got
+    # A weekly window named after one model, which some plans carry alongside
+    # the all-models week. It is not the weekly figure and must never stand in
+    # for it, so it is filed under the model's own name. It is still worth
+    # having: a model week at 81% while the all-models week sits at 48% is the
+    # number that decides whether to change model, and the panel dropped it.
+    for hit in re.finditer(MODEL_WEEK, text):
+        name = " ".join(hit.group(1).split())
+        if name.lower() == "all models":
+            continue
+        block = window(text, hit.end())
+        used = re.search(USED_PCT, block)
+        if not used:
+            continue
+        resets = re.search(RESETS, block)
+        data["model_weeks"][name] = {
+            "pct": int(used.group(1)),
+            "resets": resets.group(1).strip() if resets else None}
     plan = re.search(r"·\s*(Claude\s+[A-Za-z]+)", text)
     if plan:
         data["plan"] = " ".join(plan.group(1).split())
@@ -323,7 +368,8 @@ def main():
         "seven_day_pct": data["seven_day_pct"],
         "five_hour_resets": data["five_hour_resets"],
         "seven_day_resets": data["seven_day_resets"],
-        "extra": {"config_dir": swlib.tilde(swlib.expand(config_dir))},
+        "extra": {"config_dir": swlib.tilde(swlib.expand(config_dir)),
+                  "model_weeks": data["model_weeks"]},
         "client_version": version,
         "cached_at": int(time.time()),
     }

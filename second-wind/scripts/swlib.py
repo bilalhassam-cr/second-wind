@@ -1352,6 +1352,24 @@ def _pct_cell(pct):
     return "n/a".rjust(4) if pct is None else ("%d%%" % round(pct)).rjust(4)
 
 
+def model_week_note(usage):
+    """A weekly window named after one model, for the end of that role's row.
+
+    Some plans carry a per-model week alongside the all-models one, and it can
+    be much the fuller of the two. It is not shown as a bar because it is not
+    one of the two columns, and putting it in a column would invite reading it
+    as the weekly figure. Shown highest first, because that is the one that
+    decides whether to change model.
+    """
+    weeks = (usage.get("extra") or {}).get("model_weeks") or {}
+    rows = []
+    for name, window in weeks.items():
+        pct = number((window or {}).get("pct"))
+        if pct is not None:
+            rows.append((pct, "%s week %d%%" % (name, round(pct))))
+    return ", ".join(text for _, text in sorted(rows, reverse=True))
+
+
 # ------------------------------------------------------------ field notes
 
 # A test round's diary: what setup did, what the readers reported over time,
@@ -1595,7 +1613,8 @@ def brief_card(cfg=None, now=None):
             rows.append("%s  monthly pools: %s" % (label, pools or "none reported"))
             continue
         five, week = number(usage.get("five_hour_pct")), number(usage.get("seven_day_pct"))
-        notes = [status_phrase(status_kind(role)), identity_drift(role, cfg, now=now)]
+        notes = [status_phrase(status_kind(role)), identity_drift(role, cfg, now=now),
+                 model_week_note(usage)]
         if five is None and week is None and role in CODEX_ROLES \
                 and pool(usage, "monthly_pct") is not None:
             # A Free workspace: one monthly window, which is not the 5-hour or
