@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -1205,6 +1206,169 @@ def cmd_accounts(a):
 # ---------------------------------------------------------------- check
 
 
+# Where a parser fault is reported. A panel this build has never seen is a
+# normal event: the clients change their panels without notice.
+ISSUES = "https://github.com/bilalhassam-cr/second-wind/issues"
+
+
+def _bare_bar(line):
+    """True when a line carrying a percentage says nothing else: a bar and a
+    figure, with the window's name on the line above. Claude and Grok draw
+    them that way; a Codex line names its own window and needs no label."""
+    words = re.sub(r"\b(?:used|left)\b", " ", line, flags=re.I)
+    return not re.search(r"[A-Za-z]", re.sub(r"[^A-Za-z]", " ", words))
+
+
+def _panel_extract(text, cap=24):
+    """The usage part of a panel, whatever client printed it.
+
+    Every client marks a window with a percentage, and some of them put the
+    window's name on the line above the bar rather than beside it. So a line
+    carrying a percentage is kept, and the line before it is kept as its label
+    when that one carries no percentage of its own. That reads the Claude
+    screen, where a window is a heading then a bar, and the Codex box, where a
+    heading can own the lines beneath it, without a rule per client.
+    """
+    # Box verticals belong to no value, and a bar drawn the width of a wide
+    # terminal would wrap this output into uselessness: a long run of one bar
+    # glyph is shown ten wide, which keeps the shape and the tail after it.
+    lines = [" ".join(re.sub(r"([\u2580-\u259f])\1{9,}",
+                             lambda hit: hit.group(1) * 10,
+                             re.sub(r"[\u2502\u2503|]", " ", line)).split())
+             for line in text.splitlines()]
+    keep, out = set(), []
+    for i, line in enumerate(lines):
+        if not line:
+            continue
+        if re.search(r"Account:|Plan:|Credits:", line):
+            keep.add(i)
+        if re.search(r"\d+\s*%", line):
+            keep.add(i)
+            if not _bare_bar(line):
+                continue
+            # A bar with no words of its own is named by the line above it.
+            for back in range(i - 1, max(i - 3, -1), -1):
+                if lines[back] and not re.search(r"\d+\s*%", lines[back]):
+                    keep.add(back)
+                    break
+    for i in sorted(keep):
+        out.append(lines[i])
+    return out[:cap], max(0, len(out) - cap)
+
+
+def _read_line(usage):
+    """What the reader stored, in the words the card uses."""
+    def window(pct, resets):
+        if pct is None:
+            return "none"
+        return "%d%% used%s" % (round(pct), ", resets %s" % resets if resets else "")
+    parts = ["plan %s" % (usage.get("plan") or "unknown"),
+             "5-hour %s" % window(swlib.number(usage.get("five_hour_pct")),
+                                  usage.get("five_hour_resets")),
+             "weekly %s" % window(swlib.number(usage.get("seven_day_pct")),
+                                  usage.get("seven_day_resets"))]
+    extra = usage.get("extra") or {}
+    for key in ("monthly_pct", "monthly_credit_pct", "included_pct", "auto_pct",
+                "api_pct"):
+        if swlib.number(extra.get(key)) is not None:
+            parts.append("%s %d%% used" % (key[:-4].replace("_", " ").strip(),
+                                           round(swlib.number(extra[key]))))
+    for name, got in (extra.get("model_weeks") or {}).items():
+        if swlib.number((got or {}).get("pct")) is not None:
+            parts.append("%s week %d%% used" % (name, round(got["pct"])))
+    return ". ".join(parts)
+
+
+def cmd_verify(roles):
+    """Print each panel beside the figures read from it, so a wrong reading can
+    be seen rather than believed.
+
+    A reading is only as good as the parser, and a panel that changes shape
+    does not announce itself: the figures stay plausible and the row goes on
+    being wrong. Twice now a fault has been found only by putting a live
+    reading next to the panel it came from, so that comparison is a command
+    rather than an afternoon. Nothing here writes to the cache: the readings
+    printed are made for this run and thrown away.
+    """
+    if not swlib.is_configured():
+        print("NOT SET UP. Run: setup.py --detect")
+        return
+    cfg = swlib.load_config()
+    wanted = [role for role in swlib.ROLES
+              if swlib.reading_enabled(role, cfg)
+              and (not roles or role in roles)]
+    unknown = [role for role in roles if role not in swlib.ROLES]
+    if unknown:
+        print("No such role: %s. Roles are %s."
+              % (", ".join(unknown), ", ".join(swlib.ROLES)))
+        return
+    if not wanted:
+        print("No account has a usage reader to verify.")
+        return
+    workdir = swlib.expand((cfg.get("refresh") or {}).get("workdir") or "~")
+    print("Reading each panel live. This drives the clients, so give it a "
+          "minute.")
+    print()
+    hold = tempfile.mkdtemp(prefix="second-wind-verify-")
+    running = []
+    try:
+        for role in wanted:
+            if role in swlib.CLAUDE_ROLES:
+                argv = [sys.executable, os.path.join(HERE, "claude-usage.py"),
+                        "--role", role]
+            elif role in swlib.CODEX_ROLES:
+                argv = [sys.executable, os.path.join(HERE, "codex-status.py"),
+                        "--role", role]
+            elif role == "grok":
+                argv = [sys.executable, os.path.join(HERE, "grok-usage.py")]
+            else:
+                argv = [sys.executable, os.path.join(HERE, "cursor-usage.py")]
+            dump = os.path.join(hold, role + "-panel.txt")
+            argv += ["--cwd", workdir, "--dump", dump,
+                     "--out", os.path.join(hold, role + ".json"),
+                     "--status", os.path.join(hold, role + "-status.txt")]
+            running.append((role, dump, os.path.join(hold, role + ".json"),
+                            subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.DEVNULL)))
+        for role, dump, out, process in running:
+            try:
+                process.wait(timeout=300)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            print("%s  %s" % (role, swlib.role_label(role, cfg)))
+            status = os.path.join(hold, role + "-status.txt")
+            if not os.path.exists(dump):
+                word = "the reader wrote no panel"
+                if os.path.exists(status):
+                    with open(status) as handle:
+                        word = handle.read().strip() or word
+                print("  reader  %s" % word)
+                print()
+                continue
+            with open(dump) as handle:
+                lines, more = _panel_extract(handle.read())
+            for line in lines:
+                print("  panel   %s" % line)
+            if more:
+                print("  panel   (%d more line%s in %s)"
+                      % (more, "" if more == 1 else "s", dump))
+            if os.path.exists(out):
+                with open(out) as handle:
+                    print("  read    %s" % _read_line(json.load(handle)))
+            else:
+                print("  read    nothing was stored for this account")
+            print()
+        print("Every figure under read should follow from the panel above it. "
+              "Where one does not, the parser has met a panel it does not know: "
+              "keep the panel text and report it at")
+        print("  %s" % ISSUES)
+        print("Panels are kept in %s until the machine clears it." % hold)
+    finally:
+        for _, _, _, process in running:
+            if process.poll() is None:
+                process.kill()
+
+
 def cmd_check():
     """Answer the one question the tool cannot answer for itself: is this
     actually wired up? Every link in the chain fails silently by design, so
@@ -1579,6 +1743,9 @@ def build_parser():
                     help="print the usage panel, to be reproduced verbatim")
     ap.add_argument("--live", action="store_true",
                     help="with --accounts, run the readers first")
+    ap.add_argument("--verify", nargs="*", metavar="ROLE", default=None,
+                    help="read each panel live and print it beside the figures "
+                         "taken from it. Name roles to verify only those.")
     ap.add_argument("--check", action="store_true",
                     help="say whether second-wind is actually wired up")
     ap.add_argument("--uninstall", action="store_true")
@@ -1727,6 +1894,8 @@ def dispatch(a, ap):
         return cmd_accounts(a)
     if a.card:
         return cmd_card()
+    if a.verify is not None:
+        return cmd_verify(a.verify)
     if a.check:
         return cmd_check()
     if a.show:

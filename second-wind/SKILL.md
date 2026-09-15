@@ -24,8 +24,10 @@ python3 "$SW/scripts/setup.py" --accounts
 
 `--accounts` prints cached figures and spawns nothing, sorted by headroom; add
 `--live` to run the readers first, and only when the table says the readings are
-stale. `--check` says whether the chain is wired up. Both print `NOT SET UP` and
-exit 0 when nothing is configured, so read the output, not the exit code, and
+stale. `--check` says whether the chain is wired up. `--verify` reads each panel
+live and prints it beside the figures taken from it, which is how a figure that
+looks wrong gets settled rather than argued about. All three print `NOT SET UP`
+and exit 0 when nothing is configured, so read the output, not the exit code, and
 **offer to set it up in one line before getting on with the task.** A missing
 optional tool never blocks one.
 

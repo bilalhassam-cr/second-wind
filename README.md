@@ -102,12 +102,11 @@ keep them about the process.
 ## Install
 
 ```bash
-git clone https://github.com/<owner>/second-wind second-wind
+git clone https://github.com/bilalhassam-cr/second-wind second-wind
 cd second-wind && ./install.sh
 ```
 
-Use the repository address you were given for `<owner>`; the private repository
-page shows it. `install.sh` copies the skill into `~/.claude/skills/second-wind`. Pass a
+`install.sh` copies the skill into `~/.claude/skills/second-wind`. Pass a
 directory to install somewhere else, and `--link` (before the directory) to
 symlink the checkout instead of copying it, which is what you want if you are
 editing the skill itself. Either way it makes sure the shell scripts, `setup.py`
@@ -314,6 +313,23 @@ before you install this.
 Run `python3 "$SW/scripts/setup.py" --check` first. It prints every link in the
 chain and names what is blocking handover, and most faults are quicker to
 identify from that output than from anywhere else.
+
+If the figures themselves look wrong, or a row reads as idle on an account you
+have been using, run `--verify`. It reads each panel live and prints it beside
+the figures taken from it, so a parser meeting a panel it does not know can be
+seen rather than guessed at:
+
+```bash
+python3 "$SW/scripts/setup.py" --verify            # every account
+python3 "$SW/scripts/setup.py" --verify codex2     # or just one
+```
+
+Every figure it prints under `read` should follow from the panel above it. Where
+one does not, that is a parser fault and the panel text is the whole bug report:
+<https://github.com/bilalhassam-cr/second-wind/issues>. The clients change their
+panels without notice, and a wrong figure is worse than a missing one, because
+work gets routed on it.
+
 `second-wind/references/troubleshooting.md` covers the rest: the `TRUST PROMPT`,
 `PARSER MISMATCH`, `LOGIN EXPIRED` and `NO CLI SIGN-IN` statuses, a blank status
 bar, a delegation that exited zero having done nothing, and handover that will

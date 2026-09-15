@@ -37,8 +37,13 @@ jobs:
           # naming anyone. Add to this list, do not edit an entry out of it.
           # This file is excluded because it has to spell the words out to look
           # for them, and would otherwise match itself.
+          # The repository's own address is the one exception, and only as the
+          # whole URL: the install line and the issues link have to name it, and
+          # a public repo's owner is public already. A name anywhere else, in any
+          # other shape, still fails.
           if grep -rniE 'clearoute|humaniti|bilal' \
-               --exclude-dir=.git --exclude=checks.yml .; then
+               --exclude-dir=.git --exclude=checks.yml . \
+             | grep -viE 'github\.com/bilalhassam-cr/second-wind'; then
             echo "author or employer name found; use a neutral placeholder"; fail=1
           fi
           # An em dash is easy to reintroduce in prose and violates the public

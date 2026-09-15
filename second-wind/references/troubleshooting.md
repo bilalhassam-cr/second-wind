@@ -64,8 +64,10 @@ the row under its own name.
 Before 15 September 2026 the reader took the last line carrying each label. On
 the Plus panel that happened to be right, and on Pro Lite it reported a week a
 quarter spent as untouched, on an account that had been used all week. If a row
-looks too clean, run `codex-status.py --role <role> --dump /tmp/panel.txt` and
-compare the columns against the panel it came from.
+looks too clean, run `setup.py --verify <role>`, which reads the panel live and
+prints it beside the figures taken from it. Every figure under `read` should
+follow from the panel above it; where one does not, the parser has met a panel
+it does not know, and the panel text is the whole bug report.
 
 ## A reading says LOGIN EXPIRED
 

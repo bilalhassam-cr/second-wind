@@ -22,6 +22,7 @@ sys.path.insert(0, SCRIPTS)
 import swlib  # noqa: E402
 import setup as sw_setup  # noqa: E402
 
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 NOW = 1_700_000_000
 
 # The matchers that stop a hook firing on every unrelated event. Written out
@@ -2421,6 +2422,51 @@ class Check(Base):
     def test_the_same_client_version_says_so(self):
         self.configure(tested_versions={"claude": "2.1.259"})
         self.assertIn("2.1.259 installed, tested against the same", self.check())
+
+
+class VerifyOutput(unittest.TestCase):
+    """--verify exists so a reading can be compared against its own panel.
+
+    What it must get right is which lines of a panel say what a window holds,
+    for four clients that draw them four ways, and it must carry a model's
+    window through rather than flattening it into the plan's figures.
+    """
+
+    def extract(self, name):
+        with open(os.path.join(FIXTURES, name + ".txt")) as handle:
+            return sw_setup._panel_extract(handle.read())[0]
+
+    def test_a_named_bar_keeps_the_name_above_it(self):
+        # Claude draws a heading and then a bar with no words of its own.
+        lines = self.extract("claude-2.1.251")
+        self.assertIn("Current week (all models)", lines)
+        self.assertTrue(any("35% used" in line for line in lines))
+
+    def test_a_line_that_names_its_own_window_borrows_no_label(self):
+        # Codex names the window on the line that carries the figure, so the
+        # line above it is not part of the window and is not shown as one.
+        lines = self.extract("codex-0.152.1")
+        self.assertTrue(any("Weekly limit" in line and "87% left" in line
+                            for line in lines))
+        self.assertFalse(any("Session:" in line for line in lines))
+
+    def test_a_bar_drawn_the_width_of_the_terminal_is_shown_short(self):
+        # Cursor draws a bar hundreds of characters wide. Printed as it comes,
+        # it wraps the comparison this command exists to make.
+        for line in self.extract("cursor-2026.08.31-4057e58"):
+            self.assertLess(len(line), 60, line)
+
+    def test_the_reading_line_states_every_window_it_holds(self):
+        said = sw_setup._read_line({
+            "plan": "Pro Lite", "five_hour_pct": None, "seven_day_pct": 26,
+            "five_hour_resets": None, "seven_day_resets": "09:48 on 22 Sep",
+            "extra": {"model_weeks": {"GPT-5.3-Codex-Spark": {"pct": 0}}}})
+        self.assertIn("plan Pro Lite", said)
+        self.assertIn("5-hour none", said)
+        self.assertIn("weekly 26% used, resets 09:48 on 22 Sep", said)
+        # The window that caused the fault this command exists to catch: it is
+        # named, and it is not the weekly figure.
+        self.assertIn("GPT-5.3-Codex-Spark week 0% used", said)
 
 
 if __name__ == "__main__":
