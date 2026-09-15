@@ -2450,6 +2450,25 @@ class VerifyOutput(unittest.TestCase):
                             for line in lines))
         self.assertFalse(any("Session:" in line for line in lines))
 
+    def test_a_heading_that_carries_no_figure_is_kept(self):
+        # The Codex heading that caused the fault this command exists to catch.
+        # Without it the panel shows two Weekly lines and no way to tell them
+        # apart.
+        panel = ("  Weekly limit: [###] 74% left (resets 09:48 on 22 Sep)\n"
+                 "  GPT-5.3-Codex-Spark limit:\n"
+                 "  5h limit: [###] 100% left (resets 17:28)\n")
+        self.assertIn("GPT-5.3-Codex-Spark limit:",
+                      sw_setup._panel_extract(panel)[0])
+
+    def test_a_bar_between_a_name_and_its_figure_does_not_become_the_name(self):
+        # Grok puts the bar on its own line, so the line above the figure has
+        # no words in it and is not what names the window.
+        panel = ("Weekly limit (X Premium+)\n"
+                 "\u2588\u2588\u2591\u2591\u2591\u2591\n"
+                 "6%\n")
+        self.assertIn("Weekly limit (X Premium+)",
+                      sw_setup._panel_extract(panel)[0])
+
     def test_a_bar_drawn_the_width_of_the_terminal_is_shown_short(self):
         # Cursor draws a bar hundreds of characters wide. Printed as it comes,
         # it wraps the comparison this command exists to make.

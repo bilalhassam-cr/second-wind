@@ -1242,13 +1242,21 @@ def _panel_extract(text, cap=24):
             continue
         if re.search(r"Account:|Plan:|Credits:", line):
             keep.add(i)
+        # A label with no figure of its own, which is how a Codex panel names
+        # the windows underneath it. Dropping it leaves two lines that read as
+        # the same window, which is the confusion this command exists to end.
+        if re.search(r"\blimit:\s*$", line, re.I):
+            keep.add(i)
         if re.search(r"\d+\s*%", line):
             keep.add(i)
             if not _bare_bar(line):
                 continue
-            # A bar with no words of its own is named by the line above it.
-            for back in range(i - 1, max(i - 3, -1), -1):
-                if lines[back] and not re.search(r"\d+\s*%", lines[back]):
+            # A bar with no words of its own is named by a line above it. Grok
+            # puts the bar on its own line between the name and the figure, so
+            # the search goes up past any line that carries no words at all.
+            for back in range(i - 1, max(i - 4, -1), -1):
+                if re.search(r"[A-Za-z]", lines[back]) \
+                        and not re.search(r"\d+\s*%", lines[back]):
                     keep.add(back)
                     break
     for i in sorted(keep):
