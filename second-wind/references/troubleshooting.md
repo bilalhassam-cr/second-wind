@@ -52,6 +52,21 @@ parsers live in `scripts/claude-usage.py`, `codex-status.py`, `grok-usage.py` an
 `cursor-usage.py`, each with fixtures under `tests/fixtures`; adding the new
 wording to the fixtures and the pattern is the whole fix.
 
+## A row reads as idle on an account that has been used
+
+A Codex panel can print a window belonging to one model beside the plan's own,
+and the plan decides where it goes. Pro Lite puts a heading of the model's name
+after the plan's week and the model's windows beneath it; Plus puts the model's
+name in front of a label, above the plan's windows. Both are read per owner, so
+the columns carry the plan's figures and the model's week is shown at the end of
+the row under its own name.
+
+Before 15 September 2026 the reader took the last line carrying each label. On
+the Plus panel that happened to be right, and on Pro Lite it reported a week a
+quarter spent as untouched, on an account that had been used all week. If a row
+looks too clean, run `codex-status.py --role <role> --dump /tmp/panel.txt` and
+compare the columns against the panel it came from.
+
 ## A reading says LOGIN EXPIRED
 
 Sign that client in again. For a Claude profile, `claude auth login` in that

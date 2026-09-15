@@ -41,21 +41,60 @@ PANEL = r"Weekly\s+limit|5h\s+limit|Monthly\s+limit"
 MENU = r"show\s+current\s+session\s+configuration"
 
 
-def _limit(text, label):
-    """(percentage used, reset string) for one limit line, or None when the
-    panel has no such line. The panel prints what is left, so 100% left is
-    nothing used, and only a missing line means unknown."""
-    found = None
+# A panel prints the plan's own windows and, on some plans, windows belonging
+# to one model. The model's are labelled two ways: the model's name in front of
+# an ordinary label ("gpt-reserve Weekly limit:"), or a heading of its own
+# ("GPT-5.3-Codex-Spark limit:") with plain labels beneath it. Read as the
+# plan's own, either one replaces the figure that decides where work goes. The
+# Pro Lite panel prints its heading last, and a reader that took the final
+# Weekly line reported a quarter-spent week as untouched on both windows.
+LIMIT = re.compile(r"^\s*(?:(\S.*?)\s+)?"
+                   r"(5h|Weekly|Monthly\s+credit|Monthly)\s+limit:\s*(.*)$", re.I)
+HEADING = re.compile(r"^\s*(\S.*?)\s+limit:\s*$")
+# Every frame of the panel carries one of these above its windows, so a screen
+# still holding part of an earlier paint starts each frame at the plan again
+# rather than carrying a heading across.
+FRAME = re.compile(r"Account:|OpenAI\s+Codex\s*\(")
+
+
+def _windows(text):
+    """Every limit window in the panel, as {owner: {label: (used, resets)}},
+    where the owner None is the plan's own and any other is a model's.
+
+    The panel prints what is left, so 100% left is nothing used and only a
+    missing line means unknown. Within one owner the last line wins, so a
+    screen holding a half-painted earlier frame is read from the final one."""
+    found = {}
+    owner = None
     for line in text.splitlines():
-        if not re.search(label, line, re.I):
+        if FRAME.search(line):
+            owner = None
+        hit = LIMIT.match(line)
+        if hit:
+            left = re.search(r"(\d+)%\s*left", hit.group(3))
+            if not left:
+                continue
+            resets = re.search(r"resets\s+([^)]+)\)", hit.group(3), re.I)
+            name = " ".join(hit.group(1).split()) if hit.group(1) else owner
+            label = " ".join(hit.group(2).split()).lower()
+            found.setdefault(name, {})[label] = (
+                100 - int(left.group(1)),
+                resets.group(1).strip() if resets else None)
             continue
-        left = re.search(r"(\d+)%\s*left", line)
-        if not left:
-            continue
-        resets = re.search(r"resets\s+([^)]+)\)", line, re.I)
-        found = (100 - int(left.group(1)),
-                 resets.group(1).strip() if resets else None)
+        head = HEADING.match(line)
+        if head:
+            owner = " ".join(head.group(1).split())
     return found
+
+
+def _model_windows(windows, label):
+    """One window per model, under the model's own name, for extra."""
+    out = {}
+    for name, got in windows.items():
+        if name is None or label not in got:
+            continue
+        out[name] = {"pct": got[label][0], "resets": got[label][1]}
+    return out
 
 
 def parse_panel(text):
@@ -65,14 +104,24 @@ def parse_panel(text):
     text = re.sub(r"[│┃|]", " ", text)
     account = re.search(r"Account:\s+(\S+)(?:\s+\(([^)]+)\))?\s*$", text, re.M)
     version = re.search(r"OpenAI\s+Codex\s*\(v?([\d][\w.\-]*)\)", text)
-    five = _limit(text, r"5h\s+limit")
-    week = _limit(text, r"Weekly\s+limit")
-    month = _limit(text, r"Monthly\s+credit\s+limit")
+    windows = _windows(text)
+    # The plan's own windows, as against a model's. "own" and not "plan",
+    # because a plan elsewhere in this file is Pro Lite or Business Premium.
+    own = windows.get(None) or {}
+    five, week = own.get("5h"), own.get("weekly")
     # "Monthly limit" and "Monthly credit limit" are different lines: the first
     # is a Free workspace's only window, the second is purchased credits.
-    monthly = _limit(text, r"Monthly\s+limit")
+    month, monthly = own.get("monthly credit"), own.get("monthly")
     credits = re.search(r"Credits:\s+(.+?)\s*$", text, re.M)
     extra = {}
+    # A model's own week can be the fuller of the two and is worth having, but
+    # never in the weekly column, where it would be read as the weekly figure.
+    model_weeks = _model_windows(windows, "weekly")
+    model_five = _model_windows(windows, "5h")
+    if model_weeks:
+        extra["model_weeks"] = model_weeks
+    if model_five:
+        extra["model_five_hours"] = model_five
     if month:
         extra["monthly_credit_pct"], extra["monthly_credit_resets"] = month
     if monthly:

@@ -693,6 +693,56 @@ class CodexFreeWorkspacePanel(unittest.TestCase):
         data = codex.parse_panel(fixture(CODEX_FIXTURE))
         self.assertNotIn("monthly_pct", data["extra"])
 
+class CodexModelWindowPanels(unittest.TestCase):
+    """A panel can print a window belonging to one model beside the plan's own.
+
+    Both shapes below were captured on 15 September 2026, with the address
+    substituted. Read as the plan's own, a model's window replaces the figure
+    that decides where work goes: on the Pro Lite panel the heading comes last,
+    and a reader taking the final Weekly line called a quarter-spent week
+    untouched and reported the account as idle on both windows.
+    """
+
+    PRO_LITE = (
+        "\u2502  Account:                     user@example.com (Pro Lite)                     \u2502\n"
+        "\u2502  Weekly limit:                [\u2588\u2588\u2588\u2591\u2591] 74% left (resets 09:48 on 22 Sep)  \u2502\n"
+        "\u2502  GPT-5.3-Codex-Spark limit:                                                    \u2502\n"
+        "\u2502  5h limit:                    [\u2588\u2588\u2588\u2588\u2588] 100% left (resets 17:28)           \u2502\n"
+        "\u2502  Weekly limit:                [\u2588\u2588\u2588\u2588\u2588] 100% left (resets 12:28 on 22 Sep) \u2502\n"
+    )
+    PLUS = (
+        "\u2502  Account:                    user@example.com (Plus)                           \u2502\n"
+        "\u2502  gpt-reserve Weekly limit:   [\u2588\u2588\u2588\u2588\u2588] 100% left (resets 12:29 on 22 Sep) \u2502\n"
+        "\u2502  5h limit:                   [\u2588\u2588\u2588\u2591\u2591] 62% left (resets 14:10)            \u2502\n"
+        "\u2502  Weekly limit:               [\u2588\u2588\u2591\u2591\u2591] 37% left (resets 10:09 on 19 Sep)  \u2502\n"
+    )
+
+    def test_a_heading_below_the_plan_week_does_not_take_it_over(self):
+        data = codex.parse_panel(self.PRO_LITE)
+        self.assertEqual(data["seven_day_pct"], 26)
+        self.assertEqual(data["seven_day_resets"], "09:48 on 22 Sep")
+        # Pro Lite prints no five-hour window of the plan's own, and the one
+        # under the heading is not it.
+        self.assertIsNone(data["five_hour_pct"])
+
+    def test_the_model_under_a_heading_is_kept_under_its_own_name(self):
+        extra = codex.parse_panel(self.PRO_LITE)["extra"]
+        self.assertEqual(extra["model_weeks"]["GPT-5.3-Codex-Spark"]["pct"], 0)
+        self.assertEqual(extra["model_five_hours"]["GPT-5.3-Codex-Spark"]["resets"],
+                         "17:28")
+
+    def test_a_model_named_in_front_of_a_label_is_not_the_plan_week(self):
+        data = codex.parse_panel(self.PLUS)
+        self.assertEqual(data["five_hour_pct"], 38)
+        self.assertEqual(data["seven_day_pct"], 63)
+        self.assertEqual(data["extra"]["model_weeks"]["gpt-reserve"]["pct"], 0)
+
+    def test_a_panel_with_no_model_window_carries_no_model_block(self):
+        extra = codex.parse_panel(fixture(CODEX_FIXTURE))["extra"]
+        self.assertNotIn("model_weeks", extra)
+        self.assertNotIn("model_five_hours", extra)
+
+
 class CodexReaderEnvironment(unittest.TestCase):
     """Which sign-in the reader drives is decided by the environment it builds."""
 
