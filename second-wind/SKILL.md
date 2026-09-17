@@ -51,11 +51,17 @@ reading below 100% is never a full bar and 98% cannot be mistaken for spent. Tha
 is why it is drawn in Python and not described here in words: the same reading
 has to produce the same picture every time, or the panel is decoration rather
 than a measurement. `·····` means the client reports no such window, which is
-not zero. A row with no usable reading carries the reason instead of a bar, and
-a row can end in a note such as `Fable week 81%`: a weekly window for one model,
-which some Claude plans report alongside the all-models week. Print those notes
-as they come. They are part of the row, and the one that is fullest is often the
-one that decides where the next task should go.
+not zero. A row with no usable reading carries the reason instead of a bar. An
+account with a reading can take a second line, indented under the bars, holding
+its notes joined by ` · `: such as `resets 03:00 Sep 21` (when the weekly, or
+for Cursor and a Codex Free workspace the monthly, window resets, reworded to
+one `HH:MM Mon D` shape whichever client reported it) and
+`Fable week 81%` (a weekly window for one model, which some Claude plans report
+alongside the all-models week). The figures stay on the first line so they can
+be compared down the columns; the notes are read per account. Print that second
+line as it comes, indent included. It belongs to the account above it, and the
+reset time and the fullest model week are often what decides where the next
+task should go.
 
 The `--accounts` table is the different thing and stays as it is: it carries
 plan, version, headroom and reader status, and it is for diagnosis rather than

@@ -214,8 +214,9 @@ python3 "$SW/scripts/report.py" 7 --share
 
 ## The brief, the status line and the model picker
 
-At every level, a SessionStart hook puts one line per account in front of the
-session. In a terminal, the status line shows the same figures live. The desktop
+At every level, a SessionStart hook puts a usage panel in front of the session:
+the figures on one line per account, and any notes on the line under it. In a
+terminal, the status line shows the same figures live. The desktop
 app runs no status line at all, which is an open issue with Claude Code, so there
 the brief is the only surface.
 

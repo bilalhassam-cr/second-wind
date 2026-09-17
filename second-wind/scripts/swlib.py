@@ -1360,14 +1360,122 @@ def model_week_note(usage):
     one of the two columns, and putting it in a column would invite reading it
     as the weekly figure. Shown highest first, because that is the one that
     decides whether to change model.
+
+    Untouched (0%) is left off. A model week nobody has spent anything from
+    carries no signal about where to route the next task, which is the only
+    reason this note exists, so it is noise on every row that has one until
+    the day it is not. `--verify` still shows a 0% window: that command is
+    checking the parser against the panel, not deciding where work should go.
     """
     weeks = (usage.get("extra") or {}).get("model_weeks") or {}
     rows = []
     for name, window in weeks.items():
         pct = number((window or {}).get("pct"))
-        if pct is not None:
+        if pct:
             rows.append((pct, "%s week %d%%" % (name, round(pct))))
     return ", ".join(text for _, text in sorted(rows, reverse=True))
+
+
+def _is_monthly_only(role, usage):
+    """True for a Codex Free workspace: no 5-hour or weekly window, one
+    monthly one instead. Shared between brief_card's row choice and
+    reset_note, so the two never pick different windows to talk about."""
+    return (role in CODEX_ROLES and number(usage.get("five_hour_pct")) is None
+            and number(usage.get("seven_day_pct")) is None
+            and pool(usage, "monthly_pct") is not None)
+
+
+# Full and short month names, so a reset string is recognised whichever way
+# the client spelled it (Grok writes "September", everyone else "Sep").
+# Longest first: alternation tries left to right, and "sep" would otherwise
+# swallow the first three letters of "september" and leave the parse to fail
+# on the "tember" that follows rather than backtrack into the longer name.
+_MONTH_NAMES = {
+    "january": "Jan", "february": "Feb", "march": "Mar", "april": "Apr",
+    "may": "May", "june": "Jun", "july": "Jul", "august": "Aug",
+    "september": "Sep", "october": "Oct", "november": "Nov",
+    "december": "Dec", "jan": "Jan", "feb": "Feb", "mar": "Mar",
+    "apr": "Apr", "jun": "Jun", "jul": "Jul", "aug": "Aug", "sep": "Sep",
+    "sept": "Sep", "oct": "Oct", "nov": "Nov", "dec": "Dec",
+}
+_MONTHS_PATTERN = "|".join(sorted(_MONTH_NAMES, key=len, reverse=True))
+_RESET_MONTH_DAY = re.compile(r"\b(%s)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b"
+                              % _MONTHS_PATTERN, re.I)
+_RESET_DAY_MONTH = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(%s)\b"
+                              % _MONTHS_PATTERN, re.I)
+_RESET_TIME_12H = re.compile(r"\b(\d{1,2})(?::([0-5]\d))?\s*(am|pm)\b", re.I)
+_RESET_TIME_24H = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
+
+
+def _normalize_reset(text):
+    """A reset string reworded into one shape whichever client wrote it:
+    ``HH:MM Mon D``, 24-hour, or a bare ``Mon D`` when the source gave no
+    time at all (Cursor's pools reset on a date with no time of day).
+
+    Every client phrases this differently: Claude writes "Sep 21 at 3am",
+    Codex "16:17 on 19 Sep", Grok "September 18, 13:11". Read as prose those
+    are three orderings and two clock conventions for the same fact, which is
+    the inconsistency this exists to remove. Parsed once here rather than
+    guessed at per client: a month name and a day number are found in
+    whichever order they came in, a time is read as 12-hour with am/pm or
+    24-hour, whichever is present, and the two are put back together in one
+    order. A string this does not recognise is returned exactly as given
+    rather than mangled, since a wrong reformat is worse than an unfamiliar
+    one.
+    """
+    match = _RESET_MONTH_DAY.search(text)
+    if match:
+        month, day = match.group(1), match.group(2)
+    else:
+        match = _RESET_DAY_MONTH.search(text)
+        if not match:
+            return text
+        day, month = match.group(1), match.group(2)
+    month = _MONTH_NAMES.get(month.lower())
+    if not month:
+        return text
+    date_part = "%s %d" % (month, int(day))
+
+    hour = minute = None
+    twelve = _RESET_TIME_12H.search(text)
+    if twelve:
+        hour = int(twelve.group(1)) % 12
+        minute = int(twelve.group(2) or 0)
+        if twelve.group(3).lower() == "pm":
+            hour += 12
+    else:
+        full = _RESET_TIME_24H.search(text)
+        if full:
+            hour, minute = int(full.group(1)), int(full.group(2))
+    if hour is None:
+        return date_part
+    return "%02d:%02d %s" % (hour, minute, date_part)
+
+
+def reset_note(role, usage):
+    """When the window this row's figure came from resets, for the end of
+    that role's row.
+
+    Always the weekly window, except Cursor, which has no weekly window and
+    reports its pools' shared reset instead, and a Codex Free workspace, whose
+    only window is the monthly one. Reworded to one shape by
+    `_normalize_reset` so every row reads the same way regardless of which
+    client wrote it, after a trim of the trailing timezone parenthetical
+    Claude appends, which the panel does not need repeated on every row.
+    """
+    extra = usage.get("extra") or {}
+    if role == "cursor":
+        resets = extra.get("resets")
+    elif _is_monthly_only(role, usage):
+        resets = extra.get("monthly_resets")
+    else:
+        resets = usage.get("seven_day_resets")
+    resets = _known(resets)
+    if not resets:
+        return ""
+    resets = re.sub(r"\s*\([^()]*\)\s*$", "", resets).strip()
+    resets = _normalize_reset(resets)
+    return "resets %s" % resets if resets else ""
 
 
 # ------------------------------------------------------------ field notes
@@ -1581,6 +1689,16 @@ def brief_card(cfg=None, now=None):
     and pretending otherwise would file a number under the wrong heading. Rows
     with no usable reading carry the reason instead of a bar, never a stale
     figure redrawn as if it were current.
+
+    An account with a reading takes two lines. The first holds only what is
+    compared across accounts, the label and the figures, so the eye can run
+    down the columns without a note of one account pushing into the next. The
+    second, indented to the label's width and printed only when there is
+    something to say, holds what is read per account: the reset for the window
+    driving the row (weekly, or monthly for Cursor and a Codex Free workspace),
+    a reader fault, a changed sign-in, a per-model week. None of those is a
+    column, because each varies too much in length between clients to sit in a
+    fixed-width cell, and on the first line they made it long enough to wrap.
     """
     cfg = load_config() if cfg is None else cfg
     roles = enabled_roles(cfg)
@@ -1588,6 +1706,10 @@ def brief_card(cfg=None, now=None):
         return []
     labels = {role: role_label(role, cfg) for role in roles}
     width = max(len(label) for label in labels.values())
+
+    def note_line(notes):
+        notes = [note for note in notes if note]
+        return ["%s  %s" % (" " * width, " · ".join(notes))] if notes else []
 
     rows, ages = [], []
     for role in roles:
@@ -1610,17 +1732,19 @@ def brief_card(cfg=None, now=None):
                 for name, key in (("included", "included_pct"), ("auto", "auto_pct"),
                                   ("api", "api_pct"))
                 for value in [pool(usage, key)] if value is not None)
-            rows.append("%s  monthly pools: %s" % (label, pools or "none reported"))
+            row = "%s  monthly pools: %s" % (label, pools or "none reported")
+            rows.append(row)
+            rows.extend(note_line([reset_note(role, usage)]))
             continue
         five, week = number(usage.get("five_hour_pct")), number(usage.get("seven_day_pct"))
-        notes = [status_phrase(status_kind(role)), identity_drift(role, cfg, now=now),
-                 model_week_note(usage)]
-        if five is None and week is None and role in CODEX_ROLES \
-                and pool(usage, "monthly_pct") is not None:
+        notes = [reset_note(role, usage), status_phrase(status_kind(role)),
+                 identity_drift(role, cfg, now=now), model_week_note(usage)]
+        if _is_monthly_only(role, usage):
             # A Free workspace: one monthly window, which is not the 5-hour or
             # the weekly column, so it spans like the Cursor pools do.
             row = "%s  monthly limit %d%% used" % (label, round(pool(usage, "monthly_pct")))
-            rows.append("  ".join([row] + [note for note in notes if note]))
+            rows.append(row)
+            rows.extend(note_line(notes))
             continue
         cells = [usage_bar(five), usage_bar(week)]
         pcts = [_pct_cell(five), _pct_cell(week)]
@@ -1628,7 +1752,8 @@ def brief_card(cfg=None, now=None):
         # A reader fault or a changed sign-in goes on the row it belongs to. The
         # figures are still shown, because they are real; what the note says is
         # whose figures they are.
-        rows.append("  ".join([row] + [note for note in notes if note]))
+        rows.append(row)
+        rows.extend(note_line(notes))
 
     header = "%s  %s  %s" % (" " * width,
                              "5-hour".ljust(BAR_CELLS + 5),

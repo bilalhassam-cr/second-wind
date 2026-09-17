@@ -43,6 +43,15 @@ def read_json(path):
     return json.loads(read_text(path))
 
 
+def card_account(label, now=NOW):
+    """An account's figures line and its notes line, or None when it has no
+    notes. The notes line is the next entry, indented rather than labelled."""
+    card = swlib.brief_card(now=now)
+    i = next(i for i, line in enumerate(card) if line.startswith(label))
+    following = card[i + 1] if i + 1 < len(card) else ""
+    return card[i], following.strip() if following.startswith(" ") else None
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp(prefix="sw-test-")
@@ -420,6 +429,36 @@ class BriefCard(Base):
         self.assertIn("monthly pools: included 1%, auto 2%, api 0%", cursor)
         self.assertNotIn(swlib.BAR_EMPTY, cursor)
 
+    def test_a_known_reset_is_a_trailing_note_not_a_third_column(self):
+        self.write_config(primary={"config_dir": "~/.claude", "label": "Work Claude"})
+        self.write_usage("primary", age_seconds=60, five_hour_pct=2, seven_day_pct=16,
+                         seven_day_resets="Sep 21 at 3am (Africa/Johannesburg)")
+        row, notes = card_account("Work Claude")
+        # the timezone parenthetical is trimmed and the time/date reordered;
+        # the note sits under the bars, not beside them
+        self.assertTrue(row.endswith("16%"), row)
+        self.assertNotIn("resets", row)
+        self.assertEqual(notes, "resets 03:00 Sep 21")
+
+    def test_no_reset_reported_adds_nothing(self):
+        self.write_config(primary={"config_dir": "~/.claude", "label": "Work Claude"})
+        self.write_usage("primary", age_seconds=60, five_hour_pct=2, seven_day_pct=16)
+        row, notes = card_account("Work Claude")
+        self.assertNotIn("resets", row)
+        self.assertIsNone(notes)
+
+    def test_cursors_reset_is_its_own_pools_reset_not_a_weekly_one(self):
+        self.card()
+        cursor, notes = card_account("Cursor")
+        self.assertNotIn("resets", cursor)  # the fixture set no cursor reset
+        self.assertIsNone(notes)
+        self.write_usage("cursor", age_seconds=60,
+                         extra={"included_pct": 1, "auto_pct": 2, "api_pct": 0,
+                                "resets": "Sep 30"})
+        cursor, notes = card_account("Cursor")
+        self.assertTrue(cursor.endswith("api 0%"), cursor)
+        self.assertEqual(notes, "resets Sep 30")
+
     def test_the_footnote_reports_the_oldest_reading(self):
         self.assertEqual(self.card()[-1], "Readings 60s old.")
 
@@ -453,13 +492,35 @@ class BriefCard(Base):
         self.write_usage("primary", age_seconds=60, five_hour_pct=35,
                          seven_day_pct=48,
                          extra={"model_weeks": {"Fable": {"pct": 81}}})
-        row = [line for line in swlib.brief_card(now=NOW)
-               if line.startswith("Work Claude")][0]
-        self.assertIn("Fable week 81%", row)
+        row, notes = card_account("Work Claude")
         self.assertIn(" 35%", row)
         self.assertIn(" 48%", row)
-        # the note sits after both bars, not inside them
-        self.assertLess(row.index("48%"), row.index("Fable week"))
+        # the note sits under both bars, not inside them
+        self.assertNotIn("Fable", row)
+        self.assertEqual(notes, "Fable week 81%")
+
+    def test_a_row_with_no_notes_is_one_line(self):
+        self.write_config(primary={"config_dir": "~/.claude", "label": "Work Claude"},
+                          codex={"enabled": True, "label": "Codex"})
+        self.write_usage("primary", age_seconds=60, five_hour_pct=2, seven_day_pct=16)
+        self.write_usage("codex", age_seconds=60, seven_day_pct=98, five_hour_pct=None,
+                         seven_day_resets="16:17 on 19 Sep")
+        card = swlib.brief_card(now=NOW)
+        self.assertEqual(len(card), 5, card)  # header, Work Claude, Codex + notes, footnote
+        self.assertTrue(card[2].startswith("Codex"), card)
+        self.assertFalse(any(line.strip() == "" for line in card), card)
+
+    def test_several_notes_share_one_line_joined_by_a_middle_dot(self):
+        self.write_config(primary={"config_dir": "~/.claude", "label": "Work Claude"})
+        self.write_usage("primary", age_seconds=60, five_hour_pct=35, seven_day_pct=48,
+                         seven_day_resets="Sep 21 at 3am",
+                         extra={"model_weeks": {"Fable": {"pct": 81}}})
+        card = swlib.brief_card(now=NOW)
+        row, notes = card_account("Work Claude")
+        self.assertEqual(notes, "resets 03:00 Sep 21 · Fable week 81%")
+        self.assertNotIn("  ", notes)
+        # indented to the label column, so the notes start where the bars do
+        self.assertEqual(card[2].index("resets"), self.bar_offsets(row)[0])
 
     def test_the_fullest_model_week_is_named_first(self):
         note = swlib.model_week_note(
@@ -474,8 +535,95 @@ class BriefCard(Base):
             swlib.model_week_note({"extra": {"model_weeks":
                                              {"Fable": {"pct": None}}}}), "")
 
+    def test_an_untouched_model_week_is_left_off(self):
+        # A window nobody has spent anything from is not a reason to route
+        # away from that model, so it is not worth a line in the panel.
+        self.assertEqual(
+            swlib.model_week_note(
+                {"extra": {"model_weeks": {"GPT-5.3-Codex-Spark": {"pct": 0}}}}), "")
+        # Untouched models are dropped; a spent one among them still shows.
+        self.assertEqual(
+            swlib.model_week_note(
+                {"extra": {"model_weeks": {"gpt-reserve": {"pct": 0},
+                                           "GPT-5.3-Codex-Spark": {"pct": 12}}}}),
+            "GPT-5.3-Codex-Spark week 12%")
+
     def test_no_accounts_means_no_card_rather_than_a_bare_header(self):
         self.assertEqual(swlib.brief_card(), [])
+
+
+class ResetNote(unittest.TestCase):
+    """The trailing note naming when the row's window resets. No disk, no
+    config: reset_note is a pure function of the usage a reader already
+    wrote."""
+
+    def test_weekly_reset_for_an_ordinary_role(self):
+        self.assertEqual(
+            swlib.reset_note("primary", {"seven_day_resets": "16:17 on 19 Sep"}),
+            "resets 16:17 Sep 19")
+
+    def test_claudes_timezone_parenthetical_is_trimmed(self):
+        self.assertEqual(
+            swlib.reset_note(
+                "primary",
+                {"seven_day_resets": "Sep 21 at 3am (Africa/Johannesburg)"}),
+            "resets 03:00 Sep 21")
+
+    def test_every_clients_wording_normalises_to_the_same_shape(self):
+        # Claude, Codex and Grok each order the date and the clock
+        # differently, and Claude alone uses 12-hour time. One row next to
+        # another should read the same way regardless of which wrote it.
+        self.assertEqual(swlib._normalize_reset("Sep 21 at 3am"), "03:00 Sep 21")
+        self.assertEqual(swlib._normalize_reset("Sep 17 at 6:59pm"), "18:59 Sep 17")
+        self.assertEqual(swlib._normalize_reset("16:17 on 19 Sep"), "16:17 Sep 19")
+        self.assertEqual(swlib._normalize_reset("September 18, 13:11"), "13:11 Sep 18")
+
+    def test_a_date_with_no_time_is_left_as_a_date(self):
+        # Cursor's pools reset on a day, with no time of day reported, and
+        # there is nothing to invent one from.
+        self.assertEqual(swlib._normalize_reset("Sep 30"), "Sep 30")
+
+    def test_midnight_and_noon_convert_correctly(self):
+        self.assertEqual(swlib._normalize_reset("Sep 21 at 12am"), "00:00 Sep 21")
+        self.assertEqual(swlib._normalize_reset("Sep 21 at 12pm"), "12:00 Sep 21")
+
+    def test_an_unrecognised_string_is_returned_exactly_as_given(self):
+        # A wrong reformat is worse than an unfamiliar one, so a string this
+        # cannot parse comes back untouched rather than mangled.
+        self.assertEqual(swlib._normalize_reset("whenever it feels like it"),
+                         "whenever it feels like it")
+
+    def test_a_parenthetical_that_is_not_a_trailing_timezone_is_left_alone(self):
+        # Only a trailing "(...)" is trimmed; one in the middle of the string
+        # is part of what the client actually said and stays.
+        self.assertEqual(
+            swlib.reset_note("primary", {"seven_day_resets": "Sep (approx) 21"}),
+            "resets Sep (approx) 21")
+
+    def test_nothing_reported_is_an_empty_note_not_a_bare_label(self):
+        self.assertEqual(swlib.reset_note("primary", {}), "")
+        self.assertEqual(swlib.reset_note("primary", {"seven_day_resets": None}), "")
+        self.assertEqual(swlib.reset_note("primary", {"seven_day_resets": "unknown"}), "")
+
+    def test_cursor_uses_its_own_pools_reset(self):
+        self.assertEqual(
+            swlib.reset_note("cursor", {"extra": {"resets": "Sep 30"}}),
+            "resets Sep 30")
+        self.assertEqual(
+            swlib.reset_note("cursor", {"seven_day_resets": "16:17 on 19 Sep"}), "",
+            "cursor has no weekly window, so a weekly reset string must not leak in")
+
+    def test_a_codex_free_workspace_uses_the_monthly_reset(self):
+        usage = {"five_hour_pct": None, "seven_day_pct": None,
+                 "seven_day_resets": "16:17 on 19 Sep",
+                 "extra": {"monthly_pct": 8, "monthly_resets": "02:00 on 1 Oct"}}
+        self.assertEqual(swlib.reset_note("codex", usage), "resets 02:00 Oct 1")
+
+    def test_a_codex_role_with_a_real_weekly_window_ignores_the_monthly_field(self):
+        usage = {"five_hour_pct": None, "seven_day_pct": 100,
+                 "seven_day_resets": "16:17 on 19 Sep",
+                 "extra": {"monthly_resets": "02:00 on 1 Oct"}}
+        self.assertEqual(swlib.reset_note("codex", usage), "resets 16:17 Sep 19")
 
 
 class CodexRoles(Base):
@@ -544,6 +692,18 @@ class CodexRoles(Base):
         row = next(line for line in swlib.brief_card(now=NOW) if line.startswith("Codex"))
         self.assertIn("monthly limit 8% used", row)
         self.assertNotIn(swlib.BAR_ABSENT, row)
+
+    def test_a_free_workspaces_reset_is_the_monthly_one_not_a_weekly_one(self):
+        # It has no weekly window, so a weekly reset string here would name a
+        # window this row is not showing.
+        self.write_config(codex={"enabled": True, "label": "Codex"})
+        self.write_usage("codex", age_seconds=60, five_hour_pct=None, seven_day_pct=None,
+                         seven_day_resets="16:17 on 19 Sep",
+                         extra={"monthly_pct": 8, "monthly_resets": "02:00 on 1 Oct"})
+        row, notes = card_account("Codex")
+        self.assertIn("monthly limit 8% used", row)
+        self.assertEqual(notes, "resets 02:00 Oct 1")
+        self.assertNotIn("16:17 on 19 Sep", row)
 
 
 class IdentityDrift(Base):
