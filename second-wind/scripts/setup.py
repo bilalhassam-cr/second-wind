@@ -20,6 +20,7 @@ backwards silently sends their main work to the wrong subscription.
   setup.py --accounts [--live]
   setup.py --card
   setup.py --check
+  setup.py --repin [ROLE ...]
   setup.py --show
   setup.py --uninstall
 """
@@ -1431,8 +1432,9 @@ def cmd_check():
         if drift:
             row(role + " sign-in", "CHANGED: " + drift)
             warnings.append("%s is %s. Sign that client back in, or, if the change "
-                            "was meant, refresh the reading and rerun --write so "
-                            "the new sign-in is pinned." % (role, drift))
+                            "was meant (an upgrade, a downgrade, a workspace switch), "
+                            "refresh the reading and run  setup.py --repin %s  so the "
+                            "new sign-in is pinned." % (role, drift, role))
 
     row("jq", "installed" if swlib.has_jq() else "MISSING")
     if not swlib.has_jq():
@@ -1673,6 +1675,72 @@ def cmd_check():
         print(verdict_ok)
 
 
+# ---------------------------------------------------------------- repin
+
+
+def cmd_repin(a):
+    """Update the pinned account and plan for roles whose current reading no
+    longer matches the config, and leave everything else alone.
+
+    This is the fix for the case --check and the panel already name: an
+    upgrade, a downgrade, or a workspace switch changes what a client reports
+    without saying so, and identity_drift keeps comparing against whatever was
+    pinned last. --write can also re-pin, because cmd_write always probes and
+    re-pins as part of writing, but every worker it does not see named on the
+    command line reverts to off, so reaching for --write just to clear a drift
+    risks silently dropping a role. This command touches only the two fields
+    identity_drift compares, on the roles asked for (every enabled role, by
+    default), and nothing about hooks, launchd, trust or which workers run.
+    """
+    if not swlib.is_configured():
+        sys.exit("second-wind: not set up yet. Run setup.py --detect first.")
+    cfg = swlib.load_config()
+    enabled = swlib.enabled_roles(cfg)
+    roles = list(a.repin) if a.repin else list(enabled)
+    unknown = [role for role in roles if role not in swlib.ROLES]
+    if unknown:
+        sys.exit("second-wind: no such role: %s. Roles are %s."
+                 % (", ".join(unknown), ", ".join(swlib.ROLES)))
+    not_enabled = [role for role in roles if role not in enabled]
+    for role in not_enabled:
+        print("  %s is not enabled, skipping" % role)
+    changed, skipped_stale = [], []
+    for role in roles:
+        if role not in enabled:
+            continue
+        state = swlib.freshness(role, cfg=cfg)
+        if state not in ("fresh", "stale"):
+            skipped_stale.append(role)
+            continue
+        usage = swlib.load_usage(role)
+        block = dict(cfg.get(role) or {})
+        fields = ("account", "plan") if role in swlib.CODEX_ROLES else ("account",)
+        for field in fields:
+            observed = str(usage.get(field) or "").strip()
+            if not observed or observed.lower() == "unknown":
+                continue
+            current = str(block.get(field) or "").strip()
+            if current.lower() != observed.lower():
+                changed.append("%s %s: %s -> %s"
+                               % (role, field, current or "unknown", observed))
+                block[field] = observed
+        cfg[role] = block
+    for role in skipped_stale:
+        print("  %s has no current reading, skipping. Refresh it first: "
+              "usage-refresh.sh --force --only %s" % (role, role))
+    if not changed:
+        print("Nothing to repin. Every role checked already matches its "
+              "current reading.")
+        return
+    swlib.backup_once(config_file())
+    swlib.write_json_atomic(config_file(), cfg)
+    swlib.field_note("repin", cfg=cfg, changed=changed)
+    print("Repinned %s:" % tilde(config_file()))
+    for line in changed:
+        print("  %s" % line)
+    print("Rerun  setup.py --check  to confirm the drift is gone.")
+
+
 # ---------------------------------------------------------------- uninstall
 
 
@@ -1756,6 +1824,12 @@ def build_parser():
                          "taken from it. Name roles to verify only those.")
     ap.add_argument("--check", action="store_true",
                     help="say whether second-wind is actually wired up")
+    ap.add_argument("--repin", nargs="*", metavar="ROLE", default=None,
+                    help="update the pinned account/plan for roles whose current "
+                         "reading no longer matches the config (every enabled role "
+                         "if none named), after an upgrade, downgrade or workspace "
+                         "switch. Touches only those two fields; unlike --write, it "
+                         "never changes which workers are on")
     ap.add_argument("--uninstall", action="store_true")
     ap.add_argument("--primary")
     ap.add_argument("--secondary")
@@ -1879,7 +1953,8 @@ def main():
     ap = build_parser()
     a = ap.parse_args()
     if a.note is not None:
-        if any(getattr(a, name) for name in SETUP_COMMANDS + ("accounts", "card", "show")):
+        if any(getattr(a, name) for name in SETUP_COMMANDS + ("accounts", "card", "show")) \
+                or a.repin is not None:
             # Otherwise the note is written and the other command silently is not.
             sys.exit("second-wind: --note is a command of its own. Run it on its "
                      "own line.")
@@ -1906,6 +1981,8 @@ def dispatch(a, ap):
         return cmd_verify(a.verify)
     if a.check:
         return cmd_check()
+    if a.repin is not None:
+        return cmd_repin(a)
     if a.show:
         return cmd_show()
     if a.uninstall:

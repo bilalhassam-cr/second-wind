@@ -185,10 +185,12 @@ you used.
 each in its own `CODEX_HOME`. The desktop app rewrites `~/.codex/auth.json` when its user
 switches workspace, so a role on that default directory changes plan without
 telling anyone; the panel and `--check` say `signed in as X, not the configured
-Y` when a reader sees a different account or plan from the one setup pinned.
+Y` when a reader sees a different account or plan from the one setup pinned,
+which is also how a plan upgrade or downgrade on an unchanged sign-in shows up.
 When that appears, stop routing to that role until the sign-in is put back or,
-if the change was meant, the reading is refreshed and `--write` rerun so the new
-sign-in is pinned.
+if the change was meant, the reading is refreshed and `setup.py --repin <role>`
+run: it re-pins only that role's account and plan, unlike `--write`, which
+turns off every worker not named again on the command line.
 
 **Writing the prompt.** The worker starts blind. Put the question, the relevant
 file contents, the constraint that matters and what finished looks like into the

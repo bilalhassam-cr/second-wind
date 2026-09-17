@@ -806,10 +806,95 @@ class CodexPinning(Base):
                                  "account": "user@example.com", "plan": "Business Premium"})
         self.write_usage("codex", age_seconds=60, seven_day_pct=98, five_hour_pct=None,
                          account="user@example.com", plan="Free")
-        row = next(line for line in swlib.brief_card(now=NOW) if line.startswith("Codex"))
+        row, notes = card_account("Codex")
         self.assertIn("98%", row)
-        self.assertTrue(row.endswith("signed in as Free, not the configured Business Premium"),
-                        row)
+        self.assertNotIn("signed in as", row)
+        self.assertIn("signed in as Free, not the configured Business Premium", notes)
+
+
+class Repin(Base):
+    """--repin: the narrow fix for a drift --check already named. Unlike
+    --write, it must never touch anything but the account/plan fields it is
+    asked to fix."""
+
+    def repin(self, *roles):
+        args = sw_setup.build_parser().parse_args(["--repin", *roles])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            sw_setup.cmd_repin(args)
+        return out.getvalue()
+
+    def test_an_upgraded_codex_plan_is_repinned_and_the_drift_clears(self):
+        # The case this exists for: a Plus seat upgraded to Pro (Codex reports
+        # it as "Pro Lite"), and the config still expects "Plus".
+        self.write_config(codex={"enabled": True, "label": "Codex",
+                                 "account": "user@example.com", "plan": "Plus"})
+        self.write_usage_live("codex", age_seconds=60, account="user@example.com",
+                              plan="Pro Lite", seven_day_pct=10)
+        self.assertIsNotNone(swlib.identity_drift("codex"))
+        out = self.repin("codex")
+        self.assertIn("codex plan: Plus -> Pro Lite", out)
+        self.assertEqual(swlib.load_config()["codex"]["plan"], "Pro Lite")
+        self.assertIsNone(swlib.identity_drift("codex"))
+
+    def test_defaults_to_every_enabled_role_when_none_named(self):
+        self.write_config(
+            primary={"config_dir": "~/.claude", "label": "primary",
+                     "account": "old@example.com"},
+            codex={"enabled": True, "label": "Codex",
+                  "account": "user@example.com", "plan": "Plus"})
+        self.write_usage_live("primary", age_seconds=60, account="new@example.com")
+        self.write_usage_live("codex", age_seconds=60, account="user@example.com",
+                              plan="Pro Lite")
+        self.repin()
+        cfg = swlib.load_config()
+        self.assertEqual(cfg["primary"]["account"], "new@example.com")
+        self.assertEqual(cfg["codex"]["plan"], "Pro Lite")
+
+    def test_a_claude_roles_plan_field_is_never_touched(self):
+        # identity_drift only ever compares plan for Codex; repinning it for
+        # Claude would just invent a comparison nobody makes.
+        self.write_config(secondary={"enabled": True, "config_dir": "~/.claude-secondary",
+                                     "account": "user@example.com", "plan": "max"})
+        self.write_usage_live("secondary", age_seconds=60, account="user@example.com",
+                              plan="Claude Max")
+        self.repin("secondary")
+        self.assertEqual(swlib.load_config()["secondary"]["plan"], "max")
+
+    def test_a_stale_or_missing_reading_is_skipped_not_guessed_at(self):
+        self.write_config(codex={"enabled": True, "account": "a@example.com",
+                                 "plan": "Business"})
+        self.write_usage_live("codex", age_seconds=99999, account="b@example.com",
+                              plan="Free")
+        out = self.repin("codex")
+        self.assertIn("no current reading, skipping", out)
+        self.assertEqual(swlib.load_config()["codex"]["account"], "a@example.com")
+
+    def test_nothing_to_repin_when_everything_already_matches(self):
+        self.write_config(codex={"enabled": True, "account": "a@example.com",
+                                 "plan": "Business"})
+        self.write_usage_live("codex", age_seconds=60, account="a@example.com", plan="Business")
+        out = self.repin("codex")
+        self.assertIn("Nothing to repin", out)
+
+    def test_an_unknown_role_name_is_refused(self):
+        self.write_config()
+        with self.assertRaises(SystemExit):
+            self.repin("not-a-role")
+
+    def test_only_the_named_roles_account_and_plan_fields_change(self):
+        # Everything else --write owns (hooks, launchd, thresholds, other
+        # roles' fields) must survive untouched.
+        cfg = self.write_config(
+            codex={"enabled": True, "account": "a@example.com", "plan": "Business"},
+            thresholds={"five_hour_pct": 77, "seven_day_pct": 66})
+        self.write_usage_live("codex", age_seconds=60, account="a@example.com", plan="Free")
+        self.repin("codex")
+        after = swlib.load_config()
+        self.assertEqual(after["thresholds"], cfg["thresholds"])
+        self.assertEqual(after["codex"]["enabled"], True)
+        self.assertEqual(after["codex"]["account"], "a@example.com")
+        self.assertEqual(after["codex"]["plan"], "Free")
 
 
 class FieldNotes(Base):
