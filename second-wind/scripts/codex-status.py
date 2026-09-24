@@ -39,6 +39,11 @@ STARTING = r"Starting\s+MCP\s+servers"
 # reported "no panel" at the exact moment a role had silently dropped to Free.
 PANEL = r"Weekly\s+limit|5h\s+limit|Monthly\s+limit"
 MENU = r"show\s+current\s+session\s+configuration"
+# Codex fetches the limits lazily. A /status that lands before the fetch prints
+# "Limits: refresh requested; run /status again shortly" in place of the
+# windows, which is a reason to ask again, not a missing panel.
+REFRESHING = r"refresh\s+requested"
+ASKS = 4
 
 
 # A panel prints the plan's own windows and, on some plans, windows belonging
@@ -140,6 +145,12 @@ def parse_panel(text):
     }
 
 
+def has_limits(data):
+    """Whether a parsed panel carries any window the reading can use."""
+    return not (data["five_hour_pct"] is None and data["seven_day_pct"] is None
+                and data["extra"].get("monthly_pct") is None)
+
+
 def role_env(home):
     """(env for subprocesses, env_set and env_drop for the PTY) for one role.
 
@@ -206,6 +217,41 @@ def read_screen(cwd, budget, env_set=None, env_drop=("OPENAI_API_KEY",)):
         screen.send(keys)
         return None
 
+    def count(pattern):
+        return len(re.findall(pattern, screen.text, re.I))
+
+    def wait_new(patterns, before, timeout):
+        """The key of the first pattern printed more often than `before`
+        counted, or None on the timeout. A second /status repaints text the
+        first one left on screen, so presence alone proves nothing."""
+        end = time.time() + timeout
+        while True:
+            screen.pump(0.4)
+            for key, pattern in patterns.items():
+                if count(pattern) > before.get(key, 0):
+                    return key
+            if time.time() >= end:
+                return None
+
+    def ask_status():
+        """Type /status and take it from the completion list. None once sent,
+        otherwise the outcome to return."""
+        for attempt in (1, 2):
+            menus = {"menu": count(MENU)}
+            stop = type_when_clear(b"/status")
+            if stop:
+                return stop
+            chance = left(10)
+            if chance is None:
+                return "budget: the completion list"
+            if wait_new({"menu": MENU}, menus, chance):
+                break
+            if attempt == 2:
+                return "no panel"
+            screen.send(b"\x1b")
+            screen.wait_for(present=[PROMPT], quiet=2.0, timeout=left(8) or 1)
+        return type_when_clear(b"\r")
+
     try:
         screen.start()
         chance = left(40)
@@ -227,40 +273,42 @@ def read_screen(cwd, budget, env_set=None, env_drop=("OPENAI_API_KEY",)):
         # startup line disappearing. One retry after Escape covers a swallowed
         # first attempt.
         screen.wait_for(present=[PROMPT], quiet=2.5, timeout=chance)
-        for attempt in (1, 2):
-            stop = type_when_clear(b"/status")
-            if stop:
-                return stop, screen.text
-            chance = left(10)
-            if chance is None:
-                return "budget: the completion list", screen.text
-            if screen.wait_for(present=[MENU], timeout=chance):
-                break
-            if attempt == 2:
-                return "no panel", screen.text
-            screen.send(b"\x1b")
-            screen.wait_for(present=[PROMPT], quiet=2.0, timeout=left(8) or 1)
-        stop = type_when_clear(b"\r")
-        if stop:
-            return stop, screen.text
-        chance = left(20)
-        if chance is None:
-            return "budget: the status panel", screen.text
-        if not screen.wait_for(present=[PANEL], timeout=chance):
-            # One retry, and only while the panel is still not on screen: the
-            # first Enter can land on a completion list rather than the input.
-            stop = type_when_clear(b"\r")
+        replies = {"panel": PANEL, "refresh": REFRESHING}
+        for ask in range(1, ASKS + 1):
+            before = {key: count(p) for key, p in replies.items()}
+            stop = ask_status()
             if stop:
                 return stop, screen.text
             chance = left(20)
             if chance is None:
                 return "budget: the status panel", screen.text
-            if not screen.wait_for(present=[PANEL], timeout=chance):
+            got = wait_new(replies, before, chance)
+            if got is None:
+                # One more Enter, and only while nothing has answered: the
+                # first can land on a completion list rather than the input.
+                stop = type_when_clear(b"\r")
+                if stop:
+                    return stop, screen.text
+                chance = left(20)
+                if chance is None:
+                    return "budget: the status panel", screen.text
+                got = wait_new(replies, before, chance)
+            if got is None:
                 return "no panel", screen.text
-        # A panel already on screen is not thrown away for want of a settle.
-        chance = left(6)
-        if chance:
-            screen.wait_for(present=[PANEL], quiet=1.0, timeout=chance)
+            if got == "panel":
+                # A panel already on screen is not thrown away for want of a
+                # settle.
+                chance = left(6)
+                if chance:
+                    screen.wait_for(present=[PANEL], quiet=1.0, timeout=chance)
+                if has_limits(parse_panel(screen.text)) or ask == ASKS:
+                    return "panel", screen.text
+            # Codex has sent for the figures. Give the fetch a moment, then ask
+            # again.
+            if left(15) is None:
+                return "budget: the status panel", screen.text
+            screen.wait_for(quiet=4.0, timeout=left(6) or 1)
+        # Every ask came back "refresh requested"; main says so by name.
         return "panel", screen.text
     finally:
         screen.close()
@@ -339,8 +387,11 @@ def main():
         note(status, "FAILED: status panel did not appear. Last of the screen: %s"
              % tail(text))
         return 1
-    if (data["five_hour_pct"] is None and data["seven_day_pct"] is None
-            and data["extra"].get("monthly_pct") is None):
+    if not has_limits(data):
+        if re.search(REFRESHING, text, re.I):
+            note(status, "FAILED: Codex was still fetching the limits after %d "
+                         "asks. Last of the screen: %s" % (ASKS, tail(text)))
+            return 1
         note(status, "PARSER MISMATCH: client %s, expected labels not found"
              % (data["client_version"] or "unknown"))
         return 1

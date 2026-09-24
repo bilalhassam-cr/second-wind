@@ -12,7 +12,10 @@ rule forbids becomes a hyphen. Layout was preserved through each substitution,
 because the parsers read columns. Nothing else was edited, with one exception,
 named in the file: `codex-0.152.1-five-hour.txt` is the captured panel with a
 five hour limit line added, because the plan on the capture machine shows no
-five hour window at all. That case matters, so both are tested.
+five hour window at all. That case matters, so both are tested. Likewise
+`codex-0.152.1-refresh.txt` is that panel with its limit line replaced by the
+"refresh requested" line Codex 0.153.0 printed on 24 September 2026 when
+/status landed before it had fetched the limits.
 
 The `-trust.txt` fixtures were captured by starting each client in an empty and
 untrusted directory under /tmp. No key was pressed to answer any of them. What
@@ -221,6 +224,16 @@ class CodexTests(unittest.TestCase):
         trust = fixture(CODEX_FIXTURE + "-trust")
         self.assertIsNotNone(re.search(codex.TRUST, trust, re.I))
         self.assertIsNone(re.search(codex.TRUST, fixture(CODEX_FIXTURE), re.I))
+
+
+    def test_refresh_requested_is_not_a_reading(self):
+        # Codex prints this before it has fetched the limits. The reader asks
+        # again; it must never be taken for a panel with its windows.
+        text = fixture(CODEX_FIXTURE + "-refresh")
+        self.assertIsNotNone(re.search(codex.REFRESHING, text, re.I))
+        self.assertFalse(codex.has_limits(codex.parse_panel(text)))
+        self.assertIsNone(re.search(codex.REFRESHING, fixture(CODEX_FIXTURE), re.I))
+        self.assertTrue(codex.has_limits(self.data))
 
 
 class GrokTests(unittest.TestCase):

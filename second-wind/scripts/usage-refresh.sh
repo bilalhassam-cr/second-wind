@@ -122,7 +122,7 @@ run_reader() {
   err="$SW_HOME/.refresh-$role.err"
   if ! python3 "$@" >"$out" 2>"$err"; then
     case "$(sed -n '1p' "$out" 2>/dev/null)" in
-      OK*|FAILED:*|"LOGIN EXPIRED:"*|"TRUST PROMPT:"*|"PARSER MISMATCH:"*) ;;
+      OK*|FAILED:*|"LOGIN EXPIRED:"*|"NO CLI SIGN-IN:"*|"TRUST PROMPT:"*|"PARSER MISMATCH:"*) ;;
       *)
         detail=$(sed -n '1p' "$err" 2>/dev/null)
         status "$role" "FAILED: ${detail:-the usage reader stopped without saying why.}" ;;
@@ -153,6 +153,22 @@ for role in $due; do
   esac
 done
 for pid in $pids; do wait "$pid" || true; done
+# The status files are overwritten every run and the diary keeps only the kind,
+# so the reason for every failure is kept here, or an outage cannot be
+# explained after it ends.
+flog="$SW_HOME/log/refresh-failures.log"
+mkdir -p "$SW_HOME/log" 2>/dev/null
+stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+for role in $due; do
+  line=$(sed -n '1p' "$SW_HOME/refresh-status-$role.txt" 2>/dev/null)
+  case "$line" in
+    OK*) ;;
+    *) printf '%s %s %s\n' "$stamp" "$role" "$line" | cut -c1-600 >> "$flog" ;;
+  esac
+done
+if [ -f "$flog" ] && [ "$(wc -l < "$flog")" -gt 4000 ]; then
+  tail -n 2000 "$flog" > "$flog.tmp" && mv "$flog.tmp" "$flog"
+fi
 # The diary, when it is on: which kind of status each reader ended in this run.
 if [ -n "$due" ]; then
   python3 "$HERE/swlib.py" --field-note-refresh >/dev/null 2>&1 || true
