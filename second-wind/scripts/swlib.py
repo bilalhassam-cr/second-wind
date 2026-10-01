@@ -1949,25 +1949,94 @@ def newer_codex_clients(installed, cfg=None):
     return sorted(newer, key=lambda pair: version_key(pair[0]), reverse=True)
 
 
-def codex_update_command(version, binary=None):
-    """The line that brings the codex on PATH up to ``version``.
+def _npm_update_line(binary, name, version):
+    """``npm install -g name@version`` through the npm beside ``binary``, or
+    None unless npm installed it there.
 
-    npm -g installs into the prefix of whichever npm runs it. When an npm sits
-    beside the codex PATH finds, the line runs that one; any other npm would put
-    the update in another prefix, and PATH would go on finding the old codex.
+    An npm in the same folder proves nothing on its own: Homebrew keeps its
+    links and its own npm side by side. So the link also has to lead into npm's
+    node_modules/<name>. npm -g installs into the prefix of whichever npm runs
+    it, and the npm beside the client PATH finds is the one that installed it;
+    any other would put the update in another prefix, and PATH would go on
+    finding the old client.
     """
+    folder = os.path.dirname(binary or "")
+    package = os.path.join("node_modules", *name.split("/")) + os.sep
+    if (not folder or not os.path.exists(os.path.join(folder, "npm"))
+            or package not in os.path.realpath(binary)):
+        return None
+    # Inside double quotes sh still expands $, ` and \, and a " ends the string,
+    # so each is escaped and the folder reaches PATH as it is.
+    under_home = folder.startswith(HOME + os.sep)
+    literal = re.sub(r'([\\"$`])', r"\\\1",
+                     folder[len(HOME):] if under_home else folder)
+    return 'PATH="%s%s:$PATH" npm install -g %s@%s' % (
+        "$HOME" if under_home else "", literal, name, version)
+
+
+def _from_homebrew(binary):
+    """Whether Homebrew installed the client PATH finds, from where its link
+    leads: Homebrew keeps formulae in a Cellar and casks in a Caskroom."""
+    if not binary:
+        return False  # realpath("") is the working directory, not an answer
+    target = os.path.realpath(binary)
+    return any(os.sep + folder + os.sep in target
+               for folder in ("Cellar", "Caskroom"))
+
+
+def codex_update_command(version, binary=None):
+    """The line that brings the codex on PATH up to ``version``. Homebrew goes
+    to its own newest build rather than a named one, as near as it can get."""
     binary = binary or shutil.which("codex") or ""
-    folder = os.path.dirname(binary)
-    line = "npm install -g @openai/codex@%s" % version
-    if folder and os.path.exists(os.path.join(folder, "npm")):
-        # Inside double quotes sh still expands $, ` and \, and a " ends the
-        # string, so each is escaped and the folder reaches PATH as it is.
-        under_home = folder.startswith(HOME + os.sep)
-        literal = re.sub(r'([\\"$`])', r"\\\1",
-                         folder[len(HOME):] if under_home else folder)
-        return 'PATH="%s%s:$PATH" %s' % ("$HOME" if under_home else "", literal,
-                                         line)
-    return line
+    if _from_homebrew(binary):
+        return "brew upgrade codex"
+    return (_npm_update_line(binary, "@openai/codex", version)
+            or "npm install -g @openai/codex@%s" % version)
+
+
+# The Claude desktop app downloads its own builds of Claude Code into this
+# folder under the home directory, one folder per version, and marks each one
+# it has finished checking with a .verified file.
+CLAUDE_DESKTOP_BUILDS = os.path.join("Library", "Application Support", "Claude",
+                                     "claude-code")
+
+
+def newer_claude_clients(installed):
+    """Where this machine shows a newer Claude Code than ``installed``, as
+    ``(version, where)`` pairs, newest first.
+
+    Anthropic refuses a model newer than the client with the version it needs,
+    and an older client's aliases keep their old targets. The desktop app keeps
+    its builds current, so one newer than the claude on PATH is the sign. Only a
+    build the app has finished checking counts, so a half-done download cannot
+    raise the alarm. Empty when ``installed`` is unknown.
+    """
+    mine = version_key(installed)
+    if mine is None:
+        return []
+    folder = os.path.join(HOME, CLAUDE_DESKTOP_BUILDS)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    # A set, because two folders can hold one version, and the app is one place.
+    seen = {version_text(name) for name in names
+            if os.path.exists(os.path.join(folder, name, ".verified"))}
+    newer = [(version, "the Claude desktop app") for version in seen
+             if version and version_key(version) > mine]
+    return sorted(newer, key=lambda pair: version_key(pair[0]), reverse=True)
+
+
+def claude_update_command(version, binary=None):
+    """The line that brings the claude on PATH up to ``version``: the npm beside
+    it when npm installed it, Homebrew when Homebrew did, and otherwise Claude
+    Code's own installer asked for that version, because `claude update` only
+    moves to the newest build on its channel."""
+    binary = binary or shutil.which("claude") or ""
+    if _from_homebrew(binary):
+        return "brew upgrade claude-code"
+    return (_npm_update_line(binary, "@anthropic-ai/claude-code", version)
+            or "claude install %s" % version)
 
 
 def has_jq():

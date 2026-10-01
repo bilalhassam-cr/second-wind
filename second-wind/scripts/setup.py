@@ -1619,28 +1619,39 @@ def cmd_check():
             warnings.append("%s is %s now, %s when second-wind was set up. If a "
                             "reading stops parsing, that is the first thing to "
                             "check." % (name, version, was))
-    # The codex on PATH is the one the runner starts. A newer Codex client seen
-    # anywhere on this machine means models this one cannot ask for, and the
-    # refusal names the account, so nobody thinks to look at the client.
+    # The codex and claude on PATH are the ones the runner starts. A newer
+    # client seen elsewhere on this machine means models this one cannot ask
+    # for, and Codex's refusal names the account, so nobody looks at the client.
+    def version_gate(name, installed, newer, update, why):
+        if not newer:
+            row(name + " version gate", "%s on PATH, no newer client seen"
+                % installed)
+            return
+        want = newer[0][0]
+        where = ", ".join(place for version, place in newer if version == want)
+        row(name + " version gate", "BEHIND: %s on PATH, %s in %s"
+            % (installed, want, where))
+        warnings.append("the %s on PATH is %s, older than the %s in %s. %s "
+                        "Update it with  %s"
+                        % (name, installed, want, where, why, update(want)))
+
     codex_now = installed_versions.get("codex", "")
     if codex_now and any((cfg.get(role) or {}).get("enabled")
                          for role in swlib.CODEX_ROLES):
-        newer = swlib.newer_codex_clients(codex_now, cfg)
-        if newer:
-            want = newer[0][0]
-            where = ", ".join(place for version, place in newer if version == want)
-            row("codex version gate", "BEHIND: %s on PATH, %s in %s"
-                % (codex_now, want, where))
-            warnings.append("the codex on PATH is %s, older than the %s in %s. "
-                            "OpenAI offers its newest models only to newer "
-                            "clients and refuses them as \"not supported when "
-                            "using Codex with a ChatGPT account\", which blames "
-                            "the account when the cause is the client. Update "
-                            "it with  %s"
-                            % (codex_now, want, where,
-                               swlib.codex_update_command(want)))
-        else:
-            row("codex version gate", "%s on PATH, no newer client seen" % codex_now)
+        version_gate("codex", codex_now,
+                     swlib.newer_codex_clients(codex_now, cfg),
+                     swlib.codex_update_command,
+                     "OpenAI offers its newest models only to newer clients and "
+                     "refuses them as \"not supported when using Codex with a "
+                     "ChatGPT account\", which blames the account when the "
+                     "cause is the client.")
+    claude_now = installed_versions.get("claude", "")
+    if claude_now and (cfg.get("secondary") or {}).get("enabled"):
+        version_gate("claude", claude_now, swlib.newer_claude_clients(claude_now),
+                     swlib.claude_update_command,
+                     "Anthropic refuses a model newer than the client with the "
+                     "version it needs, and an older client's aliases keep "
+                     "their old targets.")
 
     print()
     interval = swlib.interval_minutes(cfg)

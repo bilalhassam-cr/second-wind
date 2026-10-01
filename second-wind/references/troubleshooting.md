@@ -291,14 +291,20 @@ codex on PATH, which is the one the runner starts, with the newest client this
 machine has seen: the `client_version` each Codex home's `models_cache.json`
 records from its last fetch, and the CLI inside the ChatGPT desktop app. A row
 that says `BEHIND` comes with a warning giving the update line, run through the
-npm beside the codex on PATH so the new version lands where PATH will find it.
+npm that installed the codex on PATH so the new version lands where PATH will
+find it, or `brew upgrade codex` when Homebrew installed it.
 Codex also runs an app-server daemon from each home's `packages/app-server-daemon`
 that can be newer than the CLI that started it, so a new release often shows up
 in that home's cache first, sometimes before any model needs it.
 
-For a Claude worker the error names the fix: run `claude update`, or update
-Claude Code the way it was installed. The presets name exact models rather than
-aliases, so an old client refuses one instead of quietly running an older model.
+For a Claude worker, `setup.py --check` prints a `claude version gate` row the
+same way. It compares the claude on PATH with the builds of Claude Code the
+Claude desktop app has downloaded and finished checking. `BEHIND` gives the line
+for however that claude was installed: the npm that installed it, `brew upgrade
+claude-code`, or `claude install <version>` for the native build, because
+`claude update` only moves to the newest build on its channel. The presets name
+exact models rather than aliases, so an old client refuses one instead of
+quietly running an older model.
 
 ## A route seems to apply to the wrong chat
 

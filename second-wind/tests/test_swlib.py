@@ -43,6 +43,40 @@ def read_json(path):
     return json.loads(read_text(path))
 
 
+def npm_install(prefix, package, command):
+    """A client laid out the way npm -g leaves one: the package under
+    lib/node_modules, a relative link to it in bin, and npm beside the link.
+    Returns the link, which is what PATH finds."""
+    entry = os.path.join(prefix, "lib", "node_modules", *package.split("/"),
+                         "bin", command)
+    folder = os.path.join(prefix, "bin")
+    os.makedirs(os.path.dirname(entry))
+    os.makedirs(folder, exist_ok=True)
+    for path in (entry, os.path.join(folder, "npm")):
+        with open(path, "w") as handle:
+            handle.write("#!/bin/sh\n")
+        os.chmod(path, 0o755)
+    link = os.path.join(folder, command)
+    os.symlink(os.path.relpath(entry, folder), link)
+    return link
+
+
+def brew_install(prefix, token, command):
+    """A client laid out the way Homebrew leaves a cask: the build under
+    Caskroom, a link to it in bin, and Homebrew's own npm in the same bin."""
+    entry = os.path.join(prefix, "Caskroom", token, "1.0.0", command)
+    folder = os.path.join(prefix, "bin")
+    os.makedirs(os.path.dirname(entry))
+    os.makedirs(folder, exist_ok=True)
+    for path in (entry, os.path.join(folder, "npm")):
+        with open(path, "w") as handle:
+            handle.write("#!/bin/sh\n")
+        os.chmod(path, 0o755)
+    link = os.path.join(folder, command)
+    os.symlink(entry, link)
+    return link
+
+
 def card_account(label, now=NOW):
     """An account's figures line and its notes line, or None when it has no
     notes. The notes line is the next entry, indented rather than labelled."""
@@ -2701,22 +2735,24 @@ class CodexVersionGate(Base):
     def test_the_update_goes_through_the_npm_beside_codex(self):
         # npm -g installs into the prefix of whichever npm runs it, so the line
         # names the folder PATH found codex in, not whatever npm comes first.
-        folder = os.path.join(self.home, "node", "bin")
-        os.makedirs(folder)
-        for name in ("codex", "npm"):
-            open(os.path.join(folder, name), "w").close()
+        codex = npm_install(os.path.join(self.home, "node"), "@openai/codex", "codex")
         self.assertEqual(
-            swlib.codex_update_command("0.160.0", os.path.join(folder, "codex")),
+            swlib.codex_update_command("0.160.0", codex),
             'PATH="$HOME/node/bin:$PATH" npm install -g @openai/codex@0.160.0')
+
+    def test_an_npm_beside_a_homebrew_codex_does_not_make_it_npms(self):
+        # Homebrew keeps its links and its own npm in one folder, so an npm
+        # there proves nothing; the link has to lead into npm's node_modules.
+        codex = brew_install(os.path.join(self.home, "homebrew"), "codex", "codex")
+        self.assertEqual(swlib.codex_update_command("0.160.0", codex),
+                         "brew upgrade codex")
 
     def test_a_folder_name_the_shell_would_expand_is_kept_literal(self):
         # Inside double quotes sh still expands $, ` and \, so a folder named
         # $node would send the update to some other directory.
-        folder = os.path.join(self.home, "$node", "bin")
-        os.makedirs(folder)
-        for name in ("codex", "npm"):
-            open(os.path.join(folder, name), "w").close()
-        line = swlib.codex_update_command("0.160.0", os.path.join(folder, "codex"))
+        codex = npm_install(os.path.join(self.home, "$node"), "@openai/codex", "codex")
+        folder = os.path.dirname(codex)
+        line = swlib.codex_update_command("0.160.0", codex)
         self.assertEqual(line, 'PATH="$HOME/\\$node/bin:$PATH" npm install -g '
                                '@openai/codex@0.160.0')
         # And sh agrees: the PATH it builds starts with the real folder.
@@ -2732,6 +2768,80 @@ class CodexVersionGate(Base):
         self.assertEqual(
             swlib.codex_update_command("0.160.0", os.path.join(folder, "codex")),
             "npm install -g @openai/codex@0.160.0")
+
+
+class ClaudeVersionGate(Base):
+    """Anthropic refuses a model newer than the claude on PATH, and an older
+    client's aliases keep their old targets. The desktop app keeps its own
+    builds of Claude Code current, so a newer one there is the sign."""
+
+    def setUp(self):
+        super().setUp()
+        # The real desktop app's builds are out of bounds.
+        self.patch = mock.patch.object(swlib, "HOME", self.home)
+        self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop()
+        super().tearDown()
+
+    def build(self, version, verified=True):
+        folder = os.path.join(self.home, swlib.CLAUDE_DESKTOP_BUILDS, version)
+        os.makedirs(os.path.join(folder, "claude.app"))
+        if verified:
+            open(os.path.join(folder, ".verified"), "w").close()
+
+    def test_a_newer_build_in_the_desktop_app_is_named_newest_first(self):
+        self.build("2.1.281")
+        self.build("2.1.284")
+        self.assertEqual(swlib.newer_claude_clients("2.1.273"),
+                         [("2.1.284", "the Claude desktop app"),
+                          ("2.1.281", "the Claude desktop app")])
+
+    def test_a_download_the_app_has_not_finished_checking_is_ignored(self):
+        self.build("2.1.290", verified=False)
+        self.assertEqual(swlib.newer_claude_clients("2.1.285"), [])
+
+    def test_the_same_or_older_is_nothing_to_report(self):
+        self.build("2.1.284")
+        self.assertEqual(swlib.newer_claude_clients("2.1.285"), [])
+
+    def test_no_desktop_app_is_nothing_to_report(self):
+        self.assertEqual(swlib.newer_claude_clients("2.1.273"), [])
+
+    def test_an_unknown_installed_version_is_compared_with_nothing(self):
+        self.build("2.1.284")
+        self.assertEqual(swlib.newer_claude_clients(""), [])
+
+    def test_two_folders_for_one_version_name_the_app_once(self):
+        self.build("2.1.284")
+        self.build("2.1.284 copy")
+        self.assertEqual(swlib.newer_claude_clients("2.1.273"),
+                         [("2.1.284", "the Claude desktop app")])
+
+    def test_the_update_goes_through_the_npm_beside_claude(self):
+        claude = npm_install(os.path.join(self.home, "node"),
+                             "@anthropic-ai/claude-code", "claude")
+        self.assertEqual(
+            swlib.claude_update_command("2.1.284", claude),
+            'PATH="$HOME/node/bin:$PATH" npm install -g '
+            '@anthropic-ai/claude-code@2.1.284')
+
+    def test_a_homebrew_claude_is_upgraded_by_homebrew(self):
+        claude = brew_install(os.path.join(self.home, "homebrew"), "claude-code",
+                              "claude")
+        self.assertEqual(swlib.claude_update_command("2.1.284", claude),
+                         "brew upgrade claude-code")
+
+    def test_a_native_install_is_asked_for_the_version_itself(self):
+        # `claude update` only moves to the newest build on its channel, which
+        # may not be the version the warning names; `claude install` takes one.
+        folder = os.path.join(self.home, "bin")
+        os.makedirs(folder)
+        open(os.path.join(folder, "claude"), "w").close()
+        self.assertEqual(
+            swlib.claude_update_command("2.1.284", os.path.join(folder, "claude")),
+            "claude install 2.1.284")
 
 
 class Check(Base):
@@ -2848,13 +2958,8 @@ class Check(Base):
         """--check with a codex of this version first on PATH and the npm that
         installed it beside it, and with the real ~/.codex and ChatGPT app
         swapped for nothing."""
-        folder = os.path.join(self.home, "node", "bin")
-        os.makedirs(folder)
-        for name in ("codex", "npm"):
-            path = os.path.join(folder, name)
-            with open(path, "w") as handle:
-                handle.write("#!/bin/sh\n")
-            os.chmod(path, 0o755)
+        folder = os.path.dirname(npm_install(os.path.join(self.home, "node"),
+                                             "@openai/codex", "codex"))
         swlib.client_versions = lambda: {"claude": "2.1.259", "codex": version}
         path = folder + os.pathsep + os.environ.get("PATH", "")
         with mock.patch.dict(os.environ, {"PATH": path}), \
@@ -2879,6 +2984,51 @@ class Check(Base):
         text = self.check_codex("0.159.2")
         self.assertIn("0.159.2 on PATH, no newer client seen", text)
         self.assertNotIn("npm install -g @openai/codex", text)
+
+    def check_claude(self, version):
+        """--check with a claude of this version first on PATH and the npm that
+        installed it beside it, and the real desktop app's builds swapped for a
+        folder of our own."""
+        folder = os.path.dirname(npm_install(os.path.join(self.home, "node"),
+                                             "@anthropic-ai/claude-code", "claude"))
+        swlib.client_versions = lambda: {"claude": version}
+        path = folder + os.pathsep + os.environ.get("PATH", "")
+        with mock.patch.dict(os.environ, {"PATH": path}), \
+                mock.patch.object(swlib, "HOME", self.home):
+            return self.check()
+
+    def desktop_build(self, version):
+        folder = os.path.join(self.home, swlib.CLAUDE_DESKTOP_BUILDS, version)
+        os.makedirs(folder)
+        open(os.path.join(folder, ".verified"), "w").close()
+
+    def personal_worker(self):
+        profile = os.path.join(self.home, "profile-secondary")
+        os.makedirs(profile)
+        return {"enabled": True, "config_dir": profile, "label": "secondary"}
+
+    def test_a_claude_older_than_the_desktop_apps_is_a_warning_with_the_fix(self):
+        self.desktop_build("2.1.284")
+        self.configure(secondary=self.personal_worker())
+        text = self.check_claude("2.1.273")
+        self.assertIn("BEHIND: 2.1.273 on PATH, 2.1.284 in the Claude desktop app",
+                      text)
+        self.assertIn("version it needs", text)
+        self.assertIn('PATH="$HOME/node/bin:$PATH" npm install -g '
+                      '@anthropic-ai/claude-code@2.1.284', text)
+
+    def test_a_claude_as_new_as_the_desktop_apps_says_so(self):
+        self.desktop_build("2.1.284")
+        self.configure(secondary=self.personal_worker())
+        text = self.check_claude("2.1.285")
+        self.assertIn("2.1.285 on PATH, no newer client seen", text)
+        self.assertNotIn("npm install -g @anthropic-ai/claude-code", text)
+
+    def test_no_claude_worker_means_no_claude_gate_row(self):
+        self.desktop_build("2.1.284")
+        self.configure()
+        text = self.check_claude("2.1.273")
+        self.assertNotIn("claude version gate", text)
 
     def test_no_codex_worker_means_no_gate_row(self):
         # A newer client sits in the default home, so the row would be BEHIND
