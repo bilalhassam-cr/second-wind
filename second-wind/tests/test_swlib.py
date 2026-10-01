@@ -655,8 +655,8 @@ class CodexRoles(Base):
         self.assertIn("codex2", swlib.enabled_roles())
         self.assertEqual(swlib.parse_route("second-wind/codex2", cfg)["worker"], "codex2")
         self.assertEqual(swlib.parse_route("codex-personal", cfg)["worker"], "codex2")
-        self.assertEqual(swlib.parse_route("second-wind/codex2/gpt-5.6/high", cfg),
-                         {"worker": "codex2", "model": "gpt-5.6", "effort": "high",
+        self.assertEqual(swlib.parse_route("second-wind/codex2/gpt-6.1-sol/high", cfg),
+                         {"worker": "codex2", "model": "gpt-6.1-sol", "effort": "high",
                           "label": "Personal Codex"})
         self.assertEqual(swlib.route_id("codex2"), "second-wind/codex2")
         self.write_usage("codex2", age_seconds=60, seven_day_pct=40, five_hour_pct=None)
@@ -667,7 +667,7 @@ class CodexRoles(Base):
     def test_a_third_codex_role_is_wired_the_same_way(self):
         cfg = self.write_config(codex3={"enabled": True})
         self.assertIn("codex3", swlib.enabled_roles())
-        self.assertEqual(swlib.parse_route("second-wind/codex3/gpt-5.6/low", cfg)["worker"],
+        self.assertEqual(swlib.parse_route("second-wind/codex3/gpt-6.1-sol/low", cfg)["worker"],
                          "codex3")
         self.assertEqual(swlib.route_label("codex3", cfg), "the third Codex account")
         self.assertEqual(swlib.model_menu("codex3"), swlib.model_menu("codex"))
@@ -947,7 +947,7 @@ class RecordedArgs(Base):
     def test_the_equals_form_and_paths_elsewhere_are_hidden_too(self):
         seen = swlib.safe_args(["--codex-label=Some Client", "--codex-dir",
                                 "/Volumes/ClientA/.codex", "--primary", "~/Documents/ClientB",
-                                "--picker-models", "codex=gpt-5.6/high"])
+                                "--picker-models", "codex=gpt-6.1-sol/high"])
         self.assertEqual(seen, ["--codex-label", "<value>", "--codex-dir", "<path>",
                                 "--primary", "<path>", "--picker-models", "<value>"])
 
@@ -990,10 +990,10 @@ class FieldNoteAllowlist(Base):
         self.assertNotIn("ClientA", json.dumps(row))
 
     def test_routes_keep_worker_and_model_tokens_only(self):
-        swlib.field_note("route", source="chat", worker="codex2", model="gpt-5.6",
+        swlib.field_note("route", source="chat", worker="codex2", model="gpt-6.1-sol",
                          effort="high", mode="work", cwd="/x")
         row = self.last()
-        self.assertEqual((row["worker"], row["model"], row["effort"]), ("codex2", "gpt-5.6", "high"))
+        self.assertEqual((row["worker"], row["model"], row["effort"]), ("codex2", "gpt-6.1-sol", "high"))
         self.assertNotIn("cwd", row)
         swlib.field_note("route", source="chat", worker="nonsense", model="a model with spaces")
         self.assertEqual((self.last()["worker"], self.last()["model"]), ("<role>", "<value>"))
@@ -1173,9 +1173,9 @@ class Routing(Base):
             self.assertIsNone(found["effort"], target)
 
     def test_a_model_and_an_effort(self):
-        found = swlib.parse_route("second-wind/codex/gpt-5.6/high", self.cfg)
+        found = swlib.parse_route("second-wind/codex/gpt-6.1-sol/high", self.cfg)
         self.assertEqual((found["worker"], found["model"], found["effort"]),
-                         ("codex", "gpt-5.6", "high"))
+                         ("codex", "gpt-6.1-sol", "high"))
         found = swlib.parse_route("second-wind/personal/opus", self.cfg)
         self.assertEqual((found["worker"], found["model"], found["effort"]),
                          ("secondary", "opus", None))
@@ -1359,12 +1359,12 @@ class ModeFile(Base):
         self.assertIsNone(written["effort"])
 
     def test_a_source_is_recorded_when_there_is_one(self):
-        swlib.write_mode(self.route(model="gpt-5.6", effort="high"),
+        swlib.write_mode(self.route(model="gpt-6.1-sol", effort="high"),
                          source="desktop")
         written = read_json(swlib.mode_path())
         self.assertEqual(written["source"], "desktop")
         self.assertEqual((written["model"], written["effort"]),
-                         ("gpt-5.6", "high"))
+                         ("gpt-6.1-sol", "high"))
 
     def test_it_is_written_where_every_reader_looks(self):
         self.assertEqual(swlib.mode_path(),
@@ -1417,9 +1417,9 @@ class ScopedRoutes(Base):
     def test_a_bare_id_still_carries_a_model_and_an_effort(self):
         self.write_config()
         swlib.write_text_atomic(swlib.mode_path(),
-                                "second-wind/codex/gpt-5.6/high\n")
+                                "second-wind/codex/gpt-6.1-sol/high\n")
         route = swlib.active_route(self.SESSION)
-        self.assertEqual((route["model"], route["effort"]), ("gpt-5.6", "high"))
+        self.assertEqual((route["model"], route["effort"]), ("gpt-6.1-sol", "high"))
 
     def test_the_session_that_armed_it_gets_it(self):
         self.write_config()
@@ -1552,7 +1552,7 @@ class ScopedRoutes(Base):
     def test_armed_routes_lists_every_one_with_its_session_and_age(self):
         self.write_config(secondary={"enabled": True, "label": "spare Claude"})
         other = "8888bbbb-2222-3333-4444-555566667777"
-        self.arm(self.SESSION, model="gpt-5.6", effort="high")
+        self.arm(self.SESSION, model="gpt-6.1-sol", effort="high")
         self.arm(other, worker="secondary", label="spare Claude")
         self.write_route(session_id="*", set_at=int(time.time()) - 300)
         rows = swlib.armed_routes()
@@ -1562,7 +1562,7 @@ class ScopedRoutes(Base):
         self.assertEqual(by_scope[self.SESSION]["label"], "Codex")
         self.assertEqual((by_scope[self.SESSION]["model"],
                           by_scope[self.SESSION]["effort"]),
-                         ("gpt-5.6", "high"))
+                         ("gpt-6.1-sol", "high"))
         self.assertEqual(by_scope[other]["label"], "spare Claude")
         self.assertGreaterEqual(by_scope["*"]["age"], 300)
         self.assertEqual(rows[-1]["scope"], "*", "newest first")
@@ -1623,19 +1623,34 @@ class Destinations(Base):
         self.house()
         rows = {row["worker"]: row["models"] for row in swlib.destinations()}
         self.assertEqual([entry["text"] for entry in rows["secondary"]],
-                         ["opus high", "opus medium", "sonnet medium",
-                          "sonnet low", "haiku low"])
-        self.assertEqual(rows["secondary"][0],
-                         {"model": "opus", "effort": "high",
-                          "text": "opus high",
-                          "note": "Opus 5, high effort: the hardest work, "
-                                  "spends the most"})
+                         ["claude-fable-5-1 high", "claude-opus-5-5 high",
+                          "claude-sonnet-5-5 medium",
+                          "claude-haiku-4-5-20251001 low"])
+        self.assertEqual(rows["secondary"][1],
+                         {"model": "claude-opus-5-5", "effort": "high",
+                          "text": "claude-opus-5-5 high",
+                          "note": "Opus 5.5, high effort: hard reasoning, "
+                                  "spends heavily"})
         self.assertEqual([entry["text"] for entry in rows["codex"]],
-                         ["gpt-5.6 high", "gpt-5.6 medium", "gpt-5.6 low"])
+                         ["gpt-6.1-sol high", "gpt-6.1-sol medium",
+                          "gpt-6-astra high"])
         # Every preset says what it costs, so a row is never a bare model name.
         for entries in rows.values():
             for entry in entries:
                 self.assertTrue(entry["note"].strip(), entry)
+
+    def test_the_claude_presets_name_exact_models(self):
+        # An alias resolves inside whichever client runs the worker, and an
+        # older client keeps its old target: one install still sent `opus` to
+        # Opus 5 after Opus 5.5 shipped, under a row that would have said 5.5.
+        for entry in swlib.model_menu("secondary", cfg={}):
+            self.assertTrue(entry["model"].startswith("claude-"), entry)
+
+    def test_no_default_menu_is_longer_than_one_question_can_show(self):
+        # The presets are offered as one AskUserQuestion, which takes four
+        # options. A fifth preset is never shown, and nothing says so.
+        for worker in swlib.PICKER_MODELS:
+            self.assertLessEqual(len(swlib.model_menu(worker, cfg={})), 4, worker)
 
     def test_grok_offers_effort_without_a_model_and_cursor_neither(self):
         # Grok takes --reasoning-effort and no model of ours; Cursor takes
@@ -1652,12 +1667,12 @@ class Destinations(Base):
 
     def test_a_codex_effort_word_the_defaults_do_not_use_is_still_accepted(self):
         self.write_config(codex={"enabled": True},
-                          picker={"models": {"codex": ["gpt-5.6/xhigh",
-                                                       "gpt-5.6/minimal"]}})
+                          picker={"models": {"codex": ["gpt-6.1-sol/xhigh",
+                                                       "gpt-6.1-sol/ultra"]}})
         self.assertEqual([entry["text"] for entry in swlib.model_menu("codex")],
-                         ["gpt-5.6 xhigh", "gpt-5.6 minimal"])
+                         ["gpt-6.1-sol xhigh", "gpt-6.1-sol ultra"])
         self.assertEqual(swlib.model_menu("codex")[0]["note"],
-                         "gpt-5.6, xhigh effort")
+                         "gpt-6.1-sol, xhigh effort")
 
     def test_the_config_replaces_a_menu_and_drops_what_it_cannot_parse(self):
         self.write_config(codex={"enabled": True},
@@ -1667,14 +1682,16 @@ class Destinations(Base):
                          ["gpt-6 low", "default"])
         # A worker the block does not name keeps the built-in presets.
         self.assertEqual([entry["text"] for entry in swlib.model_menu("secondary")],
-                         ["opus high", "opus medium", "sonnet medium",
-                          "sonnet low", "haiku low"])
+                         ["claude-fable-5-1 high", "claude-opus-5-5 high",
+                          "claude-sonnet-5-5 medium",
+                          "claude-haiku-4-5-20251001 low"])
 
     def test_an_empty_menu_in_the_config_falls_back(self):
         self.write_config(codex={"enabled": True},
                           picker={"models": {"codex": []}})
         self.assertEqual([entry["text"] for entry in swlib.model_menu("codex")],
-                         ["gpt-5.6 high", "gpt-5.6 medium", "gpt-5.6 low"])
+                         ["gpt-6.1-sol high", "gpt-6.1-sol medium",
+                          "gpt-6-astra high"])
 
 
 class DesktopSessionHere(Base):
@@ -1789,16 +1806,16 @@ class RouteCli(Base):
 
     def test_it_arms_a_route_for_every_session(self):
         self.write_config(codex={"enabled": True, "label": "codex"})
-        done = self.run_route("--set", "codex", "--model", "gpt-5.6",
+        done = self.run_route("--set", "codex", "--model", "gpt-6.1-sol",
                               "--effort", "high", "--all")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("Routing to Codex, model gpt-5.6, effort high, every "
+        self.assertIn("Routing to Codex, model gpt-6.1-sol, effort high, every "
                       "session.", done.stdout)
         self.assertIn("/second-wind off stops it.", done.stdout)
         written = self.route()
         self.assertEqual((written["worker"], written["model"], written["effort"],
                           written["session_id"], written["source"]),
-                         ("codex", "gpt-5.6", "high", "*", "chat"))
+                         ("codex", "gpt-6.1-sol", "high", "*", "chat"))
 
     def test_here_finds_the_session_in_this_directory(self):
         self.write_config(codex={"enabled": True})
@@ -1949,12 +1966,12 @@ class RouteCli(Base):
         out = self.run_route("--destinations").stdout
         self.assertIn("secondary | spare Claude | 80% headroom | 5h 10%, 7d 20%",
                       out)
-        self.assertIn("    opus high | Opus 5, high effort: the hardest work, "
-                      "spends the most", out)
+        self.assertIn("    claude-opus-5-5 high | Opus 5.5, high effort: hard "
+                      "reasoning, spends heavily", out)
         self.assertIn("codex | Codex | headroom unknown | no current reading",
                       out)
-        self.assertIn("    gpt-5.6 medium | GPT-5.6, medium: everyday tasks",
-                      out)
+        self.assertIn("    gpt-6.1-sol medium | GPT-6.1-Sol, medium: everyday "
+                      "tasks", out)
 
     def test_no_destinations_says_so(self):
         self.write_config()
@@ -2242,12 +2259,12 @@ class WriteRerun(Base):
 
     def test_picker_routes_are_carried_forward_and_validated(self):
         self.write("--picker-routes",
-                   "second-wind/codex/gpt-5.6/high, second-wind/personal")
+                   "second-wind/codex/gpt-6.1-sol/high, second-wind/personal")
         self.assertEqual(self.config()["picker"]["routes"],
-                         ["second-wind/codex/gpt-5.6/high", "second-wind/personal"])
+                         ["second-wind/codex/gpt-6.1-sol/high", "second-wind/personal"])
         self.write()
         self.assertEqual(self.config()["picker"]["routes"],
-                         ["second-wind/codex/gpt-5.6/high", "second-wind/personal"])
+                         ["second-wind/codex/gpt-6.1-sol/high", "second-wind/personal"])
         text = self.write("--picker-routes", "second-wind/grok")
         self.assertEqual(self.config()["picker"]["routes"], ["second-wind/grok"])
         self.assertIn("picker routes", text)
@@ -2260,13 +2277,13 @@ class WriteRerun(Base):
 
     def test_picker_models_are_carried_forward_and_validated(self):
         self.write("--picker-models",
-                   "codex=gpt-5.6/high, codex=gpt-5.6/medium, personal=opus/high")
+                   "codex=gpt-6.1-sol/high, codex=gpt-6.1-sol/medium, personal=opus/high")
         self.assertEqual(self.config()["picker"]["models"],
-                         {"codex": ["gpt-5.6/high", "gpt-5.6/medium"],
+                         {"codex": ["gpt-6.1-sol/high", "gpt-6.1-sol/medium"],
                           "secondary": ["opus/high"]})
         self.write()
         self.assertEqual(self.config()["picker"]["models"],
-                         {"codex": ["gpt-5.6/high", "gpt-5.6/medium"],
+                         {"codex": ["gpt-6.1-sol/high", "gpt-6.1-sol/medium"],
                           "secondary": ["opus/high"]})
         text = self.write("--picker-models", "grok=default")
         self.assertEqual(self.config()["picker"]["models"], {"grok": ["default"]})
@@ -2565,6 +2582,158 @@ class LaunchdCommand(unittest.TestCase):
             "loaded, runs a stale path: rerun --write")
 
 
+class CodexVersionGate(Base):
+    """OpenAI offers a new Codex model only to a client new enough to ask for
+    it, and refuses an older one in words that blame the account. These are the
+    places this machine can show that the codex on PATH is the older one."""
+
+    def setUp(self):
+        super().setUp()
+        # The real ~/.codex and the real ChatGPT app are both out of bounds.
+        self.patches = [mock.patch.object(swlib, "HOME", self.home),
+                        mock.patch.object(swlib, "CHATGPT_APP_CODEX",
+                                          os.path.join(self.home, "no-app"))]
+        for patch in self.patches:
+            patch.start()
+
+    def tearDown(self):
+        for patch in reversed(self.patches):
+            patch.stop()
+        super().tearDown()
+
+    def cache(self, folder, version):
+        home = os.path.join(self.home, folder)
+        os.makedirs(home, exist_ok=True)
+        with open(os.path.join(home, "models_cache.json"), "w") as handle:
+            json.dump({"client_version": version, "models": []}, handle)
+        return home
+
+    def app(self, version):
+        """A stand-in for the CLI inside the ChatGPT app, answering --version
+        the way the real one does."""
+        path = os.path.join(self.home, "app-codex")
+        with open(path, "w") as handle:
+            handle.write("#!/bin/sh\necho 'codex-cli %s'\n" % version)
+        os.chmod(path, 0o755)
+        swlib.CHATGPT_APP_CODEX = path
+
+    def roles(self, **folders):
+        self.write_config(**{role: {"enabled": True,
+                                    "config_dir": os.path.join(self.home, folder)}
+                             for role, folder in folders.items()})
+
+    def test_versions_compare_as_numbers_not_as_text(self):
+        self.assertGreater(swlib.version_key("0.159.10"),
+                           swlib.version_key("0.159.9"))
+        self.assertGreater(swlib.version_key("codex-cli 0.160.0"),
+                           swlib.version_key("0.159.2"))
+        self.assertEqual(swlib.version_key("0.160"), swlib.version_key("0.160.0"))
+
+    def test_a_pre_release_sorts_before_its_release(self):
+        self.assertLess(swlib.version_key("0.160.0-alpha.2"),
+                        swlib.version_key("0.160.0"))
+        self.assertGreater(swlib.version_key("0.160.0-alpha.2"),
+                           swlib.version_key("0.159.2"))
+        self.assertLess(swlib.version_key("0.160.0-alpha.2"),
+                        swlib.version_key("0.160.0-alpha.10"))
+
+    def test_text_without_a_version_has_no_key(self):
+        for text in ("", None, "unknown", "codex-cli"):
+            self.assertIsNone(swlib.version_key(text), text)
+
+    def test_a_home_fetched_by_a_newer_client_is_named(self):
+        self.cache("codex-a", "0.159.2")
+        self.cache("codex-b", "0.153.0")
+        self.roles(codex="codex-a", codex2="codex-b")
+        self.assertEqual(swlib.newer_codex_clients("0.153.0"),
+                         [("0.159.2", "~/codex-a/models_cache.json")])
+
+    def test_the_default_home_counts_as_well(self):
+        # The desktop apps keep ~/.codex, so a newer client seen there is as
+        # good a sign as one in a role's own directory.
+        self.cache(".codex", "0.161.0")
+        self.roles(codex="codex-a")
+        self.assertEqual(swlib.newer_codex_clients("0.159.2"),
+                         [("0.161.0", "~/.codex/models_cache.json")])
+
+    def test_the_cli_inside_the_chatgpt_app_is_asked_its_version(self):
+        self.roles(codex="codex-a")
+        self.app("0.162.0")
+        self.assertEqual(swlib.newer_codex_clients("0.159.2"),
+                         [("0.162.0", "the ChatGPT app")])
+
+    def test_the_newest_comes_first(self):
+        self.cache("codex-a", "0.160.0")
+        self.roles(codex="codex-a")
+        self.app("0.162.0")
+        self.assertEqual([version for version, _ in
+                          swlib.newer_codex_clients("0.153.0")],
+                         ["0.162.0", "0.160.0"])
+
+    def test_the_same_or_older_everywhere_is_nothing_to_report(self):
+        self.cache("codex-a", "0.159.2")
+        self.cache(".codex", "0.153.0")
+        self.roles(codex="codex-a")
+        self.app("0.159.2")
+        self.assertEqual(swlib.newer_codex_clients("0.159.2"), [])
+
+    def test_a_version_with_words_round_it_is_reported_bare(self):
+        # The update line is built from this, and "codex-cli 0.160.0" would
+        # reach npm as two broken arguments.
+        self.cache("codex-a", "codex-cli 0.160.0")
+        self.roles(codex="codex-a")
+        self.assertEqual(swlib.newer_codex_clients("0.159.2"),
+                         [("0.160.0", "~/codex-a/models_cache.json")])
+
+    def test_a_cache_that_cannot_be_read_is_skipped(self):
+        home = os.path.join(self.home, "codex-a")
+        os.makedirs(home)
+        with open(os.path.join(home, "models_cache.json"), "w") as handle:
+            handle.write("{not json")
+        self.roles(codex="codex-a")
+        self.assertEqual(swlib.newer_codex_clients("0.153.0"), [])
+
+    def test_an_unknown_installed_version_is_compared_with_nothing(self):
+        self.cache(".codex", "0.161.0")
+        self.roles(codex="codex-a")
+        self.assertEqual(swlib.newer_codex_clients(""), [])
+
+    def test_the_update_goes_through_the_npm_beside_codex(self):
+        # npm -g installs into the prefix of whichever npm runs it, so the line
+        # names the folder PATH found codex in, not whatever npm comes first.
+        folder = os.path.join(self.home, "node", "bin")
+        os.makedirs(folder)
+        for name in ("codex", "npm"):
+            open(os.path.join(folder, name), "w").close()
+        self.assertEqual(
+            swlib.codex_update_command("0.160.0", os.path.join(folder, "codex")),
+            'PATH="$HOME/node/bin:$PATH" npm install -g @openai/codex@0.160.0')
+
+    def test_a_folder_name_the_shell_would_expand_is_kept_literal(self):
+        # Inside double quotes sh still expands $, ` and \, so a folder named
+        # $node would send the update to some other directory.
+        folder = os.path.join(self.home, "$node", "bin")
+        os.makedirs(folder)
+        for name in ("codex", "npm"):
+            open(os.path.join(folder, name), "w").close()
+        line = swlib.codex_update_command("0.160.0", os.path.join(folder, "codex"))
+        self.assertEqual(line, 'PATH="$HOME/\\$node/bin:$PATH" npm install -g '
+                               '@openai/codex@0.160.0')
+        # And sh agrees: the PATH it builds starts with the real folder.
+        shown = subprocess.run(
+            ["/bin/sh", "-c", line.split(" npm ")[0] + '; printf %s "${PATH%%:*}"'],
+            capture_output=True, text=True, env={"HOME": self.home, "PATH": "/x"})
+        self.assertEqual(shown.stdout, folder)
+
+    def test_with_no_npm_beside_codex_the_update_is_the_plain_npm_line(self):
+        folder = os.path.join(self.home, "bin")
+        os.makedirs(folder)
+        open(os.path.join(folder, "codex"), "w").close()
+        self.assertEqual(
+            swlib.codex_update_command("0.160.0", os.path.join(folder, "codex")),
+            "npm install -g @openai/codex@0.160.0")
+
+
 class Check(Base):
     """--check has to answer the questions the tool cannot answer for itself, so
     the two rows added here are tested for what they actually say."""
@@ -2667,6 +2836,58 @@ class Check(Base):
     def test_the_same_client_version_says_so(self):
         self.configure(tested_versions={"claude": "2.1.259"})
         self.assertIn("2.1.259 installed, tested against the same", self.check())
+
+    def codex_cache(self, version, folder="codex-a"):
+        home = os.path.join(self.home, folder)
+        os.makedirs(home)
+        with open(os.path.join(home, "models_cache.json"), "w") as handle:
+            json.dump({"client_version": version, "models": []}, handle)
+        return home
+
+    def check_codex(self, version):
+        """--check with a codex of this version first on PATH and the npm that
+        installed it beside it, and with the real ~/.codex and ChatGPT app
+        swapped for nothing."""
+        folder = os.path.join(self.home, "node", "bin")
+        os.makedirs(folder)
+        for name in ("codex", "npm"):
+            path = os.path.join(folder, name)
+            with open(path, "w") as handle:
+                handle.write("#!/bin/sh\n")
+            os.chmod(path, 0o755)
+        swlib.client_versions = lambda: {"claude": "2.1.259", "codex": version}
+        path = folder + os.pathsep + os.environ.get("PATH", "")
+        with mock.patch.dict(os.environ, {"PATH": path}), \
+                mock.patch.object(swlib, "HOME", self.home), \
+                mock.patch.object(swlib, "CHATGPT_APP_CODEX",
+                                  os.path.join(self.home, "no-app")):
+            return self.check()
+
+    def test_a_codex_older_than_one_seen_here_is_a_warning_with_the_fix(self):
+        self.configure(codex={"enabled": True,
+                              "config_dir": self.codex_cache("0.159.2")})
+        text = self.check_codex("0.153.0")
+        self.assertIn("BEHIND: 0.153.0 on PATH, 0.159.2 in "
+                      "~/codex-a/models_cache.json", text)
+        self.assertIn("not supported when using Codex with a ChatGPT account", text)
+        self.assertIn('PATH="$HOME/node/bin:$PATH" npm install -g '
+                      '@openai/codex@0.159.2', text)
+
+    def test_a_codex_as_new_as_any_seen_here_says_so(self):
+        self.configure(codex={"enabled": True,
+                              "config_dir": self.codex_cache("0.159.2")})
+        text = self.check_codex("0.159.2")
+        self.assertIn("0.159.2 on PATH, no newer client seen", text)
+        self.assertNotIn("npm install -g @openai/codex", text)
+
+    def test_no_codex_worker_means_no_gate_row(self):
+        # A newer client sits in the default home, so the row would be BEHIND
+        # if the gate ran without a Codex worker to run it for.
+        self.codex_cache("0.159.2", folder=".codex")
+        self.configure()
+        text = self.check_codex("0.153.0")
+        self.assertNotIn("codex version gate", text)
+        self.assertNotIn("npm install -g @openai/codex", text)
 
 
 class VerifyOutput(unittest.TestCase):

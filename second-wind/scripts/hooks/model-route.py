@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PreModelSwitch hook: the model picker doubles as a routing switch.
 
-Picking a `second-wind/...` row, or typing `/model second-wind/codex/gpt-5.6/high`,
+Picking a `second-wind/...` row, or typing `/model second-wind/codex/gpt-6.1-sol/high`,
 is not a model change at all. This session keeps the model it has and the next
 tasks go to that worker instead, so the hook refuses the switch on purpose and
 writes the mode file the prompt guard reads at the next prompt.

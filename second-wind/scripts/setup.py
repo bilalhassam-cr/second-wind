@@ -737,7 +737,7 @@ def cmd_write(a):
     for entry in routes:
         if not swlib.parse_route(entry):
             sys.exit("second-wind: --picker-routes takes ids like "
-                     "second-wind/codex/gpt-5.6/high. %s is not one." % entry)
+                     "second-wind/codex/gpt-6.1-sol/high. %s is not one." % entry)
     picker_models, problem = picker_models_block(a.picker_models)
     if problem:
         sys.exit("second-wind: " + problem)
@@ -1619,6 +1619,28 @@ def cmd_check():
             warnings.append("%s is %s now, %s when second-wind was set up. If a "
                             "reading stops parsing, that is the first thing to "
                             "check." % (name, version, was))
+    # The codex on PATH is the one the runner starts. A newer Codex client seen
+    # anywhere on this machine means models this one cannot ask for, and the
+    # refusal names the account, so nobody thinks to look at the client.
+    codex_now = installed_versions.get("codex", "")
+    if codex_now and any((cfg.get(role) or {}).get("enabled")
+                         for role in swlib.CODEX_ROLES):
+        newer = swlib.newer_codex_clients(codex_now, cfg)
+        if newer:
+            want = newer[0][0]
+            where = ", ".join(place for version, place in newer if version == want)
+            row("codex version gate", "BEHIND: %s on PATH, %s in %s"
+                % (codex_now, want, where))
+            warnings.append("the codex on PATH is %s, older than the %s in %s. "
+                            "OpenAI offers its newest models only to newer "
+                            "clients and refuses them as \"not supported when "
+                            "using Codex with a ChatGPT account\", which blames "
+                            "the account when the cause is the client. Update "
+                            "it with  %s"
+                            % (codex_now, want, where,
+                               swlib.codex_update_command(want)))
+        else:
+            row("codex version gate", "%s on PATH, no newer client seen" % codex_now)
 
     print()
     interval = swlib.interval_minutes(cfg)
@@ -1885,11 +1907,11 @@ def build_parser():
     ap.add_argument("--model-picker", choices=["on", "off"], default=None)
     ap.add_argument("--picker-routes", default=None,
                     help="comma-separated routing ids to add to the model "
-                         "picker, such as second-wind/codex/gpt-5.6/high")
+                         "picker, such as second-wind/codex/gpt-6.1-sol/high")
     ap.add_argument("--picker-models", default=None,
                     help="model and effort rows the /second-wind picker offers "
                          "per worker, as worker=model/effort,... for example "
-                         "codex=gpt-5.6/high,codex=gpt-5.6/medium")
+                         "codex=gpt-6.1-sol/high,codex=gpt-6.1-sol/medium")
     ap.add_argument("--field-notes", choices=["on", "off"], default=None,
                     help="keep a diary for a test round: setup steps, reader "
                          "outcomes, routes and handovers, and your own notes. "

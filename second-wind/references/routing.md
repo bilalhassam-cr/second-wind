@@ -47,17 +47,26 @@ never shows a bare model name.
 
 | Worker | Presets |
 |---|---|
-| Personal Claude (`secondary`) | `opus/high`, `opus/medium`, `sonnet/medium`, `sonnet/low`, `haiku/low` |
-| Codex | `gpt-5.6/high`, `gpt-5.6/medium`, `gpt-5.6/low` |
+| Personal Claude (`secondary`) | `claude-fable-5-1/high`, `claude-opus-5-5/high`, `claude-sonnet-5-5/medium`, `claude-haiku-4-5-20251001/low` |
+| Codex | `gpt-6.1-sol/high`, `gpt-6.1-sol/medium`, `gpt-6-astra/high` |
 | Grok Build | `default/high`, `default/medium` |
 | Cursor Agent | `default` |
 
 `default` in the model position means pass no model, so the account's own is
 used. Grok's effort goes out as `--reasoning-effort`; Cursor takes no effort flag
-at all; Codex accepts `minimal`, `low`, `medium`, `high` and `xhigh`, and any of
-them can be put in the config. Override per worker with
-`setup.py --write --picker-models codex=gpt-5.6/xhigh,codex=gpt-5.6/medium`,
+at all; Codex takes the efforts each model lists in its home's
+`models_cache.json` (on 1 October 2026, `low` to `xhigh` on every model, `max` on
+most and `ultra` on some), and any of them can be put in the config. Override per
+worker with
+`setup.py --write --picker-models codex=gpt-6.1-sol/xhigh,codex=gpt-6.1-sol/medium`,
 which is carried forward on later writes.
+
+The Claude presets name exact models, not `opus` or `sonnet`. An alias resolves
+inside whichever client runs the worker, and an older client keeps its old
+target: one install still sent `opus` to Opus 5 after Opus 5.5 shipped. A model
+newer than the client is refused with the version it needs, which
+`references/troubleshooting.md` covers. No worker has more than four presets,
+because they are offered as one question and a question takes four options.
 
 ## Keeping the work here
 
@@ -67,11 +76,10 @@ to type, because that is the only thing that changes a running session:
 
 | Preset | Type this | For |
 |---|---|---|
-| Fable 5.1, high | `/model fable` then `/effort high` | The default. Long deliverables. |
-| Opus 5, high | `/model opus` then `/effort high` | The hardest reasoning, spends the most. |
-| Opus 5, medium | `/model opus` then `/effort medium` | Long jobs at a lower rate. |
-| Sonnet 5, medium | `/model sonnet` then `/effort medium` | Everyday tasks, light on the allowance. |
-| Haiku 4.5, low | `/model haiku` then `/effort low` | The cheapest pass. |
+| Fable 5.1, high | `/model claude-fable-5-1` then `/effort high` | The default. Long deliverables. |
+| Opus 5.5, high | `/model claude-opus-5-5` then `/effort high` | Hard reasoning, spends heavily. |
+| Sonnet 5.5, medium | `/model claude-sonnet-5-5` then `/effort medium` | Everyday tasks, light on the allowance. |
+| Haiku 4.5, low | `/model claude-haiku-4-5-20251001` then `/effort low` | The cheapest pass. |
 
 ## The route files
 
@@ -111,7 +119,7 @@ somebody echoing into the file expects.
 
 ```bash
 python3 "$SW/scripts/route.py" --destinations
-python3 "$SW/scripts/route.py" --set codex --model gpt-5.6 --effort high --here
+python3 "$SW/scripts/route.py" --set codex --model gpt-6.1-sol --effort high --here
 python3 "$SW/scripts/route.py" --set personal --mode review --all
 python3 "$SW/scripts/route.py" --show
 python3 "$SW/scripts/route.py" --clear
@@ -132,7 +140,7 @@ session's route the same way.
 
 ## The model picker, in a terminal only
 
-`/model second-wind/personal`, or `/model second-wind/codex/gpt-5.6/high`, routes
+`/model second-wind/personal`, or `/model second-wind/codex/gpt-6.1-sol/high`, routes
 as well. The switch is refused on purpose: the session keeps its model and the
 next tasks go to that worker through the runner, scoped to that session. Picking
 any normal model clears that session's route and leaves every other one alone.

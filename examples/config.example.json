@@ -64,8 +64,8 @@
     "cursor": true
   },
   "picker": {
-    "routes": ["second-wind/codex/gpt-5.6/high"],
-    "models": {"codex": ["gpt-5.6/high", "gpt-5.6/medium", "gpt-5.6/low"]}
+    "routes": ["second-wind/codex/gpt-6.1-sol/high"],
+    "models": {"codex": ["gpt-6.1-sol/high", "gpt-6.1-sol/medium", "gpt-6-astra/high"]}
   },
   "failover": {
     "enabled": true,

@@ -239,7 +239,7 @@ handover off altogether.
 ## Routing from the model picker
 
 In a terminal, `/model second-wind/personal` or
-`/model second-wind/codex/gpt-5.6/high` routes too. The switch is **refused on
+`/model second-wind/codex/gpt-6.1-sol/high` routes too. The switch is **refused on
 purpose**: the session keeps its model and the next tasks go to that worker
 through the runner, for this session only. Picking any normal model stops it.
 The desktop app fires no hook for a typed id, so a routing name there becomes a

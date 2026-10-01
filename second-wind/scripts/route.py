@@ -10,7 +10,7 @@ A route is scoped to one session on purpose. The whole reason this exists is
 that a route armed in one chat used to tell every other session to send its work
 somewhere else.
 
-    route.py --set codex --model gpt-5.6 --effort high --here
+    route.py --set codex --model gpt-6.1-sol --effort high --here
     route.py --set personal --mode review --all
     route.py --show
     route.py --clear

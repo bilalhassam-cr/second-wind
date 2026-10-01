@@ -279,6 +279,27 @@ and worker levels, which do not install it. Rerun `--write` and restart.
 A route that is refused with "the next tasks route to ..." is the hook working:
 the block is the mechanism, not a fault.
 
+## A worker says a model is not supported, or needs a newer version
+
+The model usually exists and the account can use it; the client is too old to
+ask for it. Codex refuses with "not supported when using Codex with a ChatGPT
+account", which names the account when the cause is the client. Claude Code
+names the version it needs, as in "version 2.1.280 or newer is required".
+
+For Codex, `setup.py --check` prints a `codex version gate` row. It compares the
+codex on PATH, which is the one the runner starts, with the newest client this
+machine has seen: the `client_version` each Codex home's `models_cache.json`
+records from its last fetch, and the CLI inside the ChatGPT desktop app. A row
+that says `BEHIND` comes with a warning giving the update line, run through the
+npm beside the codex on PATH so the new version lands where PATH will find it.
+Codex also runs an app-server daemon from each home's `packages/app-server-daemon`
+that can be newer than the CLI that started it, so a new release often shows up
+in that home's cache first, sometimes before any model needs it.
+
+For a Claude worker the error names the fix: run `claude update`, or update
+Claude Code the way it was installed. The presets name exact models rather than
+aliases, so an old client refuses one instead of quietly running an older model.
+
 ## A route seems to apply to the wrong chat
 
 Run `python3 "$SW/scripts/route.py" --show`. It lists **every** armed route with

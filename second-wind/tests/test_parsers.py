@@ -580,10 +580,10 @@ class PickerTests(unittest.TestCase):
         rows = picker.route_rows(self.cfg)
         self.assertEqual([row["model"] for row in rows],
                          ["second-wind/personal", "second-wind/codex",
-                          "second-wind/codex/gpt-5.6/high"])
+                          "second-wind/codex/gpt-6.1-sol/high"])
         self.assertEqual([row["label"] for row in rows],
                          ["Route: Personal Claude", "Route: Codex",
-                          "Route: Codex, gpt-5.6, high"])
+                          "Route: Codex, gpt-6.1-sol, high"])
         self.assertEqual(rows[0]["description"],
                          "5h 1% · 7d 10% · picking this routes the next "
                          "tasks there")
@@ -640,7 +640,7 @@ class PickerTests(unittest.TestCase):
         self.assertEqual([row["model"] for row in block["options"]],
                          ["fable", "opus", "sonnet", "haiku",
                           "second-wind/personal", "second-wind/codex",
-                          "second-wind/codex/gpt-5.6/high"])
+                          "second-wind/codex/gpt-6.1-sol/high"])
         self.assertEqual([row["label"] for row in block["options"][:4]],
                          ["Fable", "Opus", "Sonnet", "Haiku"])
         self.assertEqual(block["options"][0]["description"],

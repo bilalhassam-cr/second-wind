@@ -99,7 +99,7 @@ def route_rows(cfg):
     """One row per enabled worker, then any extra ids from `picker.routes`.
 
     The extra ids are how a model and an effort get into the picker:
-    `second-wind/codex/gpt-5.6/high` is a row that routes and parameterises in
+    `second-wind/codex/gpt-6.1-sol/high` is a row that routes and parameterises in
     one pick. A route naming a worker that is not connected is dropped rather
     than shown, since picking it could only ever be refused.
     """

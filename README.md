@@ -193,7 +193,7 @@ and it skips the questions and does the job now. In the desktop app the picker i
 the only way to route, because its model menu shows no rows of ours.
 
 You can also route from the model picker. Typing `/model second-wind/personal`,
-or `/model second-wind/codex/gpt-5.6/high`, is refused on purpose: the session
+or `/model second-wind/codex/gpt-6.1-sol/high`, is refused on purpose: the session
 keeps the model it has, and a PreModelSwitch hook records that the next tasks go
 to that worker, with that model and effort, through the runner. Picking any
 normal model deletes the record and hands control back to the usage figures. This

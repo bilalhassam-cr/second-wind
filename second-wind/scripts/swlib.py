@@ -278,14 +278,18 @@ ROUTE_MAX_AGE = 12 * 3600
 # config overrides them. `default` means send no model, so the client uses the
 # account's own. Kept here rather than in the skill text so the picker, the
 # config and setup cannot disagree about what a worker can be asked for.
-# Cursor takes no effort flag; Grok's is --reasoning-effort; Codex accepts
-# minimal, low, medium, high and xhigh.
+# Cursor takes no effort flag; Grok's is --reasoning-effort; Codex takes the
+# efforts each model lists in its home's models_cache.json.
+# Claude presets name the exact model, never an alias. An alias resolves inside
+# whichever client runs the worker, and an older client keeps its old target, so
+# a row reading Opus 5.5 could quietly run Opus 5. Four at most per worker,
+# because the presets are offered as one question, and a question takes four.
 PICKER_MODELS = {
-    "secondary": ("opus/high", "opus/medium", "sonnet/medium", "sonnet/low",
-                  "haiku/low"),
-    "codex": ("gpt-5.6/high", "gpt-5.6/medium", "gpt-5.6/low"),
-    "codex2": ("gpt-5.6/high", "gpt-5.6/medium", "gpt-5.6/low"),
-    "codex3": ("gpt-5.6/high", "gpt-5.6/medium", "gpt-5.6/low"),
+    "secondary": ("claude-fable-5-1/high", "claude-opus-5-5/high",
+                  "claude-sonnet-5-5/medium", "claude-haiku-4-5-20251001/low"),
+    "codex": ("gpt-6.1-sol/high", "gpt-6.1-sol/medium", "gpt-6-astra/high"),
+    "codex2": ("gpt-6.1-sol/high", "gpt-6.1-sol/medium", "gpt-6-astra/high"),
+    "codex3": ("gpt-6.1-sol/high", "gpt-6.1-sol/medium", "gpt-6-astra/high"),
     "grok": ("default/high", "default/medium"),
     "cursor": ("default",),
 }
@@ -293,14 +297,16 @@ PICKER_MODELS = {
 # somebody guess from a model name. A preset nobody wrote a line for gets a
 # plain description built from its own words.
 MODEL_NOTES = {
-    "opus/high": "Opus 5, high effort: the hardest work, spends the most",
-    "opus/medium": "Opus 5, medium: long jobs at a lower rate",
-    "sonnet/medium": "Sonnet 5, medium: everyday tasks, light on the allowance",
-    "sonnet/low": "Sonnet 5, low: quick reads and checks",
-    "haiku/low": "Haiku 4.5, low: the cheapest pass",
-    "gpt-5.6/high": "GPT-5.6, high effort: the hardest work, slowest",
-    "gpt-5.6/medium": "GPT-5.6, medium: everyday tasks",
-    "gpt-5.6/low": "GPT-5.6, low: quick reads and checks",
+    "claude-fable-5-1/high":
+        "Fable 5.1, high effort: the strongest model, long deliverables",
+    "claude-opus-5-5/high": "Opus 5.5, high effort: hard reasoning, spends heavily",
+    "claude-sonnet-5-5/medium":
+        "Sonnet 5.5, medium: everyday tasks, light on the allowance",
+    "claude-haiku-4-5-20251001/low": "Haiku 4.5, low: the cheapest pass",
+    "gpt-6.1-sol/high": "GPT-6.1-Sol, high effort: complex problems, slower",
+    "gpt-6.1-sol/medium": "GPT-6.1-Sol, medium: everyday tasks",
+    "gpt-6-astra/high":
+        "GPT-6-Astra, high effort: the frontier model, the most demanding work",
     "default/high": "The account's own model, high reasoning effort",
     "default/medium": "The account's own model, medium reasoning effort",
     "default": "The account's own model and effort; neither is passed",
@@ -1869,6 +1875,99 @@ def _version_of(command):
 def client_versions():
     """Installed version of each supported client, empty string when absent."""
     return {name: _version_of(command) for name, command in CLIENT_COMMANDS}
+
+
+# The ChatGPT desktop app carries a Codex CLI of its own and updates it with the
+# app, so it is often the newest Codex client on the machine.
+CHATGPT_APP_CODEX = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+_VERSION = re.compile(r"(\d+(?:\.\d+)+)(?:-([0-9A-Za-z.-]+))?")
+
+
+def version_text(text):
+    """The version in a client's version string without the words round it, so
+    "codex-cli 0.160.0" is 0.160.0, or "" when there is none."""
+    match = _VERSION.search(text or "")
+    return match.group(0) if match else ""
+
+
+def version_key(text):
+    """A client version as something that sorts, or None when there is none.
+
+    Numeric, so 0.159.10 comes after 0.159.9, and a pre-release before its
+    release, as semver has it: 0.160.0-alpha.1 is older than 0.160.0.
+    """
+    match = _VERSION.search(text or "")
+    if not match:
+        return None
+    numbers = [int(part) for part in match.group(1).split(".")]
+    while len(numbers) > 1 and numbers[-1] == 0:
+        numbers.pop()
+    tag = match.group(2)
+    parts = tuple((0, int(part)) if part.isdigit() else (1, part)
+                  for part in tag.split(".")) if tag else ()
+    return tuple(numbers), 0 if tag else 1, parts
+
+
+def codex_cache_version(home):
+    """The client_version that last fetched this Codex home's model list, or ""
+    when there is no list to read."""
+    try:
+        with open(os.path.join(home, "models_cache.json")) as handle:
+            data = json.load(handle)
+    except Exception:
+        return ""
+    version = data.get("client_version") if isinstance(data, dict) else ""
+    return version if isinstance(version, str) else ""
+
+
+def newer_codex_clients(installed, cfg=None):
+    """Where this machine shows a newer Codex client than ``installed``, as
+    ``(version, where)`` pairs, newest first.
+
+    OpenAI offers a new model only to a client new enough to ask for it, and
+    refuses an older one as "not supported when using Codex with a ChatGPT
+    account", which reads as the plan when it is the client. Each Codex home's
+    models_cache.json records the client that last fetched it, and the ChatGPT
+    app carries its own CLI, so either can show that the codex on PATH is
+    behind. Empty when ``installed`` is unknown: there is nothing to compare.
+    """
+    mine = version_key(installed)
+    if mine is None:
+        return []
+    cfg = load_config() if cfg is None else cfg
+    homes = [os.path.join(HOME, ".codex")]
+    for role in CODEX_ROLES:
+        home = codex_home(role, cfg)
+        if home and home not in homes:
+            homes.append(home)
+    # Bare versions only: the update line is built from whichever comes first.
+    seen = [(version_text(codex_cache_version(home)),
+             tilde(os.path.join(home, "models_cache.json"))) for home in homes]
+    seen.append((version_text(_version_of(CHATGPT_APP_CODEX)), "the ChatGPT app"))
+    newer = [(version, where) for version, where in seen
+             if version and version_key(version) > mine]
+    return sorted(newer, key=lambda pair: version_key(pair[0]), reverse=True)
+
+
+def codex_update_command(version, binary=None):
+    """The line that brings the codex on PATH up to ``version``.
+
+    npm -g installs into the prefix of whichever npm runs it. When an npm sits
+    beside the codex PATH finds, the line runs that one; any other npm would put
+    the update in another prefix, and PATH would go on finding the old codex.
+    """
+    binary = binary or shutil.which("codex") or ""
+    folder = os.path.dirname(binary)
+    line = "npm install -g @openai/codex@%s" % version
+    if folder and os.path.exists(os.path.join(folder, "npm")):
+        # Inside double quotes sh still expands $, ` and \, and a " ends the
+        # string, so each is escaped and the folder reaches PATH as it is.
+        under_home = folder.startswith(HOME + os.sep)
+        literal = re.sub(r'([\\"$`])', r"\\\1",
+                         folder[len(HOME):] if under_home else folder)
+        return 'PATH="%s%s:$PATH" %s' % ("$HOME" if under_home else "", literal,
+                                         line)
+    return line
 
 
 def has_jq():

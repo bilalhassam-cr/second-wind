@@ -478,21 +478,21 @@ class PromptGuard(Base):
     def test_a_json_mode_file_carrying_a_model_and_an_effort(self):
         self.write_config()
         self.write_usage("primary", five=2, week=3, age=60)
-        self.touch("mode", json.dumps({"worker": "codex", "model": "gpt-5.6",
+        self.touch("mode", json.dumps({"worker": "codex", "model": "gpt-6.1-sol",
                                        "effort": "high", "set_at": self.now,
                                        "label": "Codex"}))
         text = self.context(self.prompt(), "UserPromptSubmit").replace("\n", " ")
         self.assertIn("routing the heavy work to Codex", text)
-        self.assertIn("through second-wind, passing --model gpt-5.6 and "
+        self.assertIn("through second-wind, passing --model gpt-6.1-sol and "
                       "--effort high to the runner", text)
 
     def test_a_json_mode_file_with_a_model_only(self):
         self.write_config()
         self.write_usage("primary", five=2, week=3, age=60)
-        self.touch("mode", json.dumps({"worker": "codex", "model": "gpt-5.6",
+        self.touch("mode", json.dumps({"worker": "codex", "model": "gpt-6.1-sol",
                                        "effort": None, "label": "Codex"}))
         text = self.context(self.prompt(), "UserPromptSubmit").replace("\n", " ")
-        self.assertIn("passing --model gpt-5.6 to the runner", text)
+        self.assertIn("passing --model gpt-6.1-sol to the runner", text)
         self.assertNotIn("--effort", text)
 
     def test_a_json_mode_file_with_no_label_names_the_worker(self):
@@ -517,10 +517,10 @@ class PromptGuard(Base):
     def test_a_bare_routing_id_can_carry_a_model_and_an_effort(self):
         self.write_config()
         self.write_usage("primary", five=2, week=3, age=60)
-        self.touch("mode", "second-wind/codex/gpt-5.6/high\n")
+        self.touch("mode", "second-wind/codex/gpt-6.1-sol/high\n")
         text = self.context(self.prompt(), "UserPromptSubmit").replace("\n", " ")
         self.assertIn("routing the heavy work to Codex", text)
-        self.assertIn("passing --model gpt-5.6 and --effort high to the runner",
+        self.assertIn("passing --model gpt-6.1-sol and --effort high to the runner",
                       text)
 
     SESSION = "7777aaaa-1111-2222-3333-444455556666"
@@ -843,11 +843,11 @@ class ModelRoute(Base):
 
     def test_a_model_and_effort_row_records_both(self):
         self.write_config()
-        reason = self.blocked(self.switch("second-wind/codex/gpt-5.6/high"))
-        self.assertIn("route to Codex, model gpt-5.6, effort high", reason)
+        reason = self.blocked(self.switch("second-wind/codex/gpt-6.1-sol/high"))
+        self.assertIn("route to Codex, model gpt-6.1-sol, effort high", reason)
         written = self.mode()
         self.assertEqual((written["worker"], written["model"], written["effort"]),
-                         ("codex", "gpt-5.6", "high"))
+                         ("codex", "gpt-6.1-sol", "high"))
 
     def test_a_bare_alias_typed_in_the_desktop_app(self):
         self.write_config()
@@ -1049,11 +1049,11 @@ class DesktopRoute(Base):
         self.write_config()
         self.write_usage("primary", five=2, week=3, age=60)
         reason = self.denied(
-            self.prompt(self.store("second-wind/codex/gpt-5.6/high")))
+            self.prompt(self.store("second-wind/codex/gpt-6.1-sol/high")))
         self.assertIn("routing to Codex is armed", reason)
         written = self.mode()
         self.assertEqual((written["worker"], written["model"], written["effort"]),
-                         ("codex", "gpt-5.6", "high"))
+                         ("codex", "gpt-6.1-sol", "high"))
 
     def test_a_real_model_is_left_alone(self):
         self.write_config()
