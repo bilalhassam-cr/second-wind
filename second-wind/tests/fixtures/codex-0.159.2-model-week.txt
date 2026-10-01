@@ -1,0 +1,55 @@
+  Agents.md:                  <none>
+  Account:                    Pro
+  Collaboration mode:         Default
+  Session:                    00000000-0000-4000-8000-000000000000
+
+  Weekly limit:               [███████████████░░░░░] 77% left (resets 13:31 on 4 Oct)
+  Luna Reserve Weekly limit:  [████████████████████] 100% left (resets 17:28 on 8 Oct)
+
+/status
+
+  >_ OpenAI Codex (v0.159.2)
+
+  Visit https://chatgpt.com/codex/settings/usage for up-to-date
+  information on rate limits and credits
+
+  Server:                     Local background server
+
+  Model:                      GPT-6.1-Sol (reasoning low, summaries auto)
+  Model provider:             openai
+  Directory:                  ~/.second-wind/workdir
+  Permissions:                Workspace (Ask for approval)
+  Agents.md:                  <none>
+  Account:                    Pro
+  Collaboration mode:         Default
+  Session:                    00000000-0000-4000-8000-000000000000
+
+  Weekly limit:               [███████████████░░░░░] 77% left (resets 13:31 on 4 Oct)
+  Luna Reserve Weekly limit:  [████████████████████] 100% left (resets 17:28 on 8 Oct)
+
+/status
+
+  >_ OpenAI Codex (v0.159.2)
+
+  Visit https://chatgpt.com/codex/settings/usage for up-to-date
+  information on rate limits and credits
+
+  Server:                     Local background server
+
+  Model:                      GPT-6.1-Sol (reasoning low, summaries auto)
+  Model provider:             openai
+  Directory:                  ~/.second-wind/workdir
+  Permissions:                Workspace (Ask for approval)
+  Agents.md:                  <none>
+  Account:                    Pro
+  Collaboration mode:         Default
+  Session:                    00000000-0000-4000-8000-000000000000
+
+  Weekly limit:               [███████████████░░░░░] 77% left (resets 13:31 on 4 Oct)
+  Luna Reserve Weekly limit:  [████████████████████] 100% left (resets 17:28 on 8 Oct)
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol default · ~/.second-wind/workdir
+  ← for agents · ? for shortcuts

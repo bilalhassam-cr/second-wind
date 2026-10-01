@@ -5,7 +5,8 @@ Codex needs patience rather than keystrokes. On an untrusted directory it opens
 a trust modal, which this reader reports and never answers. On a trusted one it
 spends ten to forty seconds starting MCP servers, and a /status typed during
 that window is swallowed, so the reader waits for the composer to appear and
-the screen to go quiet before it types anything.
+the screen to go quiet before it types anything. From 0.158 Codex draws full
+screen, and the panel is read from the screen it shows: see panel_text.
 
   codex-status.py [--role codex|codex2] [--cwd DIR] [--out PATH]
                   [--status PATH] [--budget 85] [--dump PATH]
@@ -30,9 +31,20 @@ CLIENT = "codex"
 # break wherever the cursor moved, so every marker allows any whitespace
 # between its words. \s+ matches a newline; a literal space does not.
 PROMPT = r"Ask\s+Codex"
-TRUST = r"Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory"
+# 0.152.1 asked "Do you trust the contents of this directory?". 0.159.2 and
+# 0.160.0 ask "Trust this folder?", and only in a git folder, with "Trust and
+# continue" already selected, so an Enter typed at it trusts the folder.
+TRUST = (r"Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory|"
+         r"Trust\s+this\s+folder\?")
 LOGIN = (r"Not\s+logged\s+in|Sign\s+in\s+with\s+ChatGPT|/login\s+to|"
          r"session\s+(?:has\s+)?expired")
+# A full-screen Codex marks its input line with "›" and shows the placeholder
+# or the command just typed: "› Ask Codex to do anything", "› /status". A
+# dialog replaces that line, so a key goes only while the line itself is on
+# screen. A bare "/status" left in the history, the "› /status  show ..."
+# row of the command list and a dialog's "› 1. ..." option all fail to match.
+COMPOSER = re.compile("^\\s*›\\s*(?:Ask\\s+Codex\\b.*|/status)\\s*$",
+                      re.M | re.I)
 STARTING = r"Starting\s+MCP\s+servers"
 # A Business or Plus panel prints a 5h and a weekly line. A Free workspace
 # prints one monthly line and nothing else, and a reader that did not know that
@@ -60,6 +72,44 @@ HEADING = re.compile(r"^\s*(\S.*?)\s+limit:\s*$")
 # still holding part of an earlier paint starts each frame at the plan again
 # rather than carrying a heading across.
 FRAME = re.compile(r"Account:|OpenAI\s+Codex\s*\(")
+# Codex prints the address and the plan, the address alone, the plan alone,
+# "ChatGPT" when it knows neither, or a sentence for an API key. Run behind its
+# background server, as 0.159.2 and 0.160.0 are, it prints the plan alone, and
+# a reader that took the first word for the account reported "signed in as
+# Pro". Only something shaped like an address is ever the account.
+ACCOUNT = re.compile(r"Account:[ \t]+(\S.*?)[ \t]*$", re.M)
+ADDRESS = re.compile(r"\S+@\S+")
+# Codex has renamed its Pro plans twice, and a bare "Pro" has meant two plans.
+# From codex-rs/tui/src/status/helpers.rs, and subscription.rs from 0.160.0:
+#
+#              up to 0.157    0.158.0 to 0.159.3    from 0.160.0
+#   Pro Lite   Pro Lite       Pro                   Pro 100
+#   Pro        Pro            Pro (More)            Pro 200
+#   Pro Max    not offered    Pro (Max)             Pro 500
+#
+# The drift check compares the plan read with the plan pinned at setup, so a
+# name taken as printed reported a sign-in change on every Pro Lite account
+# the day its client updated. Each plan is kept under the first name Codex
+# gave it, which is the name a config pinned before the renames already holds.
+# Every other plan has kept its name throughout.
+RENAMED = {"pro (more)": "Pro", "pro 100": "Pro Lite", "pro 200": "Pro",
+           "pro 500": "Pro (Max)"}
+
+
+def plan_name(printed, version):
+    """The plan under one name whichever client printed it, or None when the
+    name cannot be told apart: a bare "Pro" from a panel with no version."""
+    key = " ".join((printed or "").split()).lower()
+    if not key:
+        return None
+    if key in RENAMED:
+        return RENAMED[key]
+    if key == "pro":
+        number = tuple(int(part) for part in re.findall(r"\d+", version or "")[:3])
+        if not number:
+            return None
+        return "Pro Lite" if (0, 158) <= number < (0, 160) else "Pro"
+    return printed
 
 
 def _windows(text):
@@ -68,12 +118,16 @@ def _windows(text):
 
     The panel prints what is left, so 100% left is nothing used and only a
     missing line means unknown. Within one owner the last line wins, so a
-    screen holding a half-painted earlier frame is read from the final one."""
+    screen holding a half-painted earlier frame is read from the final one.
+    Nothing above the first frame is read: on a full screen that is what is
+    left of a panel scrolled off the top, and its heading may have gone."""
     found = {}
-    owner = None
+    owner, framed = None, False
     for line in text.splitlines():
         if FRAME.search(line):
-            owner = None
+            owner, framed = None, True
+        if not framed:
+            continue
         hit = LIMIT.match(line)
         if hit:
             left = re.search(r"(\d+)%\s*left", hit.group(3))
@@ -107,8 +161,20 @@ def parse_panel(text):
     caller decides what a missing limit means."""
     # The panel is drawn in a box and the verticals belong to no value.
     text = re.sub(r"[│┃|]", " ", text)
-    account = re.search(r"Account:\s+(\S+)(?:\s+\(([^)]+)\))?\s*$", text, re.M)
     version = re.search(r"OpenAI\s+Codex\s*\(v?([\d][\w.\-]*)\)", text)
+    version = version.group(1) if version else ""
+    values = ACCOUNT.findall(text)
+    value = values[-1] if values else ""
+    address = ADDRESS.search(value)
+    if address:
+        # Whatever else is on the line, an address never reaches the plan.
+        account = address.group(0)
+        bracket = re.search(r"\((.+)\)$", value[address.end():])
+        plan = bracket.group(1) if bracket else None
+    elif value.lower() == "chatgpt" or value.lower().startswith("api key"):
+        account = plan = None
+    else:
+        account, plan = None, value
     windows = _windows(text)
     # The plan's own windows, as against a model's. "own" and not "plan",
     # because a plan elsewhere in this file is Pro Lite or Business Premium.
@@ -133,15 +199,18 @@ def parse_panel(text):
         extra["monthly_pct"], extra["monthly_resets"] = monthly
     if credits:
         extra["credits"] = credits.group(1).strip()
+    if plan:
+        # The plan field holds one name per plan; this is what was printed.
+        extra["plan_printed"] = plan
     return {
-        "account": account.group(1) if account else None,
-        "plan": account.group(2) if account and account.group(2) else None,
+        "account": account,
+        "plan": plan_name(plan, version),
         "five_hour_pct": five[0] if five else None,
         "seven_day_pct": week[0] if week else None,
         "five_hour_resets": five[1] if five else None,
         "seven_day_resets": week[1] if week else None,
         "extra": extra,
-        "client_version": version.group(1) if version else "",
+        "client_version": version,
     }
 
 
@@ -149,6 +218,16 @@ def has_limits(data):
     """Whether a parsed panel carries any window the reading can use."""
     return not (data["five_hour_pct"] is None and data["seven_day_pct"] is None
                 and data["extra"].get("monthly_pct") is None)
+
+
+def panel_text(screen):
+    """The text a reading is taken from. A client drawing full screen is read
+    from the screen it shows, because it sends only the cells that changed:
+    read in the order painted, a row of the Codex 0.159.2 panel came in three
+    pieces and the plan's week was lost. A client that prints its panel
+    inline, as Codex did up to 0.157, is read from what it printed."""
+    shown, full_screen = screen.display
+    return shown if full_screen else screen.text
 
 
 def role_env(home):
@@ -209,27 +288,37 @@ def read_screen(cwd, budget, env_set=None, env_drop=("OPENAI_API_KEY",)):
         """Send keys only when no dialog is on screen, and name the dialog
         when it refuses. Codex paints its composer for a moment before it
         paints the trust modal, so being ready once is not enough: the screen
-        is checked again before every keystroke."""
-        text = screen.text
+        is checked again before every keystroke. A known dialog is looked for
+        in both readings, because a full-screen client can leave its words in
+        pieces in the painted text, and a full-screen client must be showing
+        its input line as well, so a dialog nobody has seen yet gets no key."""
+        shown, full_screen = screen.display
         for name, pattern in (("trust", TRUST), ("login", LOGIN)):
-            if re.search(pattern, text, re.I):
+            if re.search(pattern, screen.text, re.I) or re.search(pattern, shown, re.I):
                 return name
+        if full_screen and not COMPOSER.search(shown):
+            return "unknown dialog"
         screen.send(keys)
         return None
 
     def count(pattern):
         return len(re.findall(pattern, screen.text, re.I))
 
-    def wait_new(patterns, before, timeout):
+    def wait_new(patterns, before, timeout, usable=False):
         """The key of the first pattern printed more often than `before`
         counted, or None on the timeout. A second /status repaints text the
-        first one left on screen, so presence alone proves nothing."""
+        first one left on screen, so presence alone proves nothing. With
+        `usable`, a panel whose figures can now be read is a reply as well: a
+        full-screen client never resends a letter already in its cell, so a
+        label can arrive without ever being painted whole."""
         end = time.time() + timeout
         while True:
             screen.pump(0.4)
             for key, pattern in patterns.items():
                 if count(pattern) > before.get(key, 0):
                     return key
+            if usable and has_limits(parse_panel(panel_text(screen))):
+                return "panel"
             if time.time() >= end:
                 return None
 
@@ -248,7 +337,9 @@ def read_screen(cwd, budget, env_set=None, env_drop=("OPENAI_API_KEY",)):
                 break
             if attempt == 2:
                 return "no panel"
-            screen.send(b"\x1b")
+            stop = type_when_clear(b"\x1b")
+            if stop:
+                return stop
             screen.wait_for(present=[PROMPT], quiet=2.0, timeout=left(8) or 1)
         return type_when_clear(b"\r")
 
@@ -256,18 +347,18 @@ def read_screen(cwd, budget, env_set=None, env_drop=("OPENAI_API_KEY",)):
         screen.start()
         chance = left(40)
         if chance is None:
-            return "budget: the composer", screen.text
+            return "budget: the composer", panel_text(screen)
         seen = screen.first_of({"trust": TRUST, "login": LOGIN, "ready": PROMPT},
                                timeout=chance)
         if seen in ("trust", "login"):
-            return seen, screen.text
+            return seen, panel_text(screen)
         if seen is None:
-            return "no panel", screen.text
+            return "no panel", panel_text(screen)
         # The composer appears before the MCP servers finish and a slash
         # command typed in that window is dropped. Wait for both.
         chance = left(35)
         if chance is None:
-            return "budget: the MCP servers", screen.text
+            return "budget: the MCP servers", panel_text(screen)
         # A server that fails to start leaves "MCP startup incomplete" on
         # screen for good, so the gate is the screen going quiet, not the
         # startup line disappearing. One retry after Escape covers a swallowed
@@ -278,38 +369,38 @@ def read_screen(cwd, budget, env_set=None, env_drop=("OPENAI_API_KEY",)):
             before = {key: count(p) for key, p in replies.items()}
             stop = ask_status()
             if stop:
-                return stop, screen.text
+                return stop, panel_text(screen)
             chance = left(20)
             if chance is None:
-                return "budget: the status panel", screen.text
-            got = wait_new(replies, before, chance)
+                return "budget: the status panel", panel_text(screen)
+            got = wait_new(replies, before, chance, usable=True)
             if got is None:
                 # One more Enter, and only while nothing has answered: the
                 # first can land on a completion list rather than the input.
                 stop = type_when_clear(b"\r")
                 if stop:
-                    return stop, screen.text
+                    return stop, panel_text(screen)
                 chance = left(20)
                 if chance is None:
-                    return "budget: the status panel", screen.text
-                got = wait_new(replies, before, chance)
+                    return "budget: the status panel", panel_text(screen)
+                got = wait_new(replies, before, chance, usable=True)
             if got is None:
-                return "no panel", screen.text
+                return "no panel", panel_text(screen)
             if got == "panel":
                 # A panel already on screen is not thrown away for want of a
-                # settle.
+                # settle. The panel has answered, so the settle is silence alone.
                 chance = left(6)
                 if chance:
-                    screen.wait_for(present=[PANEL], quiet=1.0, timeout=chance)
-                if has_limits(parse_panel(screen.text)) or ask == ASKS:
-                    return "panel", screen.text
+                    screen.wait_for(quiet=1.0, timeout=chance)
+                if has_limits(parse_panel(panel_text(screen))) or ask == ASKS:
+                    return "panel", panel_text(screen)
             # Codex has sent for the figures. Give the fetch a moment, then ask
             # again.
             if left(15) is None:
-                return "budget: the status panel", screen.text
+                return "budget: the status panel", panel_text(screen)
             screen.wait_for(quiet=4.0, timeout=left(6) or 1)
         # Every ask came back "refresh requested"; main says so by name.
-        return "panel", screen.text
+        return "panel", panel_text(screen)
     finally:
         screen.close()
 
@@ -379,6 +470,12 @@ def main():
     if outcome == "trust":
         note(status, "TRUST PROMPT: open codex once in %s and accept, or rerun "
                      "setup --write to pre-trust it" % swlib.tilde(cwd))
+        return 3
+    if outcome == "unknown dialog":
+        note(status, "TRUST PROMPT: codex is showing a screen this reader does "
+                     "not recognise, so it pressed nothing. Open codex in %s and "
+                     "see what it asks. Last of the screen: %s"
+             % (swlib.tilde(cwd), tail(text)))
         return 3
     if outcome == "login":
         note(status, "LOGIN EXPIRED: run codex in a terminal and sign in again.")

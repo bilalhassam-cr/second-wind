@@ -17,12 +17,27 @@ five hour window at all. That case matters, so both are tested. Likewise
 "refresh requested" line Codex 0.153.0 printed on 24 September 2026 when
 /status landed before it had fetched the limits.
 
+The Codex 0.159.2 and 0.160.0 fixtures were captured on 1 October 2026, and
+differently, because from 0.158 Codex draws full screen and sends only the
+cells that change. Each `.raw` file is the byte stream the reader took off the
+PTY, driven by the reader's own read_screen; the `.txt` beside it is that
+stream on the screen model, which is the text the reader parses and `--dump`
+writes. The reader asked for /status more than once in each, because the parser
+of the day could not read the first panel. These panels print no address, so
+none needed substituting. Each session id became the zero UUID, and a capture
+in which that substitution changed any other cell of the rendered screen was
+left out, which is why 0.160.0 has no plain fixture. `codex-0.159.2` is a plan
+with one weekly window; a `-model-week` fixture also carries a model's own week.
+
 The `-trust.txt` fixtures were captured by starting each client in an empty and
-untrusted directory under /tmp. No key was pressed to answer any of them. What
-the trust tests then check is one regex against that saved text: the pattern
+untrusted directory under /tmp. No key was pressed to answer any of them. The
+Codex 0.159.2 and 0.160.0 `-trust` captures were taken the same way in a new git
+folder, because those versions show no dialog in an empty directory. What the
+trust tests then check is one regex against that saved text: the pattern
 matches the dialog and does not match a normal panel. No client is started
-here, so nothing in this file demonstrates that a live reader stops at a dialog
-rather than typing at it. That behaviour is exercised by hand, and the
+here. CodexReaderKeystrokes drives the Codex reader's read_screen against
+scripted screens, the captured 0.160.0 dialog among them, so for Codex the stop
+at a dialog is tested. For the other readers it is exercised by hand, and the
 procedure is in TESTING.md.
 """
 import contextlib
@@ -46,6 +61,8 @@ import swlib  # noqa: E402
 
 CLAUDE_FIXTURE = "claude-2.1.251"
 CODEX_FIXTURE = "codex-0.152.1"
+CODEX_SCREENS = ("codex-0.159.2", "codex-0.159.2-model-week",
+                 "codex-0.160.0-model-week")
 GROK_FIXTURE = "grok-1.0.13"
 CURSOR_FIXTURE = "cursor-2026.08.31-4057e58"
 
@@ -68,6 +85,11 @@ picker = script("model_picker", "model-picker.py")
 
 def fixture(name):
     with open(os.path.join(FIXTURES, name + ".txt")) as handle:
+        return handle.read()
+
+
+def raw_fixture(name):
+    with open(os.path.join(FIXTURES, name + ".raw"), "rb") as handle:
         return handle.read()
 
 
@@ -101,6 +123,148 @@ class CleanTests(unittest.TestCase):
         text = fixture(CLAUDE_FIXTURE)
         self.assertIn("Total cost:", text)
         self.assertIn("Current week (all models)", text)
+
+
+class ScreenTests(unittest.TestCase):
+    """The screen model, for a client that draws full screen. Such a client
+    sends only the cells that changed since its last frame, each run placed by
+    a cursor move, so the order the bytes arrive in is not the order of the
+    screen. Codex has drawn this way since 0.158.
+
+    The sequences here are written by hand, one behaviour per test. The
+    captured streams are read in CodexFullScreenTests."""
+
+    def show(self, raw, rows=5, cols=40):
+        return ptyreader.render(b"\x1b[?1049h" + raw, rows, cols)[0]
+
+    def test_a_jump_along_one_row_keeps_the_row_whole(self):
+        # How Codex 0.159.2 sent its weekly line: the label and the bar, then
+        # a jump over each blank cell it had no need to send again.
+        raw = b"\x1b[2;1H  Weekly limit: [###]\x1b[2;23H77%\x1b[2;27Hleft"
+        self.assertEqual(self.show(raw).splitlines()[1],
+                         "  Weekly limit: [###] 77% left")
+
+    def test_a_letter_already_on_screen_is_not_lost(self):
+        # Codex 0.160.0 repainted "Session:" over a row that already held an
+        # "e" in that cell, so it sent "S", a jump, then "ssion:".
+        raw = b"\x1b[1;1HSe\x1b[1;1HS\x1b[1;3Hssion:"
+        self.assertEqual(self.show(raw), "Session:")
+
+    def test_erase_in_line_clears_from_the_cursor(self):
+        self.assertEqual(self.show(b"\x1b[1;1H100% left\x1b[1;4H\x1b[K"), "100")
+
+    def test_erase_in_display_clears_from_the_cursor_or_the_lot(self):
+        two = b"\x1b[1;1Hone\x1b[2;1Htwo"
+        self.assertEqual(self.show(two + b"\x1b[1;2H\x1b[J"), "o")
+        self.assertEqual(self.show(two + b"\x1b[2J"), "")
+
+    def test_a_wide_character_takes_two_cells(self):
+        raw = "\x1b[1;1H✨\x1b[1;3Hx".encode()
+        self.assertEqual(self.show(raw), "✨x")
+
+    def test_relative_moves_and_column_moves(self):
+        raw = b"\x1b[3;3Hx\x1b[2Ay\x1b[7Gz"
+        self.assertEqual(self.show(raw), "   y  z\n\n  x")
+
+    def test_colours_titles_and_queries_change_nothing_on_screen(self):
+        raw = b"\x1b[1;1H\x1b[2mdim\x1b[22m\x1b]0;title\x07\x1b[>7u\x1b[?2026h ok"
+        self.assertEqual(self.show(raw), "dim ok")
+
+    def test_a_saved_cursor_is_restored(self):
+        raw = b"\x1b[1;1Hab\x1b7\x1b[3;1Hz\x1b8c"
+        self.assertEqual(self.show(raw), "abc\n\nz")
+
+    def test_full_screen_is_reported_only_while_the_alternate_screen_is_on(self):
+        self.assertTrue(ptyreader.render(b"\x1b[?1049hx")[1])
+        self.assertFalse(ptyreader.render(b"x")[1])
+        self.assertFalse(ptyreader.render(b"\x1b[?1049hx\x1b[?1049l")[1])
+
+    def test_leaving_the_alternate_screen_shows_the_main_one_again(self):
+        raw = b"main\x1b[?1049h\x1b[1;1Halt\x1b[?1049l"
+        self.assertEqual(ptyreader.render(raw)[0], "main")
+
+    def test_a_carriage_return_writes_over_the_line(self):
+        self.assertEqual(ptyreader.render(b"abc\rX")[0], "Xbc")
+
+    def test_a_line_feed_on_the_last_row_scrolls_the_screen_up(self):
+        self.assertEqual(ptyreader.render(b"a\r\nb\r\nc\r\nd", rows=3)[0],
+                         "b\nc\nd")
+
+    def test_a_line_longer_than_the_screen_wraps(self):
+        self.assertEqual(ptyreader.render(b"abcdef", cols=4)[0], "abcd\nef")
+
+    def test_a_scrolling_region_scrolls_on_its_own(self):
+        four = b"1\r\n2\r\n3\r\n4\x1b[2;3r"
+        # A line feed on the region's last row scrolls rows 2 and 3 only.
+        self.assertEqual(ptyreader.render(four + b"\x1b[3;1H\n", rows=4)[0],
+                         "1\n3\n\n4")
+        # A reverse index on its first row scrolls them the other way.
+        self.assertEqual(ptyreader.render(four + b"\x1b[2;1H\x1bM", rows=4)[0],
+                         "1\n\n2\n4")
+
+    def test_lines_are_inserted_and_deleted_at_the_cursor(self):
+        four = b"1\r\n2\r\n3\r\n4\x1b[2;1H"
+        self.assertEqual(ptyreader.render(four + b"\x1b[L", rows=4)[0],
+                         "1\n\n2\n3")
+        self.assertEqual(ptyreader.render(four + b"\x1b[M", rows=4)[0],
+                         "1\n3\n4")
+
+    def test_characters_are_inserted_deleted_and_erased_at_the_cursor(self):
+        six = b"abcdef\x1b[1;2H"
+        self.assertEqual(ptyreader.render(six + b"\x1b[2P")[0], "adef")
+        self.assertEqual(ptyreader.render(six + b"\x1b[2@")[0], "a  bcdef")
+        self.assertEqual(ptyreader.render(six + b"\x1b[2X")[0], "a  def")
+
+    def test_a_combining_mark_stays_in_the_cell_before_it(self):
+        raw = "é\x1b[1;2Hx".encode()
+        self.assertEqual(ptyreader.render(raw)[0], "éx")
+
+    def test_writing_over_half_a_wide_character_blanks_the_other_half(self):
+        raw = "✨\x1b[1;2Hx".encode()
+        self.assertEqual(ptyreader.render(raw)[0], " x")
+
+    def test_the_other_cursor_and_erase_operations(self):
+        cases = [
+            ("next line", b"ab\x1b[Ecd", "ab\ncd"),
+            ("previous line", b"\x1b[2;3Hab\x1b[Fcd", "cd\n  ab"),
+            ("row, column kept", b"ab\x1b[3dcd", "ab\n\n  cd"),
+            ("column", b"ab\x1b[5`cd", "ab  cd"),
+            ("columns forward", b"ab\x1b[2acd", "ab  cd"),
+            ("rows down", b"ab\x1b[ecd", "ab\n  cd"),
+            ("row and column", b"\x1b[2;3fab", "\n  ab"),
+            ("save and restore", b"ab\x1b[s\x1b[3;1Hz\x1b[uc", "abc\n\nz"),
+            ("scroll up", b"1\r\n2\r\n3\x1b[S", "2\n3"),
+            ("scroll down", b"1\r\n2\r\n3\x1b[T", "\n1\n2"),
+            ("index", b"ab\x1bDcd", "ab\n  cd"),
+            ("next line by escape", b"ab\x1bEcd", "ab\ncd"),
+            ("reset", b"ab\x1bccd", "cd"),
+            ("erase above", b"one\r\ntwo\x1b[2;2H\x1b[1J", "\n  o"),
+            ("erase line to the cursor", b"abcdef\x1b[1;3H\x1b[1K", "   def"),
+            ("erase the whole line", b"abcdef\x1b[1;3H\x1b[2K", ""),
+            ("backspace", b"ab\bc", "ac"),
+            ("tab", b"a\tb", "a       b"),
+        ]
+        for name, raw, wanted in cases:
+            with self.subTest(name):
+                self.assertEqual(ptyreader.render(raw, rows=3, cols=10)[0], wanted)
+
+    def test_with_wrapping_off_the_last_column_is_written_over(self):
+        self.assertEqual(ptyreader.render(b"\x1b[?7labcdef", cols=4)[0], "abcf")
+
+    def test_erasing_the_saved_lines_leaves_the_screen_alone(self):
+        # CSI 3 J clears the scrollback, which this model does not keep.
+        self.assertEqual(self.show(b"\x1b[1;1Hpanel\x1b[3J"), "panel")
+
+    def test_an_erase_in_a_mode_it_does_not_know_does_nothing(self):
+        self.assertEqual(self.show(b"\x1b[1;1Hpanel\x1b[1;1H\x1b[9K\x1b[9J"), "panel")
+
+    def test_a_shift_through_a_wide_character_leaves_no_half_of_it(self):
+        # Deleting its left half blanks its right half.
+        raw = "✨A\x1b[1;1H\x1b[P\x1b[1;2HB".encode()
+        self.assertEqual(ptyreader.render(raw)[0], " B")
+        # Pushed half off the end of the line, it goes.
+        raw = "ab✨\x1b[1;1H\x1b[@".encode()
+        self.assertEqual(ptyreader.render(raw, cols=4)[0], " ab")
 
 
 class ClaudeTests(unittest.TestCase):
@@ -754,6 +918,306 @@ class CodexModelWindowPanels(unittest.TestCase):
         extra = codex.parse_panel(fixture(CODEX_FIXTURE))["extra"]
         self.assertNotIn("model_weeks", extra)
         self.assertNotIn("model_five_hours", extra)
+
+    def test_what_is_left_of_a_panel_scrolled_off_the_top_lends_nothing(self):
+        # On the screen an earlier panel can be half scrolled away, its
+        # heading gone and the model's windows under it still showing. Read as
+        # the plan's own, the model's 5h window became the plan's.
+        top = ("│  5h limit:                    [█████] 100% left (resets 17:28)           │\n"
+               "│  Weekly limit:                [█████] 100% left (resets 12:28 on 22 Sep) │\n")
+        data = codex.parse_panel(top + self.PRO_LITE)
+        self.assertIsNone(data["five_hour_pct"])
+        self.assertEqual(data["seven_day_pct"], 26)
+
+
+class CodexFullScreenTests(unittest.TestCase):
+    """Codex 0.159.2 and 0.160.0, captured as bytes. The fault these caught:
+    the plan's weekly row came off the PTY in three runs with a jump between
+    each, so the text read in the order painted split it over three lines and
+    the reading reported PARSER MISMATCH."""
+
+    WEEK = ("  Weekly limit:               [" + "█" * 15 + "░" * 5
+            + "] 77% left (resets 13:31 on 4 Oct)")
+
+    def screen_of(self, raw):
+        screen = ptyreader.Screen(["codex"])
+        screen.chunks = [(0.0, raw)]
+        return screen
+
+    def test_each_capture_renders_to_the_screen_saved_beside_it(self):
+        """A snapshot lock: each .txt was made by this renderer from its .raw,
+        so this catches a change in the rendering, not a wrong first one. The
+        rows checked by hand in the next test are the independent check."""
+        for name in CODEX_SCREENS + ("codex-0.159.2-trust", "codex-0.160.0-trust"):
+            with self.subTest(name):
+                text, full_screen = ptyreader.render(raw_fixture(name))
+                self.assertTrue(full_screen)
+                self.assertEqual(text, fixture(name))
+
+    def test_the_rows_the_client_sent_in_pieces_are_whole_on_screen(self):
+        # Worked out by hand from the bytes: the label and bar to column 52,
+        # a jump to 54 for "77%", a jump to 58 for "left (resets ...)".
+        lines = fixture("codex-0.160.0-model-week").splitlines()
+        self.assertIn(self.WEEK, lines)
+        # These two were each missing a letter that was already on screen.
+        self.assertIn("  Session:                    "
+                      "00000000-0000-4000-8000-000000000000", lines)
+        self.assertIn("  Collaboration mode:         Default", lines)
+
+    def test_a_full_screen_client_is_read_from_the_screen_it_shows(self):
+        raw = raw_fixture("codex-0.159.2-model-week")
+        text = codex.panel_text(self.screen_of(raw))
+        self.assertEqual(text, fixture("codex-0.159.2-model-week"))
+        self.assertEqual(codex.parse_panel(text)["seven_day_pct"], 23)
+        # The same bytes read in the order painted lose the plan's week.
+        self.assertIsNone(
+            codex.parse_panel(ptyreader.clean(raw))["seven_day_pct"])
+
+    def test_a_client_that_prints_inline_is_read_from_what_it_printed(self):
+        # A carriage return writes over the line on a terminal, while the text
+        # in paint order keeps both, so here the two readings differ.
+        screen = self.screen_of(
+            b"  Weekly limit: [###] 87% left (resets 18:00 on 8 Sep)\rX")
+        self.assertNotEqual(screen.text, screen.display[0])
+        self.assertEqual(codex.panel_text(screen), screen.text)
+
+    def test_the_name_the_panel_printed_is_kept_beside_the_plan(self):
+        data = codex.parse_panel(fixture("codex-0.160.0-model-week"))
+        self.assertEqual(data["plan"], "Pro Lite")
+        self.assertEqual(data["extra"]["plan_printed"], "Pro 100")
+        self.assertEqual(codex.parse_panel(fixture(CODEX_FIXTURE))
+                         ["extra"]["plan_printed"], "Business Premium")
+
+    def test_the_plan_week_beside_a_model_week(self):
+        for name, resets in (("codex-0.159.2-model-week", "17:28 on 8 Oct"),
+                             ("codex-0.160.0-model-week", "17:21 on 8 Oct")):
+            with self.subTest(name):
+                data = codex.parse_panel(fixture(name))
+                self.assertEqual(data["seven_day_pct"], 23)
+                self.assertEqual(data["seven_day_resets"], "13:31 on 4 Oct")
+                self.assertIsNone(data["five_hour_pct"])
+                self.assertEqual(data["extra"]["model_weeks"],
+                                 {"Luna Reserve": {"pct": 0, "resets": resets}})
+
+    def test_one_weekly_window(self):
+        data = codex.parse_panel(fixture("codex-0.159.2"))
+        self.assertEqual(data["seven_day_pct"], 11)
+        self.assertEqual(data["seven_day_resets"], "02:57 on 4 Oct")
+        self.assertNotIn("model_weeks", data["extra"])
+
+    def test_the_plan_printed_alone_is_not_taken_for_the_account(self):
+        # The panel says "Account: Pro" on 0.159.2 and "Account: Pro 100" on
+        # 0.160.0, for the same Pro Lite subscription, and names no address.
+        for name, version in (("codex-0.159.2", "0.159.2"),
+                              ("codex-0.159.2-model-week", "0.159.2"),
+                              ("codex-0.160.0-model-week", "0.160.0")):
+            with self.subTest(name):
+                data = codex.parse_panel(fixture(name))
+                self.assertIsNone(data["account"])
+                self.assertEqual(data["plan"], "Pro Lite")
+                self.assertEqual(data["client_version"], version)
+
+
+class CodexAccountLine(unittest.TestCase):
+    """What Codex prints after "Account:", per codex-rs/tui/src/status/card.rs:
+    the address and the plan, the address alone, the plan alone, "ChatGPT"
+    when it knows neither, or a sentence for an API key. Running behind its
+    background server, as 0.159.2 and 0.160.0 do here, it prints the plan
+    alone. Only something shaped like an address is ever the account."""
+
+    def read(self, value, version="0.160.0"):
+        data = codex.parse_panel("  >_ OpenAI Codex (v%s)\n  Account:   %s\n"
+                                 % (version, value))
+        return data["account"], data["plan"]
+
+    def test_an_address_and_a_plan(self):
+        self.assertEqual(self.read("user@example.com (Pro 100)"),
+                         ("user@example.com", "Pro Lite"))
+
+    def test_an_address_alone(self):
+        self.assertEqual(self.read("user@example.com"), ("user@example.com", None))
+
+    def test_a_plan_alone(self):
+        self.assertEqual(self.read("Pro", "0.159.2"), (None, "Pro Lite"))
+        self.assertEqual(self.read("Business Premium"), (None, "Business Premium"))
+
+    def test_neither(self):
+        self.assertEqual(self.read("ChatGPT"), (None, None))
+        self.assertEqual(self.read("chatgpt"), (None, None))
+        self.assertEqual(
+            self.read("API key configured (run codex login to use ChatGPT)"),
+            (None, None))
+
+    def test_words_after_an_address_never_become_the_plan(self):
+        self.assertEqual(self.read("user@example.com · Team Space"),
+                         ("user@example.com", None))
+
+    def test_an_address_and_a_bare_pro_either_side_of_the_rename(self):
+        self.assertEqual(self.read("user@example.com (Pro)", "0.157.1"),
+                         ("user@example.com", "Pro"))
+        self.assertEqual(self.read("user@example.com (Pro)", "0.159.2"),
+                         ("user@example.com", "Pro Lite"))
+
+
+class CodexFolderTrust(unittest.TestCase):
+    """Codex 0.159.2 and 0.160.0 ask about a folder in new words, and only in a
+    git folder: an empty untrusted directory under /tmp opens straight to the
+    composer. Captured on 1 October 2026 in a new git folder under /tmp, with
+    no key pressed. The composer is painted first and the dialog replaces it a
+    moment later, so the composer's words are already in the painted text."""
+
+    def test_the_folder_dialog_is_recognised(self):
+        for version in ("0.159.2", "0.160.0"):
+            with self.subTest(version):
+                self.assertIsNotNone(re.search(
+                    codex.TRUST, fixture("codex-%s-trust" % version), re.I))
+
+    def test_no_panel_is_taken_for_it(self):
+        for name in (CODEX_FIXTURE,) + CODEX_SCREENS:
+            with self.subTest(name):
+                self.assertIsNone(re.search(codex.TRUST, fixture(name), re.I))
+
+
+class ScriptedScreen(ptyreader.Screen):
+    """A client played from a script rather than run on a PTY. Each pump paints
+    the next waiting run of bytes, and a key the reader sends queues the reply
+    scripted for it. Every key is kept, so a test can say what was typed."""
+
+    def __init__(self, paints, replies=None):
+        super().__init__(["codex"])
+        self.waiting, self.replies, self.sent = list(paints), dict(replies or {}), []
+
+    def start(self):
+        return self
+
+    def pump(self, seconds=0.4):
+        if self.waiting:
+            self.chunks.append((time.time(), self.waiting.pop(0)))
+        else:
+            time.sleep(min(seconds, 0.05))
+
+    def send(self, data):
+        self.sent.append(data)
+        self.waiting += self.replies.get(data, [])
+
+    def close(self):
+        self.closed = True
+
+
+class CodexReaderKeystrokes(unittest.TestCase):
+    """What read_screen types, driven against a scripted screen. Each of these
+    takes a few seconds, because the reader waits for the screen to go quiet
+    before it types anything."""
+
+    # The input line as Codex 0.159.2 and 0.160.0 draw it: a "›" in the first
+    # column and the placeholder from the third.
+    COMPOSER = "\x1b[?1049h\x1b[52;1H› Ask Codex to do anything".encode()
+
+    def drive(self, screen, budget=15):
+        real = codex.ptyreader.Screen
+        codex.ptyreader.Screen = lambda *args, **kwargs: screen
+        try:
+            return codex.read_screen("/tmp", budget)
+        finally:
+            codex.ptyreader.Screen = real
+
+    def test_the_folder_dialog_painted_after_the_composer_gets_no_key(self):
+        raw = raw_fixture("codex-0.160.0-trust")
+        cut = raw.rindex(b"\x1b", 0, raw.index(b"Folder access"))
+        screen = ScriptedScreen([raw[:cut], raw[cut:]])
+        outcome, _ = self.drive(screen)
+        self.assertEqual(outcome, "trust")
+        self.assertEqual(screen.sent, [])
+
+    def test_a_dialog_whose_words_were_painted_in_pieces_gets_no_key(self):
+        # The "o" was already on screen, so the client sent "D", a jump, and
+        # the rest: the painted text never says "Do you trust". The input
+        # line stays in view, so only reading the screen catches the dialog.
+        old = b"\x1b[3;2Ho"
+        dialog = (b"\x1b[3;1HD\x1b[3;3H you trust the contents of this "
+                  b"directory?")
+        screen = ScriptedScreen([self.COMPOSER + old, dialog])
+        outcome, _ = self.drive(screen)
+        self.assertEqual(outcome, "trust")
+        self.assertEqual(screen.sent, [])
+
+    def test_a_dialog_in_place_of_the_command_list_gets_no_escape(self):
+        dialog = (b"\x1b[2J\x1b[2;3HFolder access\x1b[4;3HTrust this folder? "
+                  b"Codex can read, edit, and run files here.")
+        screen = ScriptedScreen([self.COMPOSER], {b"/status": [dialog]})
+        outcome, _ = self.drive(screen, budget=6)
+        self.assertEqual(outcome, "trust")
+        self.assertEqual(screen.sent, [b"/status"])
+
+    def test_a_screen_it_does_not_recognise_gets_no_key(self):
+        unknown = ("\x1b[2J\x1b[5;3HPick a workspace\x1b[7;1H› 1. Personal"
+                   "\x1b[8;3H2. Team").encode()
+        screen = ScriptedScreen([self.COMPOSER, unknown])
+        outcome, _ = self.drive(screen)
+        self.assertEqual(outcome, "unknown dialog")
+        self.assertEqual(screen.sent, [])
+
+    def test_a_dialog_over_the_input_line_gets_no_key_when_history_shows_status(self):
+        # A /status sent earlier stays in the history as a bare "/status". Only
+        # the input line itself, marked with "›", lets a key through.
+        history = b"\x1b[9;1H/status"
+        dialog = ("\x1b[50;1H\x1b[J\x1b[50;3HSelect a workspace"
+                  "\x1b[51;1H› 1. Personal\x1b[52;3H2. Team").encode()
+        screen = ScriptedScreen([self.COMPOSER + history, dialog])
+        outcome, _ = self.drive(screen)
+        self.assertEqual(outcome, "unknown dialog")
+        self.assertEqual(screen.sent, [])
+
+    def test_a_panel_is_read_from_one_ask_when_its_label_lost_a_letter(self):
+        # Row 10 already holds "We", so the client sends the label as "W", a
+        # jump, then "ekly limit:", and the painted text never says "Weekly".
+        # The typed command and the list beneath it are drawn as both versions
+        # draw them: "› /status" on the input line, "› /status  show ..." below.
+        opening = ("\x1b[?1049h\x1b[10;1H  We\x1b[52;1H› Ask Codex to do "
+                   "anything").encode()
+        menu = ("\x1b[52;3H/status\x1b[K\x1b[54;1H› /status      show current "
+                "session configuration and token usage").encode()
+        panel = (b"\x1b[54;1H\x1b[K\x1b[2;3H>_ OpenAI Codex (v0.160.0)"
+                 b"\x1b[6;3HAccount:   Pro 100\x1b[10;1H  W\x1b[10;5Hekly limit: "
+                 b"[###]\x1b[10;23H77%\x1b[10;27Hleft (resets 13:31 on 4 Oct)"
+                 b"\x1b[52;3HAsk Codex to do anything")
+        screen = ScriptedScreen([opening], {b"/status": [menu], b"\r": [panel]})
+        outcome, text = self.drive(screen)
+        self.assertEqual(outcome, "panel")
+        self.assertEqual(screen.sent, [b"/status", b"\r"])
+        self.assertEqual(codex.parse_panel(text)["seven_day_pct"], 23)
+
+
+class CodexPlanNames(unittest.TestCase):
+    """Codex renamed its Pro plans twice, so one subscription prints under a
+    different name depending on the client: Pro Lite is "Pro Lite" up to
+    0.157, "Pro" from 0.158.0 to 0.159.3 and "Pro 100" from 0.160.0, read from
+    codex-rs/tui/src/status/helpers.rs and subscription.rs at each release.
+    The drift check compares the plan with the one pinned at setup, so a name
+    taken as printed reports a sign-in change that never happened."""
+
+    def test_each_plan_keeps_the_first_name_codex_gave_it(self):
+        cases = [
+            ("Pro Lite", "0.153.0", "Pro Lite"),
+            ("Pro", "0.157.1", "Pro"),
+            ("Pro", "0.158.0", "Pro Lite"),
+            ("Pro", "0.159.2", "Pro Lite"),
+            ("Pro (More)", "0.159.2", "Pro"),
+            ("Pro (Max)", "0.158.0", "Pro (Max)"),
+            ("Pro 100", "0.160.0", "Pro Lite"),
+            ("Pro 200", "0.160.0", "Pro"),
+            ("Pro 500", "0.160.0", "Pro (Max)"),
+            # Only 0.158.0 to 0.159.3 ever printed Pro Lite as a bare "Pro".
+            ("Pro", "0.160.0", "Pro"),
+            ("Business Premium", "0.160.0", "Business Premium"),
+            ("Plus", "0.159.2", "Plus"),
+        ]
+        for printed, version, wanted in cases:
+            with self.subTest(printed=printed, version=version):
+                self.assertEqual(codex.plan_name(printed, version), wanted)
+
+    def test_a_bare_pro_from_an_unknown_client_is_not_guessed(self):
+        self.assertIsNone(codex.plan_name("Pro", ""))
 
 
 class CodexReaderEnvironment(unittest.TestCase):

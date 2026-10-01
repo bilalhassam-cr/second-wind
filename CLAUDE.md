@@ -70,3 +70,17 @@ Do not "simplify" these away; each cost real debugging time.
 - The Codex desktop app owns `~/.codex` and rewrites `auth.json` on a workspace
   switch, keeping the same email and changing the plan. Each Codex role has its
   own `CODEX_HOME`; the drift check compares plan as well as account for Codex.
+- From 0.158 Codex draws full screen and sends only the cells that change, each
+  run placed by a cursor jump. Read in the order painted, a row arrives in
+  pieces and a letter already on screen is never sent again, so the Codex
+  reader parses the screen as shown (`ptyreader.render`) and looks for dialogs
+  in both readings. A full-screen Codex gets no key unless its input line is
+  on screen.
+- Codex 0.159.2 and 0.160.0 ask "Trust this folder?" in a git folder, with
+  "Trust and continue" already selected, so one Enter trusts it. Both wordings
+  are in `TRUST`.
+- Codex renamed its Pro plans in 0.158 and again in 0.160, and a bare "Pro" has
+  meant two plans. The reader stores each plan under its first name
+  (`plan_name`); taken as printed, every pinned Pro Lite read as a sign-in
+  change. Behind its background server the panel names no address, so a Codex
+  reading's account is unknown.

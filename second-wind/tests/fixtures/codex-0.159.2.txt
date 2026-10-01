@@ -1,0 +1,55 @@
+│ See full release notes:                                       │
+│ https://github.com/openai/codex/releases/latest               │
+╰───────────────────────────────────────────────────────────────╯
+
+
+  >_ OpenAI Codex (v0.159.2)
+     ~/.second-wind/workdir
+
+  Here for a quick fix or the extended edition?
+
+/status
+
+  >_ OpenAI Codex (v0.159.2)
+
+  Visit https://chatgpt.com/codex/settings/usage for up-to-date
+  information on rate limits and credits
+
+  Server:              Local background server
+
+  Model:               GPT-6.1-Sol (reasoning low, summaries auto)
+  Model provider:      openai
+  Directory:           ~/.second-wind/workdir
+  Permissions:         Workspace (Ask for approval)
+  Agents.md:           <none>
+  Account:             Pro
+  Collaboration mode:  Default
+  Session:             00000000-0000-4000-8000-000000000000
+
+  Weekly limit:        [██████████████████░░] 89% left (resets 02:57 on 4 Oct)
+
+/status
+
+  >_ OpenAI Codex (v0.159.2)
+
+  Visit https://chatgpt.com/codex/settings/usage for up-to-date
+  information on rate limits and credits
+
+  Server:              Local background server
+
+  Model:               GPT-6.1-Sol (reasoning low, summaries auto)
+  Model provider:      openai
+  Directory:           ~/.second-wind/workdir
+  Permissions:         Workspace (Ask for approval)
+  Agents.md:           <none>
+  Account:             Pro
+  Collaboration mode:  Default
+  Session:             00000000-0000-4000-8000-000000000000
+
+  Weekly limit:        [██████████████████░░] 89% left (resets 02:57 on 4 Oct)
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol default · ~/.second-wind/workdir
+  ← for agents · ? for shortcuts
