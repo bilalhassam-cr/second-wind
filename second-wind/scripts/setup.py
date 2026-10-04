@@ -14,7 +14,7 @@ backwards silently sends their main work to the wrong subscription.
       [--codex3 on|off] [--codex3-dir DIR] [--codex-label L] [--codex2-label L] [--codex3-label L]
       [--codex-full-access on|off] [--grok on|off] [--cursor on|off]
       [--five-hour N] [--seven-day N] [--refresh-minutes N]
-      [--model-picker on|off] [--picker-routes id,id]
+      [--model-picker on|off] [--usage-panel on|off] [--picker-routes id,id]
       [--picker-models worker=model/effort,...] [--no-launchd]
       [--timeout N] [--force]
   setup.py --accounts [--live]
@@ -23,6 +23,7 @@ backwards silently sends their main work to the wrong subscription.
   setup.py --repin [ROLE ...]
   setup.py --show
   setup.py --uninstall
+  setup.py --usage-panel on|off      (on its own: switch the pop-up alone)
 """
 import argparse
 import json
@@ -209,7 +210,54 @@ def replaced_store():
     return os.path.join(sw_home(), "replaced-statusline.json")
 
 
-def merge_settings(config_dir, events=(), statusline=False, model_picker=None):
+PLUGIN_DIRS = "CLAUDE_CODE_PLUGIN_DIRS"
+
+
+def usage_panel_dir():
+    """The usage pop-up, a Claude Code mod that ships inside the skill folder."""
+    return os.path.join(os.path.dirname(HERE), "usage-panel")
+
+
+def _is_usage_panel(entry):
+    """True for our own entry in the plugin folder list, including one left
+    behind by a skill folder that has since moved."""
+    path = expand(entry)
+    if os.path.realpath(path) == os.path.realpath(usage_panel_dir()):
+        return True
+    return path.rstrip("/").endswith(os.sep + os.path.join("second-wind", "usage-panel"))
+
+
+def set_usage_panel(data, on):
+    """Add or remove our folder in the settings `env` plugin folder list.
+
+    The list is shared: other mods may be named in it, so only our own entry is
+    ever added or taken out, and the key goes only when nothing else is left.
+    """
+    env = data.get("env") if isinstance(data.get("env"), dict) else {}
+    current = env.get(PLUGIN_DIRS)
+    parts = [part for part in (current if isinstance(current, str) else "").split(os.pathsep)
+             if part.strip() and not _is_usage_panel(part)]
+    if on:
+        parts.append(tilde(usage_panel_dir()))
+    if parts:
+        env[PLUGIN_DIRS] = os.pathsep.join(parts)
+    else:
+        env.pop(PLUGIN_DIRS, None)
+    if env:
+        data["env"] = env
+    else:
+        data.pop("env", None)
+
+
+def usage_panel_installed(data):
+    env = data.get("env") if isinstance(data.get("env"), dict) else {}
+    current = env.get(PLUGIN_DIRS)
+    return isinstance(current, str) and any(
+        _is_usage_panel(part) for part in current.split(os.pathsep) if part.strip())
+
+
+def merge_settings(config_dir, events=(), statusline=False, model_picker=None,
+                   usage_panel=None):
     """Install or remove our own keys, leaving every other setting alone.
 
     We never rewrite a settings file wholesale: it is the user's, and it usually
@@ -275,6 +323,10 @@ def merge_settings(config_dir, events=(), statusline=False, model_picker=None):
         picker = data.get("modelPicker")
         if isinstance(picker, dict) and picker.get("_second_wind") is True:
             data.pop("modelPicker", None)
+
+    # None leaves the pop-up as it is; True or False is a decision to apply.
+    if usage_panel is not None:
+        set_usage_panel(data, usage_panel)
 
     swlib.write_json_atomic(path, data, mode=0o600)
     return stamped or True
@@ -677,6 +729,10 @@ def cmd_write(a):
     carry("model_picker",
           ("on" if prev_picker else "off") if isinstance(prev_picker, bool) else None,
           "off", "model picker")
+    prev_panel = prev_refresh.get("usage_panel")
+    carry("usage_panel",
+          ("on" if prev_panel else "off") if isinstance(prev_panel, bool) else None,
+          "on", "usage pop-up")
     # Normalised before the comparison, so `a, b` and `a,b` are not reported as
     # a change on every rerun.
     if a.picker_routes is not None:
@@ -732,6 +788,8 @@ def cmd_write(a):
         sys.exit("second-wind: --refresh-minutes must be between 1 and 1440")
     if a.model_picker not in ("on", "off"):
         sys.exit("second-wind: --model-picker must be on or off")
+    if a.usage_panel not in ("on", "off"):
+        sys.exit("second-wind: --usage-panel must be on or off")
     routes = [entry.strip() for entry in (a.picker_routes or "").split(",")
               if entry.strip()]
     for entry in routes:
@@ -900,6 +958,7 @@ def cmd_write(a):
             "workdir": tilde(folder),
             "launchd": launchd_on,
             "model_picker": a.model_picker == "on",
+            "usage_panel": a.usage_panel == "on",
             "cursor": cursor_reads,
         },
         "picker": {"routes": routes, "models": picker_models},
@@ -993,12 +1052,15 @@ def cmd_write(a):
     # argument left the row in place for as long as the profile existed.
     result = merge_settings(cfg["primary"]["config_dir"], events=level["events"],
                            statusline=True,
-                           model_picker=(a.model_picker == "on"))
+                           model_picker=(a.model_picker == "on"),
+                           usage_panel=(a.usage_panel == "on"))
     if result is False:
         sys.exit("second-wind: could not install the primary hooks and status "
                  "line. Fix its settings.json and run --write again.")
     print("  primary   %s hooks and the status line installed"
           % ", ".join(level["events"]))
+    print("  primary   usage pop-up %s"
+          % ("on, from the next session" if a.usage_panel == "on" else "off"))
     if a.secondary:
         guard = ("UserPromptSubmit",) if "UserPromptSubmit" in level["events"] else ()
         if merge_settings(cfg["secondary"]["config_dir"], events=guard,
@@ -1015,7 +1077,7 @@ def cmd_write(a):
         current = {cfg["primary"]["config_dir"], cfg["secondary"]["config_dir"]}
         if stale_dir in current or not os.path.isdir(expand(stale_dir)):
             continue
-        merge_settings(stale_dir, model_picker=False)
+        merge_settings(stale_dir, model_picker=False, usage_panel=False)
         print("  %s cleared of second-wind entries" % stale_dir)
 
     print("\nBackground refresh:")
@@ -1533,6 +1595,22 @@ def cmd_check():
             else:
                 row("model picker", "on, labels written" if ours else
                     "on, no labels written yet (the next refresh writes them)")
+            panel_on = (cfg.get("refresh") or {}).get("usage_panel") is True
+            panel_in = usage_panel_installed(data)
+            if not panel_on:
+                row("usage pop-up", "off" + (", but still in settings.json"
+                                             if panel_in else ""))
+            elif not panel_in:
+                row("usage pop-up", "MISSING")
+                faults.append("the usage pop-up is not in settings.json. Run "
+                              "setup.py --usage-panel on.")
+            elif not os.path.isfile(os.path.join(usage_panel_dir(), ".claude-plugin",
+                                                 "plugin.json")):
+                row("usage pop-up", "on, folder MISSING")
+                faults.append("the usage pop-up folder %s is missing."
+                              % tilde(usage_panel_dir()))
+            else:
+                row("usage pop-up", "on (shows in sessions started after it was set)")
 
     print()
     # Resynced first, then reported: it is a few file stats, and a mirror that
@@ -1777,6 +1855,27 @@ def cmd_repin(a):
 # ---------------------------------------------------------------- uninstall
 
 
+def cmd_usage_panel(on):
+    """Switch the pop-up alone, without rewriting the rest of the config the
+    way --write does."""
+    if not swlib.is_configured():
+        print("NOT SET UP. Run: setup.py --detect")
+        return 1
+    cfg = swlib.load_config()
+    data, path = read_settings(cfg["primary"]["config_dir"])
+    if data is None:
+        print("Could not read %s. Fix it and run this again." % tilde(path))
+        return 1
+    swlib.backup_once(path)
+    set_usage_panel(data, on)
+    swlib.write_json_atomic(path, data, mode=0o600)
+    cfg.setdefault("refresh", {})["usage_panel"] = on
+    swlib.write_json_atomic(swlib.config_path(), cfg)
+    print("Usage pop-up %s. It %s in Claude Code sessions started from now on."
+          % ("on" if on else "off", "shows" if on else "no longer loads"))
+    return 0
+
+
 def cmd_uninstall():
     if not swlib.is_configured():
         print("Nothing to uninstall.")
@@ -1786,7 +1885,7 @@ def cmd_uninstall():
         folder = (cfg.get(role) or {}).get("config_dir")
         if not folder or not os.path.isdir(expand(folder)):
             continue
-        if merge_settings(folder, model_picker=False) is False:
+        if merge_settings(folder, model_picker=False, usage_panel=False) is False:
             print("  ! could not clean %s. Edit it by hand."
                   % tilde(settings_path(folder)))
         else:
@@ -1916,6 +2015,9 @@ def build_parser():
     ap.add_argument("--seven-day", type=int, default=None)
     ap.add_argument("--refresh-minutes", type=int, default=None)
     ap.add_argument("--model-picker", choices=["on", "off"], default=None)
+    ap.add_argument("--usage-panel", choices=["on", "off"], default=None,
+                    help="the usage pop-up above the prompt (default on); given "
+                         "without --write it switches the pop-up alone")
     ap.add_argument("--picker-routes", default=None,
                     help="comma-separated routing ids to add to the model "
                          "picker, such as second-wind/codex/gpt-6.1-sol/high")
@@ -2020,6 +2122,8 @@ def dispatch(a, ap):
         return cmd_show()
     if a.uninstall:
         return cmd_uninstall()
+    if a.usage_panel and not a.write:
+        return cmd_usage_panel(a.usage_panel == "on")
     if a.write:
         if not a.primary:
             sys.exit("second-wind: --write needs --primary")

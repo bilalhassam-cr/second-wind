@@ -67,6 +67,28 @@ The `--accounts` table is the different thing and stays as it is: it carries
 plan, version, headroom and reader status, and it is for diagnosis rather than
 for a glance.
 
+## The usage pop-up
+
+`usage-panel/` is a Claude Code mod that draws the same readings in colour: a
+strip above the prompt, and a Usage panel (the strip's button, or `/usage-panel`) with
+the bars, **Refresh now**, **Send tasks here** on each account (model, access,
+Route) and **Stop routing**. A toast fires when an account crosses its
+threshold. Green is under 50%, amber from 50%, red at the threshold. It reads
+`scripts/card_json.py`, which applies the brief's own rules, so the pop-up and
+the panel never disagree.
+
+It also keeps the primary reading current. A desktop-app session is signed in
+by the app, which shares that credential with no other process, so no reader
+can see the primary account from outside. The mod reads the session's own
+limits (`$.session.usage()`) every minute and whenever a window moves, and
+hands them to `statusline.sh`, the same writer a terminal session uses.
+
+Setup turns it on by default, by adding the folder to `CLAUDE_CODE_PLUGIN_DIRS`
+in the primary profile's settings `env` and touching no other entry there.
+`setup.py --usage-panel on|off` on its own switches it without rewriting the
+rest. It shows in sessions started after it is set. Its own test runs with
+`claude plugin test usage-panel`.
+
 ## The command surface
 
 **`/second-wind` with no arguments is the picker.** In the desktop app this is
@@ -147,7 +169,7 @@ they send back.
 
 Other options: `--codex3 on --codex3-dir DIR --codex3-label L`,
 `--codex-full-access on`, `--reader ~/.claude-usage`, `--five-hour 85`, `--seven-day 75`,
-`--refresh-minutes 30`, `--model-picker on`, `--no-launchd`, `--timeout 900`,
+`--refresh-minutes 30`, `--model-picker on`, `--usage-panel off`, `--no-launchd`, `--timeout 900`,
 `--force`, and the picker flags in `references/setup.md`. Finally, tell the user
 to **restart Claude Code**, then run `--check` and `--accounts`: settings are
 read at session start, and a running session can write the project list back

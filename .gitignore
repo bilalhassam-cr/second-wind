@@ -5,3 +5,5 @@ __pycache__/
 _review/
 _launch/
 research/
+second-wind/usage-panel/tsconfig.json
+second-wind/usage-panel/.claude-plugin/types/

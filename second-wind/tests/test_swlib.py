@@ -2087,6 +2087,31 @@ class InstalledSettings(Base):
         sw_setup.merge_settings(folder, model_picker=False)
         self.assertNotIn("modelPicker", self.settings(folder))
 
+    def test_the_usage_panel_keeps_other_plugin_folders(self):
+        folder = self.profile({"env": {"CLAUDE_CODE_PLUGIN_DIRS": "~/mods/other",
+                                       "KEEP": "1"}})
+        sw_setup.merge_settings(folder, usage_panel=True)
+        entries = self.settings(folder)["env"]["CLAUDE_CODE_PLUGIN_DIRS"].split(os.pathsep)
+        self.assertEqual(entries[0], "~/mods/other")
+        self.assertEqual(os.path.basename(entries[1]), "usage-panel")
+        sw_setup.merge_settings(folder, usage_panel=True)
+        self.assertEqual(len(self.settings(folder)["env"]["CLAUDE_CODE_PLUGIN_DIRS"]
+                             .split(os.pathsep)), 2)
+        sw_setup.merge_settings(folder, usage_panel=False)
+        self.assertEqual(self.settings(folder)["env"],
+                         {"CLAUDE_CODE_PLUGIN_DIRS": "~/mods/other", "KEEP": "1"})
+
+    def test_the_usage_panel_leaves_no_empty_env_behind(self):
+        folder = self.profile({"theme": "dark"})
+        sw_setup.merge_settings(folder, usage_panel=True)
+        self.assertTrue(sw_setup.usage_panel_installed(self.settings(folder)))
+        sw_setup.merge_settings(folder, usage_panel=False)
+        self.assertEqual(self.settings(folder), {"theme": "dark"})
+
+    def test_the_usage_panel_ships_with_the_skill(self):
+        self.assertTrue(os.path.isfile(os.path.join(
+            sw_setup.usage_panel_dir(), ".claude-plugin", "plugin.json")))
+
 
 class TrustStore(Base):
     def test_a_claude_profile_reports_its_trust_honestly(self):
@@ -2385,6 +2410,27 @@ class WriteRerun(Base):
             os.path.join(self.primary_dir, "settings.json"), {"modelPicker": mine})
         self.write("--model-picker", "off")
         self.assertEqual(self.settings()["modelPicker"], mine)
+
+    def test_the_usage_panel_is_on_by_default_and_carried(self):
+        self.write()
+        self.assertTrue(self.config()["refresh"]["usage_panel"])
+        self.assertTrue(sw_setup.usage_panel_installed(self.settings()))
+        self.write("--usage-panel", "off")
+        self.assertFalse(sw_setup.usage_panel_installed(self.settings()))
+        self.write()
+        self.assertFalse(self.config()["refresh"]["usage_panel"])
+
+    def test_the_usage_panel_switch_alone_touches_nothing_else(self):
+        self.write("--usage-panel", "off")
+        before = self.settings()
+        with contextlib.redirect_stdout(io.StringIO()):
+            sw_setup.cmd_usage_panel(True)
+        after = self.settings()
+        self.assertTrue(sw_setup.usage_panel_installed(after))
+        self.assertTrue(self.config()["refresh"]["usage_panel"])
+        after.pop("env")
+        before.pop("env", None)
+        self.assertEqual(after, before)
 
 
 class RuntimeMirror(Base):

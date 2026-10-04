@@ -1,0 +1,1 @@
+{ "name": "usage-panel", "version": "0.1.0", "description": "Second-wind usage pop-up: coloured bars per account, refresh and one-click routing", "types": "./types/index.d.ts" }
