@@ -1,11 +1,32 @@
 import { test, expect, mock } from 'claude-code/testing'
 
-let CARD: string = "{\"configured\": true, \"thresholds\": {\"five\": 90, \"week\": 80}, \"route\": null, \"accounts\": [{\"role\": \"primary\", \"label\": \"Work Claude\", \"kind\": \"reason\", \"reason\": \"no Claude Code sign-in for its reader profile\"}, {\"role\": \"secondary\", \"label\": \"Personal Claude\", \"kind\": \"bars\", \"five\": 62.0, \"week\": 27.0, \"notes\": [\"resets 13:00 Oct 8\", \"Fable week 35%\"], \"age\": 600, \"stale\": false}, {\"role\": \"codex\", \"label\": \"Codex-team-main\", \"kind\": \"bars\", \"five\": null, \"week\": 2.0, \"notes\": [\"resets 18:34 Oct 9\"], \"age\": 600, \"stale\": false}, {\"role\": \"codex2\", \"label\": \"Codex-team-spare\", \"kind\": \"bars\", \"five\": null, \"week\": 85.0, \"notes\": [\"resets 17:54 Oct 9\"], \"age\": 600, \"stale\": false}, {\"role\": \"codex3\", \"label\": \"Codex personal\", \"kind\": \"bars\", \"five\": null, \"week\": 5.0, \"notes\": [\"resets 17:13 Oct 9\"], \"age\": 600, \"stale\": false}, {\"role\": \"grok\", \"label\": \"Grok\", \"kind\": \"bars\", \"five\": null, \"week\": 1.0, \"notes\": [\"resets 07:11 Oct 9\"], \"age\": 600, \"stale\": false}, {\"role\": \"cursor\", \"label\": \"Cursor\", \"kind\": \"pools\", \"pools\": [{\"name\": \"included\", \"pct\": 0.0}, {\"name\": \"auto\", \"pct\": 0.0}, {\"name\": \"api\", \"pct\": 0.0}], \"notes\": [\"resets Oct 30\"], \"age\": 600, \"stale\": false}], \"destinations\": [{\"worker\": \"cursor\", \"label\": \"Cursor\", \"headroom\": 100, \"usage\": \"\", \"models\": [{\"model\": null, \"effort\": null, \"text\": \"default\", \"note\": \"its own model\"}]}, {\"worker\": \"grok\", \"label\": \"Grok\", \"headroom\": 99, \"usage\": \"\", \"models\": [{\"model\": null, \"effort\": \"high\", \"text\": \"high effort\", \"note\": \"\"}]}, {\"worker\": \"codex\", \"label\": \"Codex-team-main\", \"headroom\": 98, \"usage\": \"\", \"models\": [{\"model\": \"gpt-6.1-sol\", \"effort\": \"high\", \"text\": \"gpt-6.1-sol high\", \"note\": \"high effort\"}, {\"model\": \"gpt-6.1-sol\", \"effort\": \"medium\", \"text\": \"gpt-6.1-sol medium\", \"note\": \"everyday tasks\"}, {\"model\": \"gpt-6-astra\", \"effort\": \"high\", \"text\": \"gpt-6-astra high\", \"note\": \"the most demanding work\"}]}, {\"worker\": \"codex3\", \"label\": \"Codex personal\", \"headroom\": 95, \"usage\": \"\", \"models\": [{\"model\": \"gpt-6.1-sol\", \"effort\": \"high\", \"text\": \"gpt-6.1-sol high\", \"note\": \"high effort\"}, {\"model\": \"gpt-6.1-sol\", \"effort\": \"medium\", \"text\": \"gpt-6.1-sol medium\", \"note\": \"everyday tasks\"}, {\"model\": \"gpt-6-astra\", \"effort\": \"high\", \"text\": \"gpt-6-astra high\", \"note\": \"the most demanding work\"}]}, {\"worker\": \"codex2\", \"label\": \"Codex-team-spare\", \"headroom\": 15, \"usage\": \"\", \"models\": [{\"model\": \"gpt-6.1-sol\", \"effort\": \"high\", \"text\": \"gpt-6.1-sol high\", \"note\": \"high effort\"}, {\"model\": \"gpt-6.1-sol\", \"effort\": \"medium\", \"text\": \"gpt-6.1-sol medium\", \"note\": \"everyday tasks\"}, {\"model\": \"gpt-6-astra\", \"effort\": \"high\", \"text\": \"gpt-6-astra high\", \"note\": \"the most demanding work\"}]}, {\"worker\": \"secondary\", \"label\": \"Personal Claude\", \"headroom\": 38, \"usage\": \"\", \"models\": [{\"model\": \"claude-sonnet-5-5\", \"effort\": \"medium\", \"text\": \"sonnet medium\", \"note\": \"\"}]}]}"
 const PANE = { component: 'Pane', requestId: 'usage', props: { title: 'Usage', isFocused: true, bodyColumns: 80, placement: 'dock' } as never } as const
 const BAND = { component: 'AbovePrompt', props: { hasSurvey: false } as never } as const
 
-test('pane and band draw, and routing calls route.py', async ($, on) => {
+// Placeholder accounts, times relative to the moment the test runs.
+function card(now: number) {
+  const h = 3600
+  const win = (name: string, pct: number, left: number, hours: number) => ({ name, pct, resets_at: now + left, hours })
+  return {
+    configured: true, thresholds: { five: 90, week: 80 }, now,
+    accounts: [
+      { role: 'primary', label: 'Work Claude', kind: 'bars', plan: 'Claude Team',
+        windows: [win('5-hour', 10, 2 * h, 5), win('Week', 86, 9 * h, 168), win('Fable week', 96, 9 * h, 168)] },
+      { role: 'secondary', label: 'Personal Claude', kind: 'bars', plan: 'Claude Max',
+        windows: [win('5-hour', 62, 1 * h, 5), win('Week', 27, 96 * h, 168)] },
+      { role: 'codex', label: 'Codex-team-main', kind: 'bars', plan: 'Business',
+        windows: [win('Week', 2, 126 * h, 168)] },
+      { role: 'grok', label: 'Grok', kind: 'reason', reason: 'login expired' },
+      { role: 'cursor', label: 'Cursor', kind: 'pools', plan: 'Pro',
+        windows: [win('Month', 0, 26 * 24 * h, 720)] },
+    ],
+  }
+}
+
+test('the panel draws each limit as a bar, a figure and a ring, and the strip hides', async ($, on) => {
+  let CARD = JSON.stringify(card(Math.floor(Date.now() / 1000)))
   const calls: string[][] = []
+  const stdins: string[] = []
   on('process.run', async (_$, e) => {
     const argv = [...e.argv]
     calls.push(argv)
@@ -14,7 +35,6 @@ test('pane and band draw, and routing calls route.py', async ($, on) => {
     return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', async () => ({ value: 'sess-1' }))
-  const stdins: string[] = []
   on('session.usage', async () => ({ value: { rateLimits: [
     { kind: 'five_hour', percentUsed: 9, resetsAt: '2030-01-01T17:40:00.000Z' },
     { kind: 'seven_day', percentUsed: 86, resetsAt: '2030-01-02T01:00:00.000Z' },
@@ -22,7 +42,6 @@ test('pane and band draw, and routing calls route.py', async ($, on) => {
   on('session.version', async () => ({ value: { version: '9.9.9' } as never }))
   const toasts: string[] = []
   mock.store(on)
-  // The engine's own strip, drawn when the plugin passes: nothing to show.
   on('ui.render', { component: 'AbovePrompt' }, async () => ({ type: 'Box', props: {}, children: [] }) as never)
   on('ui.open', async () => ({ value: { isPlaced: true } as never }))
   on('ui.toast', async (_$, e) => { toasts.push(String((e as { text?: string }).text ?? e)); return { value: undefined as never } })
@@ -30,60 +49,52 @@ test('pane and band draw, and routing calls route.py', async ($, on) => {
   await $.command.run({ command: 'usage-panel' })
 
   // This account's figures go to statusline.sh in the status line's own shape.
-  expect(calls.some(c => c.join(' ') === 'sh /sw/scripts/statusline.sh')).toBe(true)
-  expect(JSON.parse(stdins[0])).toEqual({ version: '9.9.9', rate_limits: {
+  expect(JSON.parse(stdins[0]!)).toEqual({ version: '9.9.9', rate_limits: {
     five_hour: { used_percentage: 9, resets_at: 1893519600 },
     seven_day: { used_percentage: 86, resets_at: 1893546000 } } })
 
   const pane = await $.ui.mount({ plugin: 'usage-panel', surface: 'desktop', ...PANE })
-  // Labels and figures are the surface's own text; only the bars are images,
-  // each drawn at a fixed size so no frame of default size inflates the row.
-  expect(await pane.find({ type: 'Text', text: 'Codex-team-spare' })).toBeDefined()
-  const bars = await pane.findAll({ type: 'Svg' })
-  expect(bars.length).toBe(10)
-  for (const b of bars) {
-    expect(b.props.width).toBe(96)
-    expect(b.props.height).toBe(8)
-    expect(b.props.isInteractive).toBeUndefined()
+  const svgs = await pane.findAll({ type: 'Svg' })
+  // 7 limits with readings, each a bar and a ring; the account with no reading draws none.
+  expect(svgs.filter(s => String(s.props.alt).includes('% used')).length).toBe(7)
+  expect(svgs.filter(s => String(s.props.alt).startsWith('resets in')).length).toBe(7)
+  for (const s of svgs) {
+    expect(typeof s.props.width).toBe('number')
+    expect(typeof s.props.height).toBe('number')
+    expect(s.props.isInteractive).toBeUndefined()
   }
-  expect(String(bars.find(b => b.props.alt === 'week 85%')?.props.source)).toContain('#e0524f')
-  expect(String(bars.find(b => b.props.alt === '5h 62%')?.props.source)).toContain('#e0a030')
-
-  // Six destinations get a button; the primary account does not.
-  expect((await pane.findAll({ type: 'Button', text: /Send tasks here/ })).length).toBe(6)
-
-  await pane.press({ key: 'go-codex' })
-  expect(await pane.find({ key: 'preset-codex' })).toBeDefined()
-  await pane.select({ key: 'preset-codex', value: '2' })
-  await pane.select({ key: 'mode-codex', value: 'review' })
-  await pane.press({ key: 'route-codex' })
-  const routed = calls.find(c => c.some(a => a.endsWith('route.py')))
-  expect(routed).toEqual(['python3', '/sw/scripts/route.py', '--set', 'codex', '--session', 'sess-1', '--mode', 'review', '--model', 'gpt-6-astra', '--effort', 'high'])
-  expect((await pane.find({ type: 'Text', text: /Next tasks go to/ }))?.text).toContain('review only')
-  await pane.unmount()
+  const fable = svgs.find(s => s.props.alt === 'Fable week 96% used')
+  expect(String(fable?.props.source)).toContain('#e0524f')
+  expect(String(svgs.find(s => s.props.alt === '5-hour 62% used')?.props.source)).toContain('#e0a030')
+  // The pace tail: Personal week at 27% with 4 of 7 days left is striped onwards.
+  expect(String(svgs.find(s => s.props.alt === 'Week 27% used')?.props.source)).toContain('url(#s2fa36b)')
+  expect(svgs.find(s => s.props.alt === 'resets in 26d')).toBeDefined()
+  expect(svgs.find(s => s.props.alt === 'resets in 9h')).toBeDefined()
+  // Fable at 96% with 9 of 168 hours left runs out before its refill.
+  expect((await pane.find({ type: 'Text', text: /Runs out about/ }))).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: 'login expired' })).toBeDefined()
+  // No routing in the panel any more.
+  expect(await pane.find({ type: 'Button', text: /Send/ })).toBeUndefined()
+  expect(await pane.find({ type: 'Select' })).toBeUndefined()
 
   const band = await $.ui.mount({ plugin: 'usage-panel', surface: 'desktop', ...BAND })
-  expect(await band.find({ type: 'Svg' })).toBeUndefined()
-  expect(await band.find({ type: 'Text', text: '85%' })).toBeDefined()
-  expect(await band.find({ key: 'open' })).toBeDefined()
-  // Hide takes the strip away; the panel's button brings it back.
+  expect(await band.find({ type: 'Text', text: '96%' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: 'Work' })).toBeDefined()
   await band.press({ key: 'hide' })
   expect(await band.find({ key: 'open' })).toBeUndefined()
-  const again = await $.ui.mount({ plugin: 'usage-panel', surface: 'desktop', ...PANE })
-  expect((await again.find({ key: 'strip' }))?.text).toContain('Show strip')
-  await again.press({ key: 'strip' })
+  await pane.press({ key: 'strip' })
   expect(await band.find({ key: 'open' })).toBeDefined()
-  await again.unmount()
   await band.unmount()
+  await pane.unmount()
 
-  // Codex personal jumps from 5% to 95% weekly between readings: one toast.
+  // Codex-team-main jumps from 2% to 85% weekly between readings: one toast.
   const next = JSON.parse(CARD)
-  next.accounts.find((a: { role: string }) => a.role === 'codex3').week = 95
+  next.accounts[2].windows[0].pct = 85
   CARD = JSON.stringify(next)
   await $.command.run({ command: 'usage-panel' })
-  expect(toasts.some(t => t.includes('Codex personal weekly limit at 95%'))).toBe(true)
+  expect(toasts.some(t => t.includes('Codex-team-main week limit at 85%'))).toBe(true)
 
   const term = await $.ui.mount({ plugin: 'usage-panel', surface: 'terminal', ...BAND })
-  expect(await term.find({ type: 'Text', text: /Personal/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: 'Personal' })).toBeDefined()
   await term.unmount()
 })

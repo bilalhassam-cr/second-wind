@@ -1,13 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Account, Card, Destination } from '../types'
+import type { Account, Card, Window } from '../types'
 
 const PANE = 'usage'
 const card = atom({ plugin: 'usage-panel', key: 'card' } as const, null)
-const expanded = atom({ plugin: 'usage-panel', key: 'expanded' } as const, null)
-const preset = atom({ plugin: 'usage-panel', key: 'preset' } as const, '0')
-const mode = atom({ plugin: 'usage-panel', key: 'mode' } as const, 'work')
 const busy = atom({ plugin: 'usage-panel', key: 'busy' } as const, null)
 const message = atom({ plugin: 'usage-panel', key: 'message' } as const, null)
 const checkedAt = atom({ plugin: 'usage-panel', key: 'checkedAt' } as const, 0)
@@ -17,6 +14,8 @@ const GREEN = '#2fa36b'
 const AMBER = '#e0a030'
 const RED = '#e0524f'
 const GREY = '#9aa0a6'
+const BLUE = '#3b7ddd'
+const TRACK = '#8080804d'
 
 // Green while there is plenty left, amber from half way, red once the
 // second-wind handover threshold for that window is reached.
@@ -27,50 +26,99 @@ function colour(pct: number | null | undefined, limit: number): string {
   return GREEN
 }
 
-// A label short enough for the band: "Work Claude" is "Work", and a
+function limitFor(w: Window, t: { five: number; week: number }): number {
+  return w.hours <= 5 ? t.five : t.week
+}
+
+// A label short enough for the strip: "Work Claude" is "Work", and a
 // hyphenated "Codex-team-main" keeps its first and last words, "Codex main".
 function shortName(label: string): string {
   const words = label.replace(/ Claude$/, '').split(/[-\s]+/).filter(Boolean)
   return words.length > 2 ? `${words[0]} ${words[words.length - 1]}` : words.join(' ')
 }
 
-function age(seconds: number | null | undefined): string {
-  if (seconds === null || seconds === undefined) return ''
-  const m = Math.round(seconds / 60)
-  return m < 60 ? `${m}m` : `${Math.round(m / 60)}h`
+function clock(epoch: number): string {
+  const d = new Date(epoch * 1000)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-// One thin bar as a fixed-size image. Everything else is the surface's own
-// text, so it reads at the app's size; an Svg with no size, or an interactive
-// one, is laid out in a default-sized frame and shrinks what is inside it.
-const BAR_W = 96
-const BAR_H = 8
-function barSvg(pct: number | null | undefined, limit: number): string {
-  const fill = pct === null || pct === undefined ? 0 : Math.max(BAR_H, (Math.min(pct, 100) / 100) * BAR_W)
+// Time left in a window, and where the average rate so far takes it by the
+// reset. An estimate, and drawn as one: a striped tail, never a solid bar.
+type Pace = { left: number | null; share: number | null; atReset: number | null; runsOut: number | null }
+function pace(w: Window, now: number): Pace {
+  if (!w.resets_at) return { left: null, share: null, atReset: null, runsOut: null }
+  const span = w.hours * 3600
+  const left = Math.max(0, w.resets_at - now)
+  const elapsed = span - left
+  if (elapsed <= 0 || w.pct <= 0) return { left, share: Math.min(1, left / span), atReset: w.pct, runsOut: null }
+  const rate = w.pct / elapsed
+  const runsOut = now + (100 - w.pct) / rate
+  return {
+    left,
+    share: Math.min(1, left / span),
+    atReset: Math.min(100, w.pct + rate * left),
+    runsOut: w.pct < 100 && runsOut < w.resets_at ? runsOut : null,
+  }
+}
+
+function untilText(seconds: number): string {
+  if (seconds < 3570) return `${Math.max(1, Math.round(seconds / 60))}m`
+  if (seconds < 48 * 3600) return `${Math.round(seconds / 3600)}h`
+  return `${Math.round(seconds / 86400)}d`
+}
+
+// Every drawing is a fixed-size image. Without a size, or drawn interactive,
+// an Svg is laid out in a default-sized frame that shrinks what is inside it.
+const BAR_W = 112
+const BAR_H = 10
+function barSvg(w: Window, p: Pace, limit: number): string {
+  const x = (pct: number) => (Math.min(pct, 100) / 100) * BAR_W
+  const used = w.pct > 0 ? Math.max(BAR_H, x(w.pct)) : 0
+  const tail = p.atReset !== null && p.atReset > w.pct ? x(p.atReset) - used : 0
+  const fill = colour(w.pct, limit)
+  const id = `s${fill.slice(1)}`
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${BAR_W}" height="${BAR_H}" viewBox="0 0 ${BAR_W} ${BAR_H}">` +
-    `<rect width="${BAR_W}" height="${BAR_H}" rx="${BAR_H / 2}" fill="#8080804d"/>` +
-    (fill ? `<rect width="${fill}" height="${BAR_H}" rx="${BAR_H / 2}" fill="${colour(pct, limit)}"/>` : '') +
-    '</svg>'
+    `<defs><pattern id="${id}" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">` +
+    `<rect width="2" height="4" fill="${fill}" opacity=".55"/></pattern>` +
+    `<clipPath id="c"><rect width="${BAR_W}" height="${BAR_H}" rx="${BAR_H / 2}"/></clipPath></defs>` +
+    `<g clip-path="url(#c)"><rect width="${BAR_W}" height="${BAR_H}" fill="${TRACK}"/>` +
+    (tail > 0 ? `<rect x="${used}" width="${tail}" height="${BAR_H}" fill="url(#${id})"/>` : '') +
+    (used ? `<rect width="${used}" height="${BAR_H}" rx="${BAR_H / 2}" fill="${fill}"/>` : '') +
+    `<rect x="${x(limit) - 1}" width="2" height="${BAR_H}" fill="#6b7078"/></g></svg>`
 }
 
-function pctText(pct: number | null | undefined): string {
-  return pct === null || pct === undefined ? 'n/a' : `${Math.round(pct)}%`
+const RING = 32
+function ringSvg(p: Pace): string {
+  const r = 13
+  const c = 2 * Math.PI * r
+  const share = p.share ?? 0
+  const label = p.left === null ? '' : untilText(p.left)
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${RING}" height="${RING}" viewBox="0 0 ${RING} ${RING}">` +
+    `<circle cx="16" cy="16" r="${r}" fill="none" stroke="${TRACK}" stroke-width="3"/>` +
+    `<circle cx="16" cy="16" r="${r}" fill="none" stroke="${BLUE}" stroke-width="3" stroke-linecap="round" ` +
+    `stroke-dasharray="${(c * share).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 16 16)"/>` +
+    `<text x="16" y="20.5" text-anchor="middle" font-family="-apple-system,system-ui,sans-serif" font-size="${label.length > 2 ? 9.5 : 11.5}" ` +
+    `font-weight="700" fill="${BLUE}">${label}</text></svg>`
 }
 
-// The figure that decides an account's dot: its fullest window.
-function worst(a: Account, t: { five: number; week: number }): { pct: number | null; limit: number } {
-  if (a.kind === 'bars') {
-    const five = a.five ?? -1
-    const week = a.week ?? -1
-    const pct = Math.max(five, week)
-    return { pct: pct < 0 ? null : pct, limit: five > week ? t.five : t.week }
-  }
-  if (a.kind === 'monthly') return { pct: a.monthly ?? null, limit: t.week }
-  if (a.kind === 'pools') {
-    const pct = Math.max(-1, ...(a.pools ?? []).map(p => p.pct))
-    return { pct: pct < 0 ? null : pct, limit: t.week }
-  }
-  return { pct: null, limit: t.week }
+// A small usage ring for the strip.
+const DOT = 16
+function dotSvg(pct: number | null, limit: number): string {
+  const r = 6
+  const c = 2 * Math.PI * r
+  const share = pct === null ? 0 : Math.min(pct, 100) / 100
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${DOT}" height="${DOT}" viewBox="0 0 ${DOT} ${DOT}">` +
+    `<circle cx="8" cy="8" r="${r}" fill="none" stroke="${TRACK}" stroke-width="2.5"/>` +
+    `<circle cx="8" cy="8" r="${r}" fill="none" stroke="${colour(pct, limit)}" stroke-width="2.5" ` +
+    `stroke-dasharray="${(c * share).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 8 8)"/></svg>`
+}
+
+// The figure that stands for an account in the strip: its fullest window.
+function fullest(a: Account, t: { five: number; week: number }): { pct: number | null; limit: number } {
+  const ws = a.windows ?? []
+  if (!ws.length) return { pct: null, limit: t.week }
+  const top = ws.reduce((m, w) => (w.pct > m.pct ? w : m))
+  return { pct: top.pct, limit: limitFor(top, t) }
 }
 
 function textBar(pct: number | null | undefined): string {
@@ -131,13 +179,12 @@ async function load($: EngineInterface): Promise<void> {
   const t = next.thresholds ?? { five: 90, week: 80 }
   const seen: Record<string, number> = {}
   for (const a of next.accounts ?? []) {
-    if (a.kind !== 'bars') continue
-    for (const [win, pct, limit] of [['5-hour', a.five, t.five], ['weekly', a.week, t.week]] as const) {
-      if (pct === null || pct === undefined) continue
-      const key = `${a.role}:${win}`
-      seen[key] = pct
-      if (last[key] !== undefined && last[key] < limit && pct >= limit) {
-        $.ui.toast(`${a.label} ${win} limit at ${Math.round(pct)}%`, { timeoutMs: 8000 })
+    for (const w of a.windows ?? []) {
+      const key = `${a.role}:${w.name}`
+      const limit = limitFor(w, t)
+      seen[key] = w.pct
+      if (last[key] !== undefined && last[key] < limit && w.pct >= limit) {
+        $.ui.toast(`${a.label} ${w.name.toLowerCase()} limit at ${Math.round(w.pct)}%`, { timeoutMs: 8000 })
       }
     }
   }
@@ -153,29 +200,7 @@ async function refresh($: EngineInterface): Promise<void> {
     .catch(() => null)
   await load($)
   await update($, busy, () => null)
-  await update($, message, () => (r && r.exitCode === 0 ? 'Readings refreshed.' : 'Refresh finished with an error; showing the latest readings.'))
-}
-
-async function route($: EngineInterface, d: Destination): Promise<void> {
-  const p = d.models[Number(await read($, preset))] ?? d.models[0]
-  const m = await read($, mode)
-  const argv = ['python3', `${sw}/scripts/route.py`, '--set', d.worker, '--session', sessionId, '--mode', m]
-  if (p?.model) argv.push('--model', p.model)
-  if (p?.effort) argv.push('--effort', p.effort)
-  await update($, busy, () => 'route')
-  const r = await $.process.run(argv)
-  await update($, busy, () => null)
-  await update($, expanded, () => null)
-  await update($, message, () =>
-    r.exitCode === 0 ? `Next tasks go to ${d.label}${p ? `, ${p.text}` : ''}, ${m === 'review' ? 'review only' : 'full access'}.` : `Routing failed: ${r.stderr.trim()}`)
-  await load($)
-  $.ui.toast(r.exitCode === 0 ? `Routing to ${d.label}` : 'Routing failed')
-}
-
-async function stopRoute($: EngineInterface): Promise<void> {
-  await $.process.run(['python3', `${sw}/scripts/route.py`, '--clear', '--session', sessionId])
-  await update($, message, () => 'Routing off. Work stays on this account.')
-  await load($)
+  await update($, message, () => (r && r.exitCode === 0 ? null : 'Refresh finished with an error; showing the latest readings.'))
 }
 
 async function setHidden($: EngineInterface, value: boolean): Promise<void> {
@@ -185,7 +210,7 @@ async function setHidden($: EngineInterface, value: boolean): Promise<void> {
 }
 
 async function openPane($: EngineInterface): Promise<void> {
-  await $.ui.open({ id: PANE, title: 'Usage', focus: true, closeOnEscape: true, rows: 22, columns: 72 })
+  await $.ui.open({ id: PANE, title: 'Usage', focus: true, closeOnEscape: true, rows: 30, columns: 64 })
 }
 
 export const register: Register = on => {
@@ -214,17 +239,24 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const c = await read($, card)
     if (e.props.hasSurvey || !c || !c.configured || (await read($, hidden))) return next(e)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Button, Text } = els
     const t = c.thresholds ?? { five: 90, week: 80 }
     return (
       <Box columnGap={2} rowGap={0} flexWrap="wrap" alignItems="center">
         {(c.accounts ?? []).map(a => {
-          const w = worst(a, t)
+          const f = fullest(a, t)
           return (
-            <Box key={`chip-${a.role}`} columnGap={1}>
-              <Text color={colour(w.pct, w.limit)}>●</Text>
-              <Text bold>{w.pct === null ? '–' : `${Math.round(w.pct)}%`}</Text>
+            <Box key={`chip-${a.role}`} columnGap={1} alignItems="center">
+              {'Svg' in els ? (
+                <els.Svg source={dotSvg(f.pct, f.limit)} alt="" width={DOT} height={DOT} />
+              ) : (
+                <Text color={colour(f.pct, f.limit)}>●</Text>
+              )}
               <Text dimColor>{shortName(a.label)}</Text>
+              <Text bold color={f.pct === null ? undefined : colour(f.pct, f.limit)}>
+                {f.pct === null ? '–' : `${Math.round(f.pct)}%`}
+              </Text>
             </Box>
           )
         })}
@@ -241,113 +273,83 @@ export const register: Register = on => {
     if (!c) return <Text dimColor>Loading readings…</Text>
     if (!c.configured) return <Text>second-wind is not set up. Run /second-wind.</Text>
     const t = c.thresholds ?? { five: 90, week: 80 }
-    const open = await read($, expanded)
     const working = await read($, busy)
     const note = await read($, message)
-    const chosen = await read($, preset)
-    const chosenMode = await read($, mode)
     const isHidden = await read($, hidden)
-    const ages = (c.accounts ?? []).map(a => a.age).filter((n): n is number => typeof n === 'number')
-    const oldest = ages.length ? age(Math.max(...ages)) : ''
-    const dests = new Map((c.destinations ?? []).map(d => [d.worker, d]))
+    const at = await read($, checkedAt)
+    const now = Date.now() / 1000
+    const hasSvg = 'Svg' in els
 
-    const meter = (label: string, pct: number | null | undefined, limit: number, key: string) => (
-      <Box key={key} columnGap={1} alignItems="center">
-        <Text dimColor>{label}</Text>
-        {'Svg' in els ? (
-          <els.Svg source={barSvg(pct, limit)} alt={`${label} ${pctText(pct)}`} width={BAR_W} height={BAR_H} />
-        ) : (
-          <Text>{textBar(pct)}</Text>
-        )}
-        <Text bold={pct !== null && pct !== undefined && pct >= limit} color={pct !== null && pct !== undefined && pct >= limit ? RED : undefined}>
-          {pctText(pct)}
-        </Text>
-      </Box>
-    )
+    // One row per limit: what it is, the bar, the figure, the ring.
+    const row = (a: Account, w: Window, label: string, sub: string | null, solo: boolean) => {
+      const p = pace(w, now)
+      const limit = limitFor(w, t)
+      const over = w.pct >= limit
+      return (
+        <Box key={`${a.role}-${w.name}`} flexDirection="column">
+          <Box columnGap={1} alignItems="center">
+            <Box width="36%" flexDirection="column">
+              <Text bold={solo} dimColor={!solo} wrap="truncate-end">{label}</Text>
+              {sub && <Text dimColor wrap="truncate-end">{sub}</Text>}
+            </Box>
+            {hasSvg && 'Svg' in els ? (
+              <els.Svg source={barSvg(w, p, limit)} alt={`${w.name} ${Math.round(w.pct)}% used`} width={BAR_W} height={BAR_H} />
+            ) : (
+              <Text>{textBar(w.pct)}</Text>
+            )}
+            <Box width="14%" justifyContent="flex-end">
+              <Text bold color={colour(w.pct, limit)}>{`${Math.round(w.pct)}%`}</Text>
+            </Box>
+            {hasSvg && 'Svg' in els && p.left !== null ? (
+              <els.Svg source={ringSvg(p)} alt={`resets in ${untilText(p.left)}`} width={RING} height={RING} />
+            ) : (
+              <Text dimColor>{p.left === null ? '' : untilText(p.left)}</Text>
+            )}
+          </Box>
+          {p.runsOut !== null && (
+            <Text color={RED}>⚠ Runs out about {clock(p.runsOut)} at this pace, before its {clock(w.resets_at ?? 0)} refill</Text>
+          )}
+          {over && p.runsOut === null && w.hours > 5 && (
+            <Text color={RED}>Over the {limit}% handover line</Text>
+          )}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column" rowGap={1}>
         <Box columnGap={1} alignItems="center" flexWrap="wrap">
-          <Text dimColor>{oldest ? `Updated ${oldest} ago` : ''}</Text>
+          <Text dimColor>{at ? `Updated ${clock(at / 1000)}` : ''}</Text>
           <Button key="refresh" label={working === 'refresh' ? 'Refreshing…' : 'Refresh'} onPress={() => void refresh($)} />
           <Button key="strip" label={isHidden ? 'Show strip' : 'Hide strip'} onPress={() => void setHidden($, !isHidden)} />
         </Box>
-        {c.route && (
-          <Box columnGap={1} alignItems="center" flexWrap="wrap">
-            <Text color={AMBER} bold>
-              Routing to {c.route.label}{c.route.model ? `, ${c.route.model}` : ''}{c.route.effort ? ` ${c.route.effort}` : ''}, {c.route.mode === 'review' ? 'review only' : 'full access'}
-            </Text>
-            <Button key="stop" label="Stop routing" onPress={() => void stopRoute($)} />
-          </Box>
-        )}
         {note && <Text dimColor>{note}</Text>}
         {(c.accounts ?? []).map(a => {
-          const d = dests.get(a.role)
-          const w = worst(a, t)
-          const notes = a.kind === 'reason' ? a.reason ?? '' : (a.notes ?? []).join(' · ')
-          return (
-            <Box key={`row-${a.role}`} flexDirection="column">
-              <Box columnGap={1} alignItems="center" justifyContent="space-between">
-                <Box columnGap={1} alignItems="center">
-                  <Text color={colour(w.pct, w.limit)}>●</Text>
-                  <Text bold>{a.label}</Text>
-                </Box>
-                {d && (
-                  <Button
-                    key={`go-${a.role}`}
-                    label={open === a.role ? 'Cancel' : 'Send tasks here'}
-                    plain
-                    onPress={() => {
-                      void update($, expanded, cur => (cur === a.role ? null : a.role))
-                      void update($, preset, () => '0')
-                    }}
-                  />
-                )}
+          const ws = a.windows ?? []
+          if (a.kind === 'reason' || !ws.length) {
+            return (
+              <Box key={`acc-${a.role}`} flexDirection="column">
+                <Text bold>{a.label}</Text>
+                <Text dimColor>{a.reason ?? 'no reading yet'}</Text>
               </Box>
-              {a.kind === 'bars' && (
-                <Box columnGap={3} flexWrap="wrap">
-                  {meter('5h', a.five, t.five, `five-${a.role}`)}
-                  {meter('week', a.week, t.week, `week-${a.role}`)}
-                </Box>
-              )}
-              {a.kind === 'monthly' && meter('month', a.monthly, t.week, `month-${a.role}`)}
-              {a.kind === 'pools' && (
-                <Text>
-                  {(a.pools ?? []).map(p => `${p.name} ${Math.round(p.pct)}%`).join('  ·  ')}
-                </Text>
-              )}
-              {notes && <Text dimColor>{notes}</Text>}
-              {d && open === a.role && (
-                <Box columnGap={1} alignItems="center" flexWrap="wrap" marginTop={1}>
-                  <els.Select
-                    key={`preset-${a.role}`}
-                    label="Model"
-                    value={chosen}
-                    options={d.models.map((m, i) => ({ value: String(i), label: m.note ? `${m.text}: ${m.note}` : m.text }))}
-                    onSelect={v => void update($, preset, () => v)}
-                  />
-                  <els.Select
-                    key={`mode-${a.role}`}
-                    label="Access"
-                    value={chosenMode}
-                    options={[
-                      { value: 'work', label: 'Full access (does the work)' },
-                      { value: 'review', label: 'Review only (read, no edits)' },
-                    ]}
-                    onSelect={v => void update($, mode, () => v)}
-                  />
-                  <Button
-                    key={`route-${a.role}`}
-                    variant="primary"
-                    label={working === 'route' ? 'Routing…' : 'Route'}
-                    onPress={() => void route($, d)}
-                  />
-                </Box>
-              )}
+            )
+          }
+          if (ws.length === 1) {
+            const w = ws[0]!
+            const sub = [a.plan, w.name.toLowerCase()].filter(Boolean).join(', ')
+            return <Box key={`acc-${a.role}`}>{row(a, w, a.label, sub, true)}</Box>
+          }
+          return (
+            <Box key={`acc-${a.role}`} flexDirection="column">
+              <Box columnGap={1}>
+                <Text bold>{a.label}</Text>
+                {a.plan && <Text dimColor>{a.plan}</Text>}
+              </Box>
+              {ws.map(w => row(a, w, w.name, null, false))}
             </Box>
           )
         })}
-        <Text dimColor>Green under 50% · amber from 50% · red at your handover limit ({t.five}% 5-hour, {t.week}% weekly)</Text>
+        <Text dimColor>Bar: used · stripes: where this pace takes it by the refill · ring: time left to refill</Text>
       </Box>
     )
   })

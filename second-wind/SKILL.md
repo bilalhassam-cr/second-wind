@@ -69,12 +69,14 @@ for a glance.
 
 ## The usage pop-up
 
-`usage-panel/` is a Claude Code mod that draws the same readings in colour: a
-strip above the prompt, and a Usage panel (the strip's button, or `/usage-panel`) with
-the bars, **Refresh now**, **Send tasks here** on each account (model, access,
-Route) and **Stop routing**. A toast fires when an account crosses its
-threshold. Green is under 50%, amber from 50%, red at the threshold. It reads
-`scripts/card_json.py`, which applies the brief's own rules, so the pop-up and
+`usage-panel/` is a Claude Code mod that draws the same readings in colour:
+a strip above the prompt (a small usage ring, name and fullest figure per
+account, with Details and Hide), and a Usage panel (Details, or `/usage-panel`)
+with one row per limit: a bar for what is used, a striped tail for where the
+pace so far takes it by the refill, the figure, and a ring counting down to the
+refill. A limit on course to run out before its refill gets a warning line, and
+a toast fires when one crosses its threshold. Green is under 50%, amber from
+50%, red at the threshold. It reads `scripts/card_json.py`, which applies the brief's own rules, so the pop-up and
 the panel never disagree.
 
 It also keeps the primary reading current. A desktop-app session is signed in
