@@ -73,6 +73,16 @@ test('the panel draws each limit as a bar, a figure and a ring, and the strip hi
   // Fable at 96% with 9 of 168 hours left runs out before its refill.
   expect((await pane.find({ type: 'Text', text: /Runs out about/ }))).toBeDefined()
   expect(await pane.find({ type: 'Text', text: 'login expired' })).toBeDefined()
+  // A rule between services, and every account laid out the same way.
+  expect((await pane.findAll({ type: 'Markdown' })).length).toBe(4)
+  expect((await pane.findAll({ type: 'Text', text: '5-hour' })).length).toBe(2)
+  expect(await pane.find({ type: 'Text', text: 'Business' })).toBeDefined()
+  // Every limit row has the same four column widths, ring slot included.
+  const widths = (await pane.findAll({ type: 'Box' })).map(b => b.props.width).filter(Boolean)
+  expect(widths.filter(w => w === '34%').length).toBe(7)
+  expect(widths.filter(w => w === '40%').length).toBe(7)
+  expect(widths.filter(w => w === '12%').length).toBe(7)
+  expect(widths.filter(w => w === '14%').length).toBe(7)
   // No routing in the panel any more.
   expect(await pane.find({ type: 'Button', text: /Send/ })).toBeUndefined()
   expect(await pane.find({ type: 'Select' })).toBeUndefined()

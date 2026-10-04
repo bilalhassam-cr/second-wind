@@ -92,13 +92,14 @@ function ringSvg(p: Pace): string {
   const r = 13
   const c = 2 * Math.PI * r
   const share = p.share ?? 0
-  const label = p.left === null ? '' : untilText(p.left)
+  const label = p.left === null ? '–' : untilText(p.left)
+  const ink = p.left === null ? GREY : BLUE
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${RING}" height="${RING}" viewBox="0 0 ${RING} ${RING}">` +
     `<circle cx="16" cy="16" r="${r}" fill="none" stroke="${TRACK}" stroke-width="3"/>` +
-    `<circle cx="16" cy="16" r="${r}" fill="none" stroke="${BLUE}" stroke-width="3" stroke-linecap="round" ` +
-    `stroke-dasharray="${(c * share).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 16 16)"/>` +
+    (share > 0 ? `<circle cx="16" cy="16" r="${r}" fill="none" stroke="${BLUE}" stroke-width="3" stroke-linecap="round" ` +
+      `stroke-dasharray="${(c * share).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 16 16)"/>` : '') +
     `<text x="16" y="20.5" text-anchor="middle" font-family="-apple-system,system-ui,sans-serif" font-size="${label.length > 2 ? 9.5 : 11.5}" ` +
-    `font-weight="700" fill="${BLUE}">${label}</text></svg>`
+    `font-weight="700" fill="${ink}">${label}</text></svg>`
 }
 
 // A small usage ring for the strip.
@@ -268,7 +269,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
-    const { Box, Button, Text } = els
+    const { Box, Button, Markdown, Text } = els
     const c = await read($, card)
     if (!c) return <Text dimColor>Loading readings…</Text>
     if (!c.configured) return <Text>second-wind is not set up. Run /second-wind.</Text>
@@ -280,31 +281,35 @@ export const register: Register = on => {
     const now = Date.now() / 1000
     const hasSvg = 'Svg' in els
 
-    // One row per limit: what it is, the bar, the figure, the ring.
-    const row = (a: Account, w: Window, label: string, sub: string | null, solo: boolean) => {
+    // One row per limit, full width in fixed columns, so every bar, figure
+    // and ring sits in the same place whatever the label or the account.
+    const row = (a: Account, w: Window) => {
       const p = pace(w, now)
       const limit = limitFor(w, t)
       const over = w.pct >= limit
       return (
-        <Box key={`${a.role}-${w.name}`} flexDirection="column">
-          <Box columnGap={1} alignItems="center">
-            <Box width="36%" flexDirection="column">
-              <Text bold={solo} dimColor={!solo} wrap="truncate-end">{label}</Text>
-              {sub && <Text dimColor wrap="truncate-end">{sub}</Text>}
+        <Box key={`${a.role}-${w.name}`} flexDirection="column" width="100%">
+          <Box width="100%" alignItems="center">
+            <Box width="34%">
+              <Text dimColor wrap="truncate-end">{w.name}</Text>
             </Box>
-            {hasSvg && 'Svg' in els ? (
-              <els.Svg source={barSvg(w, p, limit)} alt={`${w.name} ${Math.round(w.pct)}% used`} width={BAR_W} height={BAR_H} />
-            ) : (
-              <Text>{textBar(w.pct)}</Text>
-            )}
-            <Box width="14%" justifyContent="flex-end">
+            <Box width="40%">
+              {hasSvg && 'Svg' in els ? (
+                <els.Svg source={barSvg(w, p, limit)} alt={`${w.name} ${Math.round(w.pct)}% used`} width={BAR_W} height={BAR_H} />
+              ) : (
+                <Text>{textBar(w.pct)}</Text>
+              )}
+            </Box>
+            <Box width="12%" justifyContent="flex-end">
               <Text bold color={colour(w.pct, limit)}>{`${Math.round(w.pct)}%`}</Text>
             </Box>
-            {hasSvg && 'Svg' in els && p.left !== null ? (
-              <els.Svg source={ringSvg(p)} alt={`resets in ${untilText(p.left)}`} width={RING} height={RING} />
-            ) : (
-              <Text dimColor>{p.left === null ? '' : untilText(p.left)}</Text>
-            )}
+            <Box width="14%" justifyContent="flex-end">
+              {hasSvg && 'Svg' in els ? (
+                <els.Svg source={ringSvg(p)} alt={p.left === null ? 'reset time not known' : `resets in ${untilText(p.left)}`} width={RING} height={RING} />
+              ) : (
+                <Text dimColor>{p.left === null ? '–' : untilText(p.left)}</Text>
+              )}
+            </Box>
           </Box>
           {p.runsOut !== null && (
             <Text color={RED}>⚠ Runs out about {clock(p.runsOut)} at this pace, before its {clock(w.resets_at ?? 0)} refill</Text>
@@ -324,28 +329,18 @@ export const register: Register = on => {
           <Button key="strip" label={isHidden ? 'Show strip' : 'Hide strip'} onPress={() => void setHidden($, !isHidden)} />
         </Box>
         {note && <Text dimColor>{note}</Text>}
-        {(c.accounts ?? []).map(a => {
+        {(c.accounts ?? []).map((a, i) => {
           const ws = a.windows ?? []
-          if (a.kind === 'reason' || !ws.length) {
-            return (
-              <Box key={`acc-${a.role}`} flexDirection="column">
-                <Text bold>{a.label}</Text>
-                <Text dimColor>{a.reason ?? 'no reading yet'}</Text>
-              </Box>
-            )
-          }
-          if (ws.length === 1) {
-            const w = ws[0]!
-            const sub = [a.plan, w.name.toLowerCase()].filter(Boolean).join(', ')
-            return <Box key={`acc-${a.role}`}>{row(a, w, a.label, sub, true)}</Box>
-          }
           return (
-            <Box key={`acc-${a.role}`} flexDirection="column">
+            <Box key={`acc-${a.role}`} flexDirection="column" width="100%">
+              {i > 0 && <Markdown key={`rule-${a.role}`} text="---" dimColor />}
               <Box columnGap={1}>
                 <Text bold>{a.label}</Text>
                 {a.plan && <Text dimColor>{a.plan}</Text>}
               </Box>
-              {ws.map(w => row(a, w, w.name, null, false))}
+              {a.kind === 'reason' || !ws.length
+                ? <Text dimColor>{a.reason ?? 'no reading yet'}</Text>
+                : ws.map(w => row(a, w))}
             </Box>
           )
         })}
