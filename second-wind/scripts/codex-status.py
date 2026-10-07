@@ -45,6 +45,14 @@ LOGIN = (r"Not\s+logged\s+in|Sign\s+in\s+with\s+ChatGPT|/login\s+to|"
 # row of the command list and a dialog's "› 1. ..." option all fail to match.
 COMPOSER = re.compile("^\\s*›\\s*(?:Ask\\s+Codex\\b.*|/status)\\s*$",
                       re.M | re.I)
+# 0.160 shares one background app-server daemon between sessions. When this
+# reader's session (no API key) wants feature settings the running daemon does
+# not have, Codex asks before touching it. Option 1 runs this one session
+# without the daemon and persists nothing, so it is the only option answered.
+DAEMON = r"Background\s+server\s+has\s+incompatible\s+feature\s+settings"
+# The update notice is answered with "2. Skip": it installs nothing.
+UPDATE = r"Update\s+available"
+HARMLESS = ((DAEMON, b"1"), (UPDATE, b"2"))
 STARTING = r"Starting\s+MCP\s+servers"
 # A Business or Plus panel prints a 5h and a weekly line. A Free workspace
 # prints one monthly line and nothing else, and a reader that did not know that
@@ -293,6 +301,15 @@ def read_screen(cwd, budget, env_set=None, env_drop=("OPENAI_API_KEY",)):
         pieces in the painted text, and a full-screen client must be showing
         its input line as well, so a dialog nobody has seen yet gets no key."""
         shown, full_screen = screen.display
+        for _ in range(3):
+            hit = next((k for pat, k in HARMLESS
+                        if re.search(pat, shown, re.I)), None)
+            if hit is None:
+                break
+            screen.send(hit)
+            screen.pump(1.0)
+            screen.wait_for(present=[PROMPT], quiet=2.5, timeout=left(30) or 1)
+            shown, full_screen = screen.display
         for name, pattern in (("trust", TRUST), ("login", LOGIN)):
             if re.search(pattern, screen.text, re.I) or re.search(pattern, shown, re.I):
                 return name
