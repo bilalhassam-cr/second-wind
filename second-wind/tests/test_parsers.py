@@ -1168,6 +1168,18 @@ class CodexReaderKeystrokes(unittest.TestCase):
         self.assertEqual(outcome, "unknown dialog")
         self.assertEqual(screen.sent, [])
 
+    def test_the_update_dialog_is_skipped_once_and_its_notice_gets_no_key(self):
+        # Codex 0.161.0 with 0.163.0 out, captured on 18 October 2026 with one
+        # "2" pressed between the two halves. Skip closes the dialog and leaves
+        # an "Update available!" notice in the history above the input line,
+        # and a reader answering the words alone typed "22" into the composer.
+        dialog = raw_fixture("codex-0.161.0-update")
+        skipped = raw_fixture("codex-0.161.0-update-skipped")
+        screen = ScriptedScreen([dialog], {b"2": [skipped]})
+        self.drive(screen, budget=8)
+        self.assertEqual(screen.sent[:2], [b"2", b"/status"])
+        self.assertEqual(screen.sent.count(b"2"), 1)
+
     def test_a_panel_is_read_from_one_ask_when_its_label_lost_a_letter(self):
         # Row 10 already holds "We", so the client sends the label as "W", a
         # jump, then "ekly limit:", and the painted text never says "Weekly".

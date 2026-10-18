@@ -84,3 +84,7 @@ Do not "simplify" these away; each cost real debugging time.
   (`plan_name`); taken as printed, every pinned Pro Lite read as a sign-in
   change. Behind its background server the panel names no address, so a Codex
   reading's account is unknown.
+- Skip on the Codex update dialog leaves an "Update available!" notice above
+  the input line. The words outlive the dialog, so a dialog is answered only
+  while the input line is off screen; answering the words typed "22" into the
+  composer and every Codex reading failed from 9 to 18 October 2026.

@@ -302,6 +302,11 @@ def read_screen(cwd, budget, env_set=None, env_drop=("OPENAI_API_KEY",)):
         its input line as well, so a dialog nobody has seen yet gets no key."""
         shown, full_screen = screen.display
         for _ in range(3):
+            # A dialog replaces the input line, but its words can outlive it:
+            # Skip leaves an "Update available!" notice above the composer, and
+            # a reader answering the words alone typed "22" into the input.
+            if COMPOSER.search(shown):
+                break
             hit = next((k for pat, k in HARMLESS
                         if re.search(pat, shown, re.I)), None)
             if hit is None:
