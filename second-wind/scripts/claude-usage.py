@@ -177,6 +177,26 @@ def auth_state(config_dir):
     return bool(data.get("loggedIn")), data.get("email") or None
 
 
+# The desktop app keeps its sign-in to itself, so a terminal reader cannot open
+# /usage for an account the app alone is signed in to. The app session can: the
+# usage pop-up hands its own figures to statusline.sh every minute. Without a
+# terminal sign-in that reading is the account's reading, and its age says how
+# current it is. Replacing it with "run claude auth login" asked for a sign-in
+# nobody needed, every time the app had been closed for a quarter of an hour.
+SESSION_READS = ("OK: read inside a Claude session, which writes this account's "
+                 "figures while one is open. No terminal sign-in exists for it.")
+
+
+def session_reading(path):
+    """Whether the reading at this path was written by a Claude session's own
+    status line, the one source that needs no terminal sign-in."""
+    try:
+        with open(path) as handle:
+            return json.load(handle).get("source") == "status line"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def no_sign_in_message(dirs):
     """What to say when no profile for this role has a Claude Code sign-in.
 
@@ -315,6 +335,9 @@ def main():
             silent.append(candidate)
     if config_dir is None:
         if not silent:
+            if session_reading(out):
+                note(status, SESSION_READS)
+                return 0
             note(status, no_sign_in_message(present))
             return 2
         config_dir = silent[0]

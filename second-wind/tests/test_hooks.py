@@ -1296,11 +1296,48 @@ class StatusLine(Base):
         self.assertTrue(cache["seven_day_resets"])
         self.assertEqual(cache["client_version"], "2.1.251")
         self.assertEqual(cache["extra"], {"model": "Opus 5", "effort": "high"})
+        self.assertEqual(cache["source"], "status line")
         self.assertGreaterEqual(cache["cached_at"], self.now)
 
         with open(os.path.join(self.home,
                                "refresh-status-primary.txt")) as handle:
             self.assertTrue(handle.readline().startswith("OK"))
+
+    def limits(self, five, five_reset, week, week_reset):
+        return json.dumps({"version": "2.1.299", "rate_limits": {
+            "five_hour": {"used_percentage": five, "resets_at": five_reset},
+            "seven_day": {"used_percentage": week, "resets_at": week_reset}}})
+
+    def cached(self):
+        with open(os.path.join(self.home, "usage-primary.json")) as handle:
+            return json.load(handle)
+
+    def test_an_idle_session_does_not_write_its_older_figures_over_newer_ones(self):
+        """Measured on 18 October 2026: four app sessions wrote this cache
+        every minute, each with the windows from its own last response. Three
+        said 13% and the idle one said 5%, and the row showed whichever wrote
+        last. Within one window usage only rises, so a lower figure for the
+        same window is the older one. Reset times from two sessions differ by
+        a second, so that is still the same window."""
+        five, week = self.now + 3600, self.now + 300000
+        self.run_statusline(self.limits(13, five, 26, week))
+        self.run_statusline(self.limits(5, five - 1, 25, week - 1))
+        cache = self.cached()
+        self.assertEqual((cache["five_hour_pct"], cache["seven_day_pct"]), (13, 26))
+
+    def test_a_new_window_is_written_though_its_figure_is_lower(self):
+        five, week = self.now + 600, self.now + 300000
+        self.run_statusline(self.limits(90, five, 60, week))
+        self.run_statusline(self.limits(2, five + 5 * 3600, 61, week))
+        cache = self.cached()
+        self.assertEqual((cache["five_hour_pct"], cache["seven_day_pct"]), (2, 61))
+
+    def test_a_window_already_replaced_is_not_written_back(self):
+        five, week = self.now + 5 * 3600, self.now + 300000
+        self.run_statusline(self.limits(2, five, 61, week))
+        self.run_statusline(self.limits(90, five - 5 * 3600, 60, week))
+        cache = self.cached()
+        self.assertEqual((cache["five_hour_pct"], cache["seven_day_pct"]), (2, 61))
 
     def test_the_reading_is_usable_by_the_library(self):
         self.run_statusline(self.payload())

@@ -88,3 +88,8 @@ Do not "simplify" these away; each cost real debugging time.
   the input line. The words outlive the dialog, so a dialog is answered only
   while the input line is off screen; answering the words typed "22" into the
   composer and every Codex reading failed from 9 to 18 October 2026.
+- Every open Claude app session writes the primary's reading each minute, with
+  the windows from its own last response, so an idle session carries old
+  figures. `statusline.sh` drops a reading that is lower than the one on file
+  for the same window. Without a terminal sign-in the primary is read only this
+  way, and `claude-usage.py` keeps that reading rather than asking for a login.

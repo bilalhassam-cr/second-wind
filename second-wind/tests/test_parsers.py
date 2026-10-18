@@ -619,6 +619,27 @@ class ReaderMainTests(unittest.TestCase):
         self.assertEqual(swlib.status_kind(message=line), "nologin")
         self.assertFalse(os.path.exists(self.out))
 
+    def test_a_reading_from_inside_a_session_stands_when_no_terminal_can_sign_in(self):
+        """The fault seen through October 2026: the desktop app session wrote
+        the account's figures through statusline.sh every minute, and whenever
+        they aged past the refresh interval a terminal reader with no sign-in
+        replaced the row with "run claude auth login". The figures were real
+        and current to their age, so they stand, and no sign-in is asked for."""
+        claude.auth_state = lambda config_dir: (False, None)
+        started = []
+        claude.read_screen = lambda *args: started.append(args) or ("panel", "")
+        reading = {"role": "primary", "worker": "claude", "source": "status line",
+                   "five_hour_pct": 10, "seven_day_pct": 26, "cached_at": 1}
+        with open(self.out, "w") as handle:
+            json.dump(reading, handle)
+        self.assertEqual(self.run_main(), 0)
+        self.assertEqual(started, [])
+        line = self.first_line()
+        self.assertEqual(swlib.status_kind(message=line), "ok", line)
+        self.assertNotIn("auth login", line)
+        with open(self.out) as handle:
+            self.assertEqual(json.load(handle), reading)
+
     def test_a_client_that_will_not_answer_still_gets_the_panel_tried(self):
         """A silent client is not evidence of a signed-out profile, so the
         reader falls through to the panel rather than reporting a fault it
