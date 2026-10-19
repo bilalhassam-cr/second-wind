@@ -48,7 +48,7 @@ jobs:
           fi
           # An em dash is easy to reintroduce in prose and violates the public
           # writing convention even though it is not personal data. Bytecode
-          # is not prose: the test step compiles a "—" escape in source
+          # is not prose: the test step compiles an escaped em dash in source
           # into the character itself.
           emdash=$(printf '\342\200\224')
           if grep -rn "$emdash" --exclude-dir=.git --exclude-dir=__pycache__ .; then
