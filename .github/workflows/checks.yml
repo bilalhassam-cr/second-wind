@@ -47,9 +47,11 @@ jobs:
             echo "author or employer name found; use a neutral placeholder"; fail=1
           fi
           # An em dash is easy to reintroduce in prose and violates the public
-          # writing convention even though it is not personal data.
+          # writing convention even though it is not personal data. Bytecode
+          # is not prose: the test step compiles a "—" escape in source
+          # into the character itself.
           emdash=$(printf '\342\200\224')
-          if grep -rn "$emdash" --exclude-dir=.git .; then
+          if grep -rn "$emdash" --exclude-dir=.git --exclude-dir=__pycache__ .; then
             echo "em dash found; use British punctuation without em dashes"; fail=1
           fi
           exit $fail
