@@ -93,3 +93,21 @@ Do not "simplify" these away; each cost real debugging time.
   figures. `statusline.sh` drops a reading that is lower than the one on file
   for the same window. Without a terminal sign-in the primary is read only this
   way, and `claude-usage.py` keeps that reading rather than asking for a login.
+- launchd runs an overdue timer in a dark wake, when the Mac is asleep and has
+  no display and often no network. Most refresh failures from 9 to 18 October
+  2026 were Grok, Cursor and the second Claude failing together then.
+  `--if-claude-running` skips a wake whose `pmset -g systemstate` has no
+  Graphics.
+- Claude 2.1.285 paints the last figures it fetched at once, of any age, says
+  "Refreshing" and then repaints them or says "Showing last-known usage as of
+  44m ago (rate limited ...)". Read at the first figure, those old ones were
+  saved as current. The reader waits for the refresh to end and saves nothing
+  when the figures are last-known. On 18 October 2026, after about fifteen
+  forced refreshes in an hour, the server rate-limited the account for over an
+  hour, and every reading in that time was last-known. An hour after the last
+  fetch the tab drops the old figures and says only "Error: Usage endpoint is
+  rate limited". Every failed form ends in an "r to retry" footer.
+- A client that cannot reach its server says so where the panel would be. Each
+  reader matches that wording and reports it, and the Claude reader presses
+  Right only while nothing of the Usage tab is on screen: Right from a tab
+  still loading moved it on to Config and Status.

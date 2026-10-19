@@ -145,7 +145,9 @@ sh "$SW/scripts/usage-refresh.sh" --force
 
 The launchd agent runs `usage-refresh.sh --if-claude-running` every 15 minutes,
 and that flag makes it exit at once unless a `claude` process or the desktop app
-is running. So an idle machine refreshing nothing is correct behaviour. A refresh
+is running, or while the Mac is in a dark wake: asleep, woken for a few seconds
+with no display and often no network. So an idle or sleeping machine refreshing
+nothing is correct behaviour. A refresh
 lock older than three minutes is discarded automatically. If the agent is written
 but not loaded, rerun `setup.py --write`.
 

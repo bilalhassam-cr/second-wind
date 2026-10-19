@@ -154,7 +154,9 @@ one credential with the desktop app logged the app out every day or two.
 
 On macOS, setup installs a launchd agent that runs
 `scripts/usage-refresh.sh --if-claude-running` every 15 minutes. It does nothing
-unless a `claude` process or the desktop app is running.
+unless a `claude` process or the desktop app is running, and nothing while the
+Mac is asleep, when macOS wakes it for a few seconds with no display and often
+no network.
 
 ## Using it
 
@@ -243,7 +245,9 @@ whose wording the reader recognises as a trust or login screen is reported as
 `TRUST PROMPT` or `LOGIN EXPIRED`, any other dialog simply keeps the panel from
 appearing and the reading ends as `FAILED: usage panel did not appear`, and a
 panel whose labels have moved reports `PARSER MISMATCH` rather than a wrong
-number.
+number. A client that says it could not reach its own server is reported in its
+own words, and a Claude panel that shows its last-known figures because it could
+not refresh them is not saved as a reading.
 A Claude account is asked `claude auth status` before any of that, which answers
 in about a second where the panel takes a minute. A profile with no sign-in of
 its own reports `NO CLI SIGN-IN` and names the command that fixes it, rather

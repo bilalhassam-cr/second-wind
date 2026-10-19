@@ -151,7 +151,8 @@ On macOS, setup installs a launchd agent, `com.second-wind.refresh`, that runs
 the one in the skill folder because a LaunchAgent cannot read `~/Documents`; see
 `troubleshooting.md`. `--if-claude-running` exits immediately unless a `claude` process
 or the Claude desktop app is running, so nothing starts a client on an idle
-machine. `--no-launchd` at setup skips it; run `usage-refresh.sh` from cron or by
+machine, and also in a dark wake, when macOS runs the overdue timer while the Mac
+sleeps and no reader could reach its server. `--no-launchd` at setup skips it; run `usage-refresh.sh` from cron or by
 hand instead. `setup.py --check` reports whether the agent is loaded.
 
 ## The model picker experiment

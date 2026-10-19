@@ -39,6 +39,13 @@ here. CodexReaderKeystrokes drives the Codex reader's read_screen against
 scripted screens, the captured 0.160.0 dialog among them, so for Codex the stop
 at a dialog is tested. For the other readers it is exercised by hand, and the
 procedure is in TESTING.md.
+
+The `-unreachable`, `-could-not-refresh` and `-rate-limited` captures were
+taken on 19 October 2026 the way the Codex `.raw` files were, by the reader's
+own read_screen, with each client's traffic sent to a local proxy that refused
+the connection or accepted it and never answered; the two rate-limited ones
+needed no proxy. In the two Claude captures the time zone became UTC and the em dash
+a hyphen, the same substitutions as above. Nothing else was edited.
 """
 import contextlib
 import importlib.util
@@ -1279,6 +1286,253 @@ class CodexReaderEnvironment(unittest.TestCase):
         self.assertEqual(env_set, {"CODEX_HOME": "/tmp/codex-personal"})
         self.assertNotIn("CODEX_HOME", env_drop)
         self.assertNotIn("OPENAI_API_KEY", env)
+
+
+class PausingScreen(ScriptedScreen):
+    """A scripted screen in which a number among the paints is a pause: the
+    paints after it wait that many seconds, as a client waiting on its server
+    would."""
+
+    def __init__(self, paints, replies=None):
+        super().__init__(paints, replies)
+        self.resume = 0.0
+
+    def pump(self, seconds=0.4):
+        if self.waiting and time.time() >= self.resume:
+            item = self.waiting.pop(0)
+            if isinstance(item, (int, float)):
+                self.resume = time.time() + item
+            else:
+                self.chunks.append((time.time(), item))
+        else:
+            time.sleep(min(seconds, 0.05))
+
+
+def cut_at(raw, *cuts):
+    """A capture split where the reader typed: the bytes before each key."""
+    edges = (0,) + cuts + (len(raw),)
+    return [raw[a:b] for a, b in zip(edges, edges[1:])]
+
+
+def drive(module, screen, *args):
+    real = module.ptyreader.Screen
+    module.ptyreader.Screen = lambda *a, **k: screen
+    try:
+        return module.read_screen(*args)
+    finally:
+        module.ptyreader.Screen = real
+
+
+# Where the reader typed in each capture of 19 October 2026: Claude took one
+# key, "/usage" and Enter together; Grok and Cursor took "/usage" and then
+# Enter once the command list was up.
+CLAUDE_CUT = {"claude-2.1.285-could-not-refresh": 1136,
+              "claude-2.1.285-rate-limited": 1900}
+CLAUDE_NO_FIGURES_CUT = 1920
+GROK_CUTS = (6256, 16986)
+CURSOR_CUTS = (930, 1679)
+# What a Claude client with no figures to fall back on painted on its Usage
+# tab from 9 to 17 October 2026, as the refresh log recorded it.
+CLAUDE_TABS = ("\x1b[40;1HSettings    Status   Config   Usage   Stats"
+               "\x1b[44;3HLoading usage data…\x1b[46;3HEsc to cancel").encode()
+CLAUDE_FAILED = ("\x1b[44;3H\x1b[KError: Failed to load usage data"
+                 "\x1b[46;3H\x1b[Kr to retry · Esc to cancel").encode()
+CLAUDE_FIGURES = (b"\x1b[44;3H\x1b[KCurrent session\x1b[45;50H23% used"
+                  b"\x1b[46;3HResets 3:19am (UTC)\x1b[48;3HCurrent week (all models)"
+                  b"\x1b[49;50H35% used\x1b[50;3HResets Sep 7 at 2:59am (UTC)")
+
+
+class ClientCannotReachItsServer(unittest.TestCase):
+    """What the Claude, Grok and Cursor readers do when their client cannot
+    reach its own server.
+
+    From 9 to 18 October 2026 the three failed together in about two refreshes
+    in three while the Mac slept, and in each the client said why on screen:
+    Cursor "Failed to load usage data: [unavailable] getaddrinfo ENOTFOUND",
+    Grok "Couldn't load usage: ... error sending request", Claude "Failed to
+    load usage data". The readers waited the panel out, pressed more keys, and
+    reported "usage panel did not appear", which for Claude came with advice to
+    run the onboarding again. From 2.1.285 Claude also paints the last figures
+    it fetched, of any age, and the reader saved them as current.
+
+    The captures were taken on 19 October 2026 with each client's traffic sent
+    to a local proxy that accepted a connection and never answered (Grok,
+    Cursor) or refused it (Claude), and the rate-limited one with no proxy at
+    all. These take a few seconds each: the readers wait for quiet."""
+
+    def claude_capture(self, name):
+        raw = raw_fixture(name)
+        start, panel = cut_at(raw, CLAUDE_CUT[name])
+        # The line saying the figures are old comes after them, as it did.
+        late = panel.rindex(b"\x1b", 0, panel.index(b"Showing last-known"))
+        return PausingScreen([start], {b"/usage\r": [panel[:late], 1.5,
+                                                     panel[late:]]})
+
+    def test_claude_last_known_figures_are_not_a_reading(self):
+        for name in CLAUDE_CUT:
+            with self.subTest(name):
+                screen = self.claude_capture(name)
+                outcome, text = drive(claude, screen, "/tmp", "/tmp", 30)
+                self.assertEqual(outcome, "stale")
+                self.assertEqual(screen.sent, [b"/usage\r"])
+
+    def test_claude_failed_load_stops_without_an_arrow_key(self):
+        start = cut_at(raw_fixture("claude-2.1.285-rate-limited"),
+                       CLAUDE_CUT["claude-2.1.285-rate-limited"])[0]
+        screen = PausingScreen([start], {b"/usage\r": [CLAUDE_TABS, 2,
+                                                       CLAUDE_FAILED]})
+        began = time.time()
+        outcome, _ = drive(claude, screen, "/tmp", "/tmp", 30)
+        self.assertEqual(outcome, "unreachable")
+        self.assertEqual(screen.sent, [b"/usage\r"])
+        self.assertLess(time.time() - began, 10)
+
+    def test_claude_rate_limited_with_no_figures_is_reported_at_once(self):
+        # An hour after its last fetch Claude no longer shows the old figures:
+        # "Error: Usage endpoint is rate limited. Please try again in a
+        # moment." is all the tab holds, and the reader waited for figures.
+        start, panel = cut_at(raw_fixture("claude-2.1.285-rate-limited-no-figures"),
+                              CLAUDE_NO_FIGURES_CUT)
+        screen = PausingScreen([start], {b"/usage\r": [panel]})
+        began = time.time()
+        outcome, _ = drive(claude, screen, "/tmp", "/tmp", 40)
+        self.assertEqual(outcome, "unreachable")
+        self.assertEqual(screen.sent, [b"/usage\r"])
+        self.assertLess(time.time() - began, 10)
+
+    def test_claude_still_loading_gets_no_arrow_key(self):
+        # Right moves along the tabs, and pressed while the Usage tab was
+        # still loading it left for Config and Status and the figures never
+        # came: twenty of the October failures stopped on those tabs.
+        start = cut_at(raw_fixture("claude-2.1.285-rate-limited"),
+                       CLAUDE_CUT["claude-2.1.285-rate-limited"])[0]
+        screen = PausingScreen([start], {b"/usage\r": [CLAUDE_TABS, 7.5,
+                                                       CLAUDE_FIGURES]})
+        outcome, text = drive(claude, screen, "/tmp", "/tmp", 40)
+        self.assertEqual(outcome, "panel")
+        self.assertEqual(screen.sent, [b"/usage\r"])
+        self.assertEqual(claude.parse_panel(text)["seven_day_pct"], 35)
+
+    def test_claude_dialog_on_another_tab_still_gets_right(self):
+        start = cut_at(raw_fixture("claude-2.1.285-rate-limited"),
+                       CLAUDE_CUT["claude-2.1.285-rate-limited"])[0]
+        status = (b"\x1b[40;1HSettings    Status   Config   Usage   Stats"
+                  b"\x1b[44;3HVersion: 2.1.285")
+        screen = PausingScreen([start], {b"/usage\r": [status],
+                                         claude.RIGHT: [CLAUDE_FIGURES]})
+        outcome, _ = drive(claude, screen, "/tmp", "/tmp", 30)
+        self.assertEqual(outcome, "panel")
+        self.assertEqual(screen.sent, [b"/usage\r", claude.RIGHT])
+
+    def test_grok_couldnt_load_usage_is_reported_at_once(self):
+        start, menu, panel = cut_at(raw_fixture("grok-1.0.62-unreachable"),
+                                    *GROK_CUTS)
+        screen = PausingScreen([start], {b"/usage": [menu], b"\r": [panel]})
+        began = time.time()
+        outcome, _ = drive(grok, screen, "/tmp", 60)
+        self.assertEqual(outcome, "unreachable")
+        self.assertEqual(screen.sent, [b"/usage", b"\r"])
+        self.assertLess(time.time() - began, 10)
+
+    def test_cursor_failed_load_gets_no_second_enter(self):
+        start, menu, panel = cut_at(
+            raw_fixture("cursor-2026.10.14-0f9edde-unreachable"), *CURSOR_CUTS)
+        # Cursor said "Loading usage data..." and gave up ten seconds later.
+        late = panel.rindex(b"\x1b", 0, panel.index(b"Failed to load"))
+        screen = PausingScreen([start], {b"/usage": [menu],
+                                         b"\r": [panel[:late], 3, panel[late:]]})
+        outcome, _ = drive(cursor, screen, "/tmp", 70)
+        self.assertEqual(outcome, "unreachable")
+        self.assertEqual(screen.sent, [b"/usage", b"\r"])
+
+    def test_the_patterns_do_not_fire_on_a_good_panel(self):
+        for module, name in ((claude, CLAUDE_FIXTURE), (grok, GROK_FIXTURE),
+                             (cursor, CURSOR_FIXTURE)):
+            with self.subTest(name):
+                self.assertIsNone(re.search(module.UNREACHABLE, fixture(name),
+                                            re.I))
+        self.assertIsNone(re.search(claude.STALE, fixture(CLAUDE_FIXTURE), re.I))
+
+
+class UnreachableIsReported(unittest.TestCase):
+    """What each reader writes when its client could not reach its server:
+    the client's own reason, and no reading. read_screen is replaced, so no
+    client starts."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="second-wind-unreachable-")
+        self.status = os.path.join(self.tmp, "status.txt")
+        self.out = os.path.join(self.tmp, "usage.json")
+        self.saved = {m: m.read_screen for m in (claude, grok, cursor)}
+        self.real_auth = claude.auth_state
+        claude.auth_state = lambda config_dir: (True, "user@example.com")
+        self.previous = os.environ.get("SW_HOME")
+        os.environ["SW_HOME"] = self.tmp
+
+    def tearDown(self):
+        for module, real in self.saved.items():
+            module.read_screen = real
+        claude.auth_state = self.real_auth
+        if self.previous is None:
+            os.environ.pop("SW_HOME", None)
+        else:
+            os.environ["SW_HOME"] = self.previous
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def run_main(self, module, outcome, text):
+        module.read_screen = lambda *args: (outcome, text)
+        argv = sys.argv
+        sys.argv = [module.__name__, "--cwd", self.tmp, "--out", self.out,
+                    "--status", self.status]
+        if module is claude:
+            sys.argv += ["--role", "secondary", "--config-dir", self.tmp]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = module.main()
+        finally:
+            sys.argv = argv
+        with open(self.status) as handle:
+            return code, handle.readline().strip()
+
+    def test_each_reader_names_the_clients_reason_and_saves_nothing(self):
+        cases = (
+            (claude, "unreachable",
+             "Loading usage data… Esc to cancel\nError: Failed to load "
+             "usage data\nr to retry · Esc to cancel",
+             "Failed to load usage data"),
+            (claude, "unreachable",
+             fixture("claude-2.1.285-rate-limited-no-figures"),
+             "Usage endpoint is rate limited"),
+            (grok, "unreachable", fixture("grok-1.0.62-unreachable"),
+             "Failed to fetch billing data: error sending request"),
+            (cursor, "unreachable",
+             fixture("cursor-2026.10.14-0f9edde-unreachable"),
+             "[deadline_exceeded] the operation timed out"),
+        )
+        for module, outcome, text, reason in cases:
+            with self.subTest(module.__name__, reason=reason):
+                code, line = self.run_main(module, outcome, text)
+                self.assertEqual(code, 1)
+                self.assertTrue(line.startswith("FAILED:"), line)
+                self.assertIn("could not", line)
+                self.assertIn(reason, line)
+                self.assertNotIn("did not appear", line)
+                self.assertNotIn("onboarding", line)
+                self.assertFalse(os.path.exists(self.out))
+
+    def test_claude_last_known_figures_leave_the_reading_on_file(self):
+        reading = {"role": "secondary", "five_hour_pct": 10,
+                   "seven_day_pct": 26, "cached_at": 1}
+        with open(self.out, "w") as handle:
+            json.dump(reading, handle)
+        code, line = self.run_main(claude, "stale",
+                                   fixture("claude-2.1.285-rate-limited"))
+        self.assertEqual(code, 1)
+        self.assertTrue(line.startswith("FAILED:"), line)
+        self.assertIn("rate limited", line)
+        self.assertIn("44m ago", line)
+        with open(self.out) as handle:
+            self.assertEqual(json.load(handle), reading)
 
 
 if __name__ == "__main__":

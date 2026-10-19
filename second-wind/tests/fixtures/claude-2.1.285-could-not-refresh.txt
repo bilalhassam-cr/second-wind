@@ -1,0 +1,148 @@
+ ▐▛███▛█ Claude Code v2.1.285
+
+▝▜██████▀ Haiku 4.5 · Claude Max
+
+ ▝▝ ▝▝ ~/.second-wind/workdir
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+❯ Try "fix typecheck errors"
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+
+  
+
+
+❯ /usage                                                                                                                                                                                                
+
+✢ Germinating… 
+  
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+❯ 
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ⏸ manual mode on · ← for agents
+
+  
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  
+Settings    Status   Config   Usage   Stats
+
+  Session
+
+  
+Tot   l cost:            $0.0000
+
+  Total duration (API):  0s
+
+  Total duration (wall): 0s
+
+  Total code changes:    0 lines added, 0 lines removed
+
+  Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+
+
+
+  Current session
+
+                                                     0% used
+
+  Resets 4:19am (UTC)
+
+
+
+  Current week (all models)
+
+                                                     0% used
+
+  Resets Oct 22 at 5:59pm (UTC)
+
+
+
+  Current week (Fable)
+
+                                                     0% used
+
+  Resets Oct 22 at 6pm (UTC)
+
+
+
+  What's contributing to your limits usage?
+
+  Approximate, based on local sessions on this machine - does not include other devices or claude.ai
+
+
+
+  Scanning local sessions…
+
+
+
+  Usage credits
+
+  Usage credits are off · /usage-credits to turn them on
+
+
+
+  Refreshing…
+
+
+
+  Esc to cancel
+
+                              
+
+
+  
+Showing last-known usage as of 45m ago (could not refresh)
+  
+r to retry · Esc to cancel
+
+                              
+
+
+  
+Last 24h   · these are independent characteristics of your usage, not a breakdown
+  
+65% of your usage   was at >150k context
+  
+ Longer sessions are more exp   nsive even when cached. /compact mid-task, /clear 
+   
+when switching to new tasks.
+  
+
+  
+Skills, subagents, plugins, and MCP servers
+  
+No attribution da   a yet · accumulates as you use Claude
+
+
+
+  d to day · w to week
+
+
+
+  Usage credits
+
+  Usage credits are off · /usage-credits to turn them on
+
+
+
+  Showing last-known usage as of 45m ago (could not refresh)
+
+
+
+  r to retry · Esc to cancel
+
+                              

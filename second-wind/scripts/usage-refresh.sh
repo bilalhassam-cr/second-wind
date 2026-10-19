@@ -57,6 +57,16 @@ fi
 
 if [ "$if_running" = true ]; then
   pgrep -x claude >/dev/null 2>&1 || pgrep -x Claude >/dev/null 2>&1 || exit 0
+  # launchd runs an overdue timer in a dark wake: the Mac is asleep, wakes for
+  # seconds of maintenance with no display and often no network, and sleeps
+  # again. Nobody is using Claude then, and every reader that asks a server
+  # fails. A dark wake is a wake without graphics. A state that cannot be
+  # read does not stop the refresh.
+  caps=$(pmset -g systemstate 2>/dev/null | sed -n 's/^Current System Capabilities are: *//p')
+  case "$caps" in
+    ""|*Graphics*) ;;
+    *) exit 0 ;;
+  esac
 fi
 
 mkdir -p "$SW_HOME" || exit 1

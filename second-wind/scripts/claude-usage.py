@@ -34,6 +34,17 @@ LOGIN = (r"Login:\s*Expired|/login\s+to|please\s+(?:sign|log)\s+in|"
          r"OAuth\s+token\s+(?:has\s+)?expired|credentials\s+(?:have\s+)?expired")
 USED = r"\d+%\s*used"
 RIGHT = b"\x1b[C"
+# The Usage tab's other states. It says it is loading, and when it cannot get
+# figures it says why on an "Error:" line, "Failed to load usage data" or
+# "Usage endpoint is rate limited. Please try again in a moment.", above an
+# "r to retry" footer. From 2.1.285 it paints the last figures it fetched at
+# once, of any age, says "Refreshing" while it asks again, and either repaints
+# them or says "Showing last-known usage as of 44m ago (rate limited ...)"
+# above the same footer.
+LOADING = r"Loading\s+usage\s+data"
+UNREACHABLE = r"r\s+to\s+retry"
+REFRESHING = r"Refreshing"
+STALE = r"last-known\s+usage"
 # A nested session inherits markers that change how the client behaves, and a
 # key in the environment would bill the API instead of the plan being measured.
 # The preflight and the panel drop the same list, or the two would be answering
@@ -265,23 +276,53 @@ def read_screen(config_dir, cwd, budget):
         stop = type_when_clear(b"/usage\r")
         if stop:
             return stop, screen.text
-        # Only ever Right, only while no figure is on screen, five at most.
+        # Only ever Right, only while nothing of the Usage tab is on screen,
+        # five at most. Right moves along the tabs, and pressed while the
+        # Usage tab was still loading it left for Config and Status, where the
+        # figures never came.
+        answers = {"figures": USED, "unreachable": UNREACHABLE,
+                   "loading": LOADING}
         for _ in range(5):
             chance = left(6)
             if chance is None:
                 return "budget: the usage figures", screen.text
-            if screen.wait_for(present=[USED], timeout=chance):
+            seen = screen.first_of(answers, timeout=chance)
+            if seen == "loading":
+                chance = left(30)
+                if chance is None:
+                    return "budget: the usage figures", screen.text
+                seen = screen.first_of({"figures": USED,
+                                        "unreachable": UNREACHABLE},
+                                       timeout=chance)
+                if seen is None:
+                    return "budget: the usage figures", screen.text
+            if seen == "unreachable":
+                return seen, screen.text
+            if seen == "figures":
                 break
             stop = type_when_clear(RIGHT)
             if stop:
                 return stop, screen.text
         if not re.search(USED, screen.text):
             return "no panel", screen.text
-        # The figures move while the panel scans local sessions; let it settle,
-        # but a panel already on screen is not thrown away for want of one.
-        chance = left(8)
-        if chance:
+        # The figures move while the panel scans local sessions, and the first
+        # ones painted can be old while it refreshes them, so the panel is read
+        # once nothing has been painted for a second and it has stopped
+        # refreshing. A panel already on screen is not thrown away for want of
+        # a settle, but figures still being refreshed are not a reading.
+        settle = min(ends, time.time() + 20)
+        while True:
+            chance = ptyreader.budget_left(settle, 20) or None
+            if chance is None:
+                break
             screen.wait_for(present=[USED], quiet=1.0, timeout=chance)
+            if not re.search(REFRESHING, screen.display[0]):
+                break
+        if re.search(STALE, screen.text, re.I) or \
+                re.search(UNREACHABLE, screen.text, re.I):
+            return "stale", screen.text
+        if re.search(REFRESHING, screen.display[0]):
+            return "budget: the refreshed figures", screen.text
         return "panel", screen.text
     finally:
         screen.close()
@@ -291,6 +332,28 @@ def tail(text):
     """The last of the screen on one line, for a status that has to explain
     itself in a sentence."""
     return " ".join(text.strip()[-300:].split())
+
+
+def error_line(text):
+    """What the Usage tab said on its "Error:" line, the last one painted after
+    the tabs appeared, so an earlier error elsewhere on screen is not taken."""
+    tabs = list(re.finditer(r"Status\s+Config\s+Usage", text))
+    start = tabs[-1].end() if tabs else 0
+    said = re.findall(r"Error:\s*([^\n]+)", text[start:])
+    return " ".join(said[-1].split()).rstrip(".") if said else ""
+
+
+def last_known(text):
+    """Why Claude showed old figures and how old, in its own words: " (rate
+    limited - try again in a moment), so it showed the ones from 44m ago".
+    Empty when the line cannot be read."""
+    found = re.search(STALE + r"\s+as\s+of\s+([^(\n]+?)\s*\(([^)\n]*)\)",
+                      text, re.I)
+    if not found:
+        return ""
+    why = " ".join(found.group(2).replace("\u2014", "-").split())
+    age = " ".join(found.group(1).split())
+    return " (%s), so it showed the ones from %s" % (why, age)
 
 
 def note(path, message):
@@ -371,6 +434,16 @@ def main():
         note(status, "LOGIN EXPIRED: run claude in a terminal for %s and sign in "
                      "again." % swlib.tilde(swlib.expand(config_dir)))
         return 2
+    if outcome == "unreachable":
+        note(status, "FAILED: Claude could not load this account's usage from "
+                     "its server (%s). Nothing was saved, so the last reading "
+                     "stands." % (error_line(text) or "no reason given"))
+        return 1
+    if outcome == "stale":
+        note(status, "FAILED: Claude could not get fresh figures for this "
+                     "account%s. They were not saved as current, so the last "
+                     "reading stands." % last_known(text))
+        return 1
     if outcome == "no panel":
         note(status, "FAILED: usage panel did not appear. A profile that has "
                      "never been opened shows onboarding first, so run claude "

@@ -2584,6 +2584,69 @@ class MirroredRefreshRuns(Base):
         self.assertFalse(os.path.exists(os.path.join(self.home, ".refresh.lock")))
 
 
+class TimerSkipsADarkWake(Base):
+    """The timer does nothing while the Mac is asleep.
+
+    launchd runs an overdue interval job in a dark wake: the Mac is asleep,
+    wakes for seconds of maintenance with no display and often no network,
+    and sleeps again. From 9 to 18 October 2026 about two thirds of the
+    refreshes started that way failed for Grok, Cursor and the second Claude
+    together, Cursor saying it could not even look up its server's name, and
+    together they made up most of the refresh failures logged. A dark wake is a
+    wake without graphics, which `pmset -g systemstate` names.
+
+    Each run here points the readers at a working directory that does not
+    exist, so a run that goes ahead says so in every status file and starts
+    no client, and one that is skipped leaves no status at all."""
+
+    AWAKE = "Current System Capabilities are: CPU Graphics Audio Network \n" \
+            "Current Power State: 4\n"
+    DARK = "Current System Capabilities are: CPU Network \n" \
+           "Current Power State: 4\n"
+
+    def run_refresh(self, systemstate, *args):
+        bin_dir = os.path.join(self.home, "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        with open(os.path.join(bin_dir, "pgrep"), "w") as handle:
+            handle.write("#!/bin/sh\nexit 0\n")
+        with open(os.path.join(bin_dir, "pmset"), "w") as handle:
+            if systemstate is None:
+                handle.write("#!/bin/sh\nexit 1\n")
+            else:
+                handle.write("#!/bin/sh\n[ \"$*\" = '-g systemstate' ] || exit 1\n"
+                             "cat <<'EOF'\n%sEOF\n" % systemstate)
+        for name in ("pgrep", "pmset"):
+            os.chmod(os.path.join(bin_dir, name), 0o755)
+        self.write_config(refresh={"interval_minutes": 15,
+                                   "workdir": os.path.join(self.home, "gone")})
+        return subprocess.run(
+            ["/bin/sh", os.path.join(SCRIPTS, "usage-refresh.sh")] + list(args),
+            capture_output=True, text=True, timeout=120,
+            env=dict(os.environ, SW_HOME=self.home,
+                     PATH=bin_dir + os.pathsep + os.environ.get("PATH", "")))
+
+    def went_ahead(self):
+        return os.path.exists(os.path.join(self.home,
+                                           "refresh-status-primary.txt"))
+
+    def test_the_timer_does_nothing_in_a_dark_wake(self):
+        done = self.run_refresh(self.DARK, "--if-claude-running")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertFalse(self.went_ahead())
+
+    def test_the_timer_reads_while_the_mac_is_awake(self):
+        self.run_refresh(self.AWAKE, "--if-claude-running")
+        self.assertTrue(self.went_ahead())
+
+    def test_a_power_state_it_cannot_read_does_not_stop_the_timer(self):
+        self.run_refresh(None, "--if-claude-running")
+        self.assertTrue(self.went_ahead())
+
+    def test_a_refresh_asked_for_by_hand_is_never_skipped(self):
+        self.run_refresh(self.DARK, "--force")
+        self.assertTrue(self.went_ahead())
+
+
 # Captured from `launchctl print gui/<uid>/com.second-wind.refresh` on a machine
 # where the agent was loaded, with the home directory generalised. Written out
 # here rather than run for real, so the comparison is tested without launchd.

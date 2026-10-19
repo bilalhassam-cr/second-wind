@@ -1,0 +1,57 @@
+ 
+
+  Cursor Agent
+  v2026.10.14-0f9edde
+  Tip: Use /config to customize Cursor settings and behavior.
+
+
+
+                                                                                                                                                                                                       
+  → Plan, search, build anything                                                                                                                                                                       
+                                                                                                                                                                                                       
+
+  Auto
+  ~/.second-wind/workdir
+
+
+
+
+
+   → /usage                                                                                                                                                                                             
+                                                                                                                                                                                                       
+
+  Auto
+  ~/.second-wind/workdir
+
+
+    → /usage                    Show plan and on-demand usage
+     /context                  Show context usage breakdown
+
+
+
+
+
+   → Plan, search, build anything                                                                                                                                                                       
+                                                                                                                                                                                                       
+
+   → /usage                    Show plan and on-demand usage
+     /context                  Show context usage breakdown
+
+  Loading usage data...
+
+
+
+
+   Auto
+  ~/.second-wind/workdir
+
+  Loading usage data...
+
+   Failed to load usage data: 
+  [deadline_exceeded] the operation timed out
+  View usage settings at https://cursor.com/dashboard?tab=usage
+
+
+
+
+ 

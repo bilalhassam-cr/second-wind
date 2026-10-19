@@ -31,6 +31,11 @@ LOGIN = (r"/login\s+to|please\s+(?:sign|log)\s+in|not\s+(?:signed|logged)\s+in|"
          r"session\s+(?:has\s+)?expired|Invalid\s+API\s+key")
 MENU = r"View\s+usage"
 PANEL = r"Weekly\s+limit"
+# What Grok paints in the panel's place when it cannot reach its server, as it
+# did in every dark wake with no network: "Couldn't load usage: Internal error:
+# ...". The first letters of "Couldn't" can arrive in pieces, so the marker
+# starts after them.
+UNREACHABLE = r"load\s+usage:"
 
 
 def parse_panel(text):
@@ -114,8 +119,10 @@ def read_screen(cwd, budget):
         chance = left(20)
         if chance is None:
             return "budget: the usage panel", screen.text
-        if not screen.wait_for(present=[PANEL], timeout=chance):
-            return "no panel", screen.text
+        seen = screen.first_of({"panel": PANEL, "unreachable": UNREACHABLE},
+                               timeout=chance)
+        if seen != "panel":
+            return seen or "no panel", screen.text
         # A panel already on screen is not thrown away for want of a settle.
         chance = left(3)
         if chance:
@@ -129,6 +136,14 @@ def tail(text):
     """The last of the screen on one line, for a status that has to explain
     itself in a sentence."""
     return " ".join(text.strip()[-300:].split())
+
+
+def reason(text):
+    """Grok's own words for why it could not load the panel: the rest of its
+    error line, and the line after it unless that is the spinner."""
+    found = re.search(UNREACHABLE + r"\s*([^\n]*(?:\n(?![\u2800-\u28ff])[^\n]*)?)",
+                      text, re.I)
+    return " ".join(found.group(1).split())[:200] if found else ""
 
 
 def note(path, message):
@@ -180,6 +195,11 @@ def main():
     if outcome == "login":
         note(status, "LOGIN EXPIRED: run grok in a terminal and sign in again.")
         return 2
+    if outcome == "unreachable":
+        note(status, "FAILED: Grok could not load its usage from its server "
+                     "(%s). Nothing was saved, so the last reading stands."
+             % (reason(text) or "no reason given"))
+        return 1
     if outcome == "no panel":
         note(status, "FAILED: usage panel did not appear. Last of the screen: %s"
              % tail(text))
