@@ -23,9 +23,21 @@ VENDOR_KEYS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
                "CURSOR_API_KEY", "CLAUDE_CODE_USE_BEDROCK",
                "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
 STUB = """#!/bin/sh
+if [ "$1" = auth ]; then echo '{"loggedIn":true,"authMethod":"claude.ai","email":"user@example.com"}'; exit 0; fi
+if [ "$1" = login ]; then echo 'Logged in using ChatGPT'; exit 0; fi
 if [ "$1" = mcp ]; then printf '[{"name":"writer","enabled":true}]\\n'; exit 0; fi
+if [ "$1" = models ]; then echo 'model'; exit 0; fi
+if [ "$1" = status ]; then echo 'Logged in as user@example.com'; exit 0; fi
 env > "$SW_TEST_ENV"
-echo 'stub worker reply'
+[ -z "${SW_TEST_ARGS:-}" ] || printf '%s\\n' "$@" > "$SW_TEST_ARGS"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then shift; printf 'stub worker reply' > "$1"; fi
+  shift
+done
+case "$0" in
+  *grok) echo '{"text":"stub worker reply","stopReason":"end_turn"}' ;;
+  *) echo 'stub worker reply' ;;
+esac
 """
 
 
@@ -50,6 +62,8 @@ class Credentials(unittest.TestCase):
             with open(path, "w") as handle:
                 handle.write(STUB)
             os.chmod(path, 0o755)
+        for folder in (".claude", ".claude-secondary", ".codex"):
+            os.makedirs(os.path.join(self.home, folder))
         self.prompt = os.path.join(self.home, "prompt.txt")
         with open(self.prompt, "w") as handle:
             handle.write("say something short\n")
@@ -81,6 +95,8 @@ class Credentials(unittest.TestCase):
     def run_worker(self, worker):
         environment = dict(os.environ)
         environment["SW_HOME"] = self.home
+        environment["HOME"] = self.home
+        environment["SW_NO_REFRESH"] = "1"
         environment["PATH"] = self.bin + os.pathsep + environment.get("PATH", "")
         environment["SW_TEST_ENV"] = self.seen
         for name in VENDOR_KEYS:
@@ -151,14 +167,13 @@ class Credentials(unittest.TestCase):
         self.assertEqual(self.header(text, "Credentials kept"),
                          "CURSOR_API_KEY, this worker's own sign-in")
 
-    def test_an_unrecorded_cursor_sign_in_keeps_the_key_too(self):
+    def test_an_unrecorded_cursor_sign_in_does_not_enable_api_billing(self):
         # A config written before the auth field existed is more likely an old
         # config than a bill nobody meant to run up.
         self.write_config(cursor_auth=None)
         self.run_worker("cursor")
-        self.assertEqual(self.worker_saw(), {"CURSOR_API_KEY"})
-        self.assertEqual(self.header(self.exchange(), "Credentials kept"),
-                         "CURSOR_API_KEY, this worker's own sign-in")
+        self.assertEqual(self.worker_saw(), set())
+        self.assertEqual(self.header(self.exchange(), "Credentials kept"), "none")
 
     def test_an_interactive_cursor_is_handed_no_key(self):
         # The browser session pays, so a key in the environment could only bill
@@ -174,12 +189,7 @@ class Credentials(unittest.TestCase):
 
 
 
-ARGS_STUB = """#!/bin/sh
-if [ "$1" = mcp ]; then printf '[{"name":"writer","enabled":true}]\\n'; exit 0; fi
-env > "$SW_TEST_ENV"
-printf '%s\\n' "$@" > "$SW_TEST_ARGS"
-echo 'stub worker reply'
-"""
+ARGS_STUB = STUB
 
 
 @unittest.skipUnless(shutil.which("jq"), "run.sh needs jq")
@@ -228,6 +238,8 @@ class CodexHomes(unittest.TestCase):
     def run_codex(self, worker, flag="--review", expect=0):
         environment = dict(os.environ)
         environment["SW_HOME"] = self.home
+        environment["HOME"] = self.home
+        environment["SW_NO_REFRESH"] = "1"
         environment["PATH"] = self.bin + os.pathsep + environment.get("PATH", "")
         environment["SW_TEST_ENV"] = self.seen
         environment["SW_TEST_ARGS"] = self.args
@@ -251,8 +263,8 @@ class CodexHomes(unittest.TestCase):
     def test_the_second_codex_runs_under_its_own_home(self):
         self.write_config()
         self.run_codex("codex2")
-        self.assertEqual(self.env_seen().get("CODEX_HOME"), self.codex2_home)
-        self.assertEqual(self.header(self.exchange(), "Account"), "user2@example.com")
+        self.assertEqual(os.path.realpath(self.env_seen().get("CODEX_HOME")), os.path.realpath(self.codex2_home))
+        self.assertEqual(self.header(self.exchange(), "Account"), "not reported by client")
 
     def test_the_first_codex_runs_with_the_variable_unset(self):
         self.write_config()
@@ -297,7 +309,7 @@ class CodexHomes(unittest.TestCase):
         text = self.exchange()
         self.assertEqual(self.header(text, "Browser guard applied"), "yes")
         self.assertEqual(self.header(text, "Sandbox"), "workspace-write")
-        self.assertIn("cannot launch a web browser", text)
+        self.assertIn("Do not launch browsers", text)
 
     def test_work_mode_with_full_access_drops_the_sandbox_and_the_guard(self):
         self.write_config(full_access=True)
@@ -308,7 +320,7 @@ class CodexHomes(unittest.TestCase):
         text = self.exchange()
         self.assertEqual(self.header(text, "Browser guard applied"), "no")
         self.assertEqual(self.header(text, "Sandbox"), "none, full access")
-        self.assertNotIn("cannot launch a web browser", text)
+        self.assertNotIn("Do not launch browsers", text)
         # The header still ends properly: the line that was once lost to a
         # shell parsing quirk is present.
         self.assertEqual(self.header(text, "Credentials kept"), "none")
@@ -327,8 +339,8 @@ echo 'stub worker reply'
         os.chmod(path, 0o755)
         self.write_config()
         done = self.run_codex("codex2", expect=2)
-        self.assertIn("not signed in", done.stderr)
-        self.assertIn("CODEX_HOME=%s codex login" % self.codex2_home, done.stderr)
+        self.assertIn("authentication check failed", done.stderr)
+        self.assertIn("Not logged in", done.stderr)
         self.assertFalse(os.path.exists(self.seen), "the client must not have run")
         self.assertEqual(glob.glob(os.path.join(self.log, "*.md")), [])
 

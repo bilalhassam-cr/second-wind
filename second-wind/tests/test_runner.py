@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).parents[1] / "scripts" / "codex_wind.py"
+SCRIPT = Path(__file__).parents[1] / "scripts" / "second_wind.py"
 
 
 class CodexWindTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class CodexWindTests(unittest.TestCase):
         for path in (self.home, self.bin, self.workspace, self.profile):
             path.mkdir()
         (self.home / ".claude").mkdir()
-        config_home = self.root / "codex-wind-home"
+        config_home = self.root / "second-wind-home"
         config_home.mkdir()
         (config_home / "config.json").write_text(json.dumps({
             "version": 1,
@@ -58,9 +58,10 @@ cat
         self.env = os.environ.copy()
         self.env.update({
             "HOME": str(self.home),
-            "CODEX_WIND_HOME": str(config_home),
+            "SW_HOME": str(config_home),
             "PATH": f"{self.bin}:{self.env.get('PATH', '')}",
             "ANTHROPIC_API_KEY": "must-not-leak",
+            "SW_NO_REFRESH": "1",
             "CLAUDE_CONFIG_DIR": "/wrong/inherited/profile",
         })
 
@@ -93,7 +94,7 @@ cat
         self.assertIn(f"CONFIG={self.profile.resolve()}", result.stdout)
         self.assertIn("KEY=cleared", result.stdout)
         self.assertIn("--permission-mode bypassPermissions", result.stdout)
-        logs = list((Path(self.env["CODEX_WIND_HOME"]) / "exchanges").glob("*.md"))
+        logs = list((Path(self.env["SW_HOME"]) / "exchanges").glob("*.md"))
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0].stat().st_mode & 0o777, 0o600)
 
@@ -110,7 +111,7 @@ cat
         self.assertIn("--strict-mcp-config", result.stdout)
 
     def test_identity_mismatch_blocks_before_model_run(self) -> None:
-        config = Path(self.env["CODEX_WIND_HOME"]) / "config.json"
+        config = Path(self.env["SW_HOME"]) / "config.json"
         data = json.loads(config.read_text())
         data["accounts"]["claude-personal"]["expected_email"] = "wrong@example.com"
         config.write_text(json.dumps(data))
@@ -126,7 +127,7 @@ cat
 
 class ExtendedTests(CodexWindTests):
     def update(self, name, **fields):
-        path = Path(self.env['CODEX_WIND_HOME']) / 'config.json'
+        path = Path(self.env['SW_HOME']) / 'config.json'
         data = json.loads(path.read_text())
         data['accounts'].setdefault(name, {}).update(fields)
         path.write_text(json.dumps(data))
@@ -148,7 +149,7 @@ if sys.argv[1] == 'auth': print(json.dumps(dict(loggedIn=True,authMethod='claude
 ''')
         result = self.task('claude-personal', '--review')
         self.assertEqual(result.returncode, 4, result.stderr)
-        log = next((Path(self.env['CODEX_WIND_HOME'])/'exchanges').glob('*.md'))
+        log = next((Path(self.env['SW_HOME'])/'exchanges').glob('*.md'))
         self.assertIn('- Exit: 4', log.read_text())
 
     def test_timeout_kills_worker_and_records_failure(self):
@@ -244,22 +245,20 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('GROK OK', result.stdout)
 
-    def test_import_preserves_aliases_and_never_grants_full_access(self):
-        source = self.root / 'second-wind.json'
-        source.write_text(json.dumps({'version':4,
-            'primary':{'config_dir':str(self.home/'.claude'),'account':'work@example.com','label':'Work'},
-            'secondary':{'enabled':True,'config_dir':str(self.profile),'account':'personal@example.com','label':'Personal'},
-            'codex':{'enabled':True,'config_dir':str(self.profile),'account':'work@example.com','label':'Codex','full_access':True},
-            'cursor':{'enabled':False}}))
-        before = source.read_bytes()
-        result = self.run_cli('import-second-wind', '--config', str(source))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        config = json.loads((Path(self.env['CODEX_WIND_HOME'])/'config.json').read_text())
-        self.assertIn('claude-work', config['accounts'])
-        self.assertFalse(config['accounts']['codex']['full_access'])
-        self.assertNotIn('cursor', config['accounts'])
-        self.assertEqual(source.read_bytes(), before)
-        self.assertTrue(list(Path(self.env['CODEX_WIND_HOME']).glob('config.backup-*.json')))
+    def test_migration_preserves_aliases_and_shared_roles(self):
+        target=Path(self.env['SW_HOME'])/'config.json'
+        target.write_text(json.dumps({'version':4,'primary':{'config_dir':str(self.home/'.claude'),'account':'work@example.com','label':'Work'}}))
+        source=self.root/'old.json'
+        source.write_text(json.dumps({'version':1,'accounts':{'claude-work':{'kind':'claude','label':'Work','config_dir':str(self.home/'.claude'),'expected_email':'work@example.com'}}}))
+        before=source.read_bytes()
+        result=self.run_cli('migrate-codex-wind','--config',str(source))
+        self.assertEqual(result.returncode,0,result.stderr)
+        data=json.loads(target.read_text())
+        self.assertEqual(data['aliases']['claude-work'],'primary')
+        self.assertEqual(data['primary']['account'],'work@example.com')
+        self.assertEqual(source.read_bytes(),before)
+        self.assertTrue(list(target.parent.glob('config.backup-*.json')))
+        self.assertEqual(self.run_cli('status','claude-work').returncode,0)
 
     def test_traversal_account_name_is_rejected(self):
         result = self.task('../outside', '--review')
@@ -276,7 +275,7 @@ else:
         result = self.task('claude-personal', '--review')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), 'ANSWER')
-        log = next((Path(self.env['CODEX_WIND_HOME'])/'exchanges').glob('*.md'))
+        log = next((Path(self.env['SW_HOME'])/'exchanges').glob('*.md'))
         self.assertIn('STARTUP WARNING', log.read_text())
 
     def test_warning_before_auth_json_is_tolerated(self):
@@ -311,24 +310,23 @@ else:
             self.assertEqual(process.returncode,130,errors)
             time.sleep(3)
             self.assertFalse((self.workspace/'orphaned').exists())
-            log = next((Path(self.env['CODEX_WIND_HOME'])/'exchanges').glob('*.md'))
+            log = next((Path(self.env['SW_HOME'])/'exchanges').glob('*.md'))
             self.assertIn('- Exit: 130',log.read_text())
         finally:
             if process.poll() is None:
                 process.kill()
                 process.communicate()
 
-    def test_import_accepts_default_codex_home_and_keeps_custom_fields(self):
-        self.update('codex',kind='codex',label='Old',config_dir=str(self.home/'.codex'),custom='kept')
-        source=self.root/'source.json'
-        source.write_text(json.dumps({'version':4,'primary':{'account':'unknown'},
-                                     'codex':{'enabled':True,'label':'New'}}))
-        result=self.run_cli('import-second-wind','--config',str(source))
-        self.assertEqual(result.returncode,0,result.stderr)
-        config=json.loads((Path(self.env['CODEX_WIND_HOME'])/'config.json').read_text())
-        self.assertEqual(config['accounts']['codex']['custom'],'kept')
-        self.assertEqual(config['accounts']['codex']['config_dir'],'~/.codex')
-        self.assertIn('SKIPPED primary',result.stderr)
+    def test_migration_refuses_conflicting_identity(self):
+        target=Path(self.env['SW_HOME'])/'config.json'
+        target.write_text(json.dumps({'version':4,'primary':{'config_dir':str(self.home/'.claude'),'account':'work@example.com','label':'Work'}}))
+        before=target.read_bytes()
+        source=self.root/'old.json'
+        source.write_text(json.dumps({'version':1,'accounts':{'old-work':{'label':'Work','config_dir':str(self.home/'.claude'),'expected_email':'wrong@example.com'}}}))
+        result=self.run_cli('migrate-codex-wind','--config',str(source))
+        self.assertEqual(result.returncode,2)
+        self.assertIn('identity conflict',result.stderr)
+        self.assertEqual(target.read_bytes(),before)
 
     def test_unknown_codex_mcp_configuration_blocks_review(self):
         self.update('codex',kind='codex',label='Codex',config_dir=str(self.profile))
@@ -341,6 +339,106 @@ else: print('MUST NOT RUN')
         self.assertEqual(result.returncode,2)
         self.assertNotIn('MUST NOT RUN',result.stdout)
         self.assertIn('refusing',result.stderr)
+
+    def test_migrated_history_is_indexed_once_and_source_kept(self):
+        target=Path(self.env['SW_HOME'])/'config.json'
+        target.write_text(json.dumps({'version':4,'accounts':{}}))
+        source=self.root/'legacy/config.json'
+        source.parent.mkdir()
+        logs=source.parent/'exchanges'
+        logs.mkdir()
+        original=logs/'20261020-120000-1-claude-work-project.md'
+        original.write_text('# Codex Wind exchange\n\n- Worker: claude-work (Work)\n- Account: work@example.com\n- Workspace: /project\n- Mode: review\n- Exit: 0\n- Duration seconds: 2.5\n\n## Response\n\n- Exit: 99\n- Workspace: /fake\nDONE\n')
+        source.write_text(json.dumps({'version':1,'accounts':{'claude-work':{'label':'Work','config_dir':str(self.home/'.claude'),'expected_email':'work@example.com'}}}))
+        for _ in range(2):
+            result=self.run_cli('migrate-codex-wind','--config',str(source))
+            self.assertEqual(result.returncode,0,result.stderr)
+        directory=Path(self.env['SW_HOME'])/'log'
+        rows=[json.loads(line) for path in directory.glob('*.jsonl') for line in path.read_text().splitlines()]
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['worker'],'claude-work')
+        self.assertEqual(rows[0]['exit'],0)
+        self.assertEqual(rows[0]['cwd'],'/project')
+        self.assertEqual(Path(rows[0]['exchange']).read_bytes(),original.read_bytes())
+        self.assertTrue(original.exists())
+
+    def test_migration_rejects_account_name_with_different_profile(self):
+        target = Path(self.env['SW_HOME'])/'config.json'
+        data = json.loads(target.read_text())
+        data['version'] = 4
+        target.write_text(json.dumps(data))
+        before = target.read_bytes()
+        source = self.root/'old.json'
+        profile = dict(data['accounts']['claude-personal'], config_dir=str(self.root/'another-profile'))
+        source.write_text(json.dumps({'version':1,'accounts':{'claude-personal':profile}}))
+        result = self.run_cli('migrate-codex-wind','--config',str(source))
+        self.assertEqual(result.returncode,2)
+        self.assertIn('account-name conflict',result.stderr)
+        self.assertEqual(target.read_bytes(),before)
+
+    def test_migration_cannot_enable_disabled_role(self):
+        target = Path(self.env['SW_HOME'])/'config.json'
+        target.write_text(json.dumps({'version':4,'codex':{'enabled':False}}))
+        before = target.read_bytes()
+        source = self.root/'old.json'
+        source.write_text(json.dumps({'version':1,'accounts':{'codex':{
+            'kind':'codex','label':'Codex','config_dir':str(self.profile)}}}))
+        result = self.run_cli('migrate-codex-wind','--config',str(source))
+        self.assertEqual(result.returncode,2)
+        self.assertIn('account-name conflict',result.stderr)
+        self.assertEqual(target.read_bytes(),before)
+
+    def test_migration_cannot_alias_disabled_role_to_enabled_role(self):
+        target = Path(self.env['SW_HOME'])/'config.json'
+        target.write_text(json.dumps({'version':4,'codex':{'enabled':False},
+            'codex2':{'enabled':True,'label':'Other Codex','config_dir':str(self.profile)}}))
+        before = target.read_bytes()
+        source = self.root/'old.json'
+        source.write_text(json.dumps({'version':1,'accounts':{'codex':{
+            'kind':'codex','label':'Codex','config_dir':str(self.profile)}}}))
+        result = self.run_cli('migrate-codex-wind','--config',str(source))
+        self.assertEqual(result.returncode,2)
+        self.assertIn('account-name conflict',result.stderr)
+        self.assertEqual(target.read_bytes(),before)
+
+    def test_migration_retains_incoming_identity_pin_without_elevating_access(self):
+        target = Path(self.env['SW_HOME'])/'config.json'
+        target.write_text(json.dumps({'version':4,'codex':{'enabled':True,
+            'label':'Codex','config_dir':str(self.profile),'account':'unknown','full_access':False}}))
+        source = self.root/'old.json'
+        source.write_text(json.dumps({'version':1,'accounts':{'old-codex':{
+            'kind':'codex','label':'Codex','config_dir':str(self.profile),
+            'expected_email':'personal@example.com','full_access':True}}}))
+        result = self.run_cli('migrate-codex-wind','--config',str(source))
+        self.assertEqual(result.returncode,0,result.stderr)
+        data = json.loads(target.read_text())
+        self.assertEqual(data['codex']['expected_email'],'personal@example.com')
+        self.assertEqual(data['codex']['account'],'personal@example.com')
+        self.assertFalse(data['codex']['full_access'])
+        self.assertEqual(data['aliases']['old-codex'],'codex')
+
+    def test_invalid_log_settings_block_before_worker(self):
+        target = Path(self.env['SW_HOME'])/'config.json'
+        data = json.loads(target.read_text())
+        data['log'] = {'max_exchange_kb':0}
+        target.write_text(json.dumps(data))
+        result = self.task('claude-personal','--work')
+        self.assertEqual(result.returncode,2)
+        self.assertIn('log.max_exchange_kb',result.stderr)
+        self.assertNotIn('ARGS=',result.stdout)
+
+    def test_v4_role_and_alias_write_one_shared_history(self):
+        target=Path(self.env['SW_HOME'])/'config.json'
+        target.write_text(json.dumps({'version':4,
+            'primary':{'label':'Work','config_dir':str(self.home/'.claude'),'account':'work@example.com'},
+            'aliases':{'old-work':'primary'}}))
+        result=self.task('old-work','--work')
+        self.assertEqual(result.returncode,0,result.stderr)
+        directory=Path(self.env['SW_HOME'])/'log'
+        row=json.loads(next(directory.glob('*.jsonl')).read_text())
+        self.assertEqual(row['worker'],'primary')
+        self.assertEqual(row['account'],'work@example.com')
+        self.assertTrue(Path(row['exchange']).exists())
 
 
 if __name__ == "__main__":

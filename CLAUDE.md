@@ -1,6 +1,6 @@
 # second-wind
 
-A publishable Claude Code skill. Everything here ships to strangers, so two rules
+A publishable skill for Claude Code and Codex. Everything here ships to strangers, so two rules
 govern the repo.
 
 ## Hard constraints
@@ -114,14 +114,19 @@ Do not "simplify" these away; each cost real debugging time.
 
 ## Both harnesses
 
-`codex-wind/` is the Codex skill, with its own Python runner, configuration and
-private exchanges. It can explicitly import Second Wind's account labels and
-profile paths, without credentials or settings. Run its tests separately with
-`python3 -m unittest discover -s codex-wind/tests`. `install.py` installs either
-skill or both; the shell wrapper keeps the old default and destination argument.
-Do not hard-code the author's account aliases into public examples.
+`second-wind/` is the single skill installed in both Claude Code and Codex.
+`second_wind.py` owns delegation, account normalisation, migration and logging;
+`run.sh` is a compatibility adapter to it. Both hosts use the version 4 config
+and log under `~/.second-wind`. Additional accounts and aliases survive Claude
+setup. `codex-wind/` contains only the old source-command adapter and migration
+notice; it must not be installed as a second skill.
 
-Cursor wrote a file in the 20 October 2026 live test in `--mode ask` despite its own help calling that
-read-only. Both runners now use `--mode plan`, which blocked the same live test.
-Both runners also disable configured Codex MCP servers in review mode: the shell
-sandbox alone does not constrain an MCP server.
+Run `python3 -m unittest discover -s second-wind/tests` for the complete suite.
+Installer tests cover both hosts, detection, migration of the old skill folder
+and source protection. Never migrate credentials; copy only account metadata
+and exchange documents, keep originals, and refuse identity conflicts.
+
+Cursor wrote in ask mode during the 20 October 2026 live test. Plan mode blocked
+the same test. Codex review disables configured MCP servers because a shell
+sandbox does not constrain an MCP process. Keep these behaviours in the shared
+runner so the two hosts cannot diverge.

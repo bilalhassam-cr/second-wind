@@ -982,6 +982,9 @@ def cmd_write(a):
         # paths do not work: a Bash tool call runs in the user's project, not here.
         "skill_dir": tilde(os.path.dirname(HERE)),
     }
+    for shared in ("accounts", "aliases"):
+        if shared in previous:
+            cfg[shared] = previous[shared]
     swlib.write_json_atomic(config_file(), cfg)
     swlib.field_note("write", cfg=cfg, level=a.level,
                      workers=[role for role in swlib.enabled_roles(cfg) if role != "primary"],

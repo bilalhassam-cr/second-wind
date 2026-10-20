@@ -1,11 +1,15 @@
 {
-  "version": 1,
+  "version": 4,
+  "level": "reviewer",
+  "defaults": {"mode": "review"},
   "accounts": {
     "claude-work": {"kind": "claude", "label": "Work Claude", "config_dir": "~/.claude", "expected_email": "work@example.com"},
     "claude-personal": {"kind": "claude", "label": "Personal Claude", "config_dir": "~/.claude-personal", "expected_email": "personal@example.com"},
     "codex-work": {"kind": "codex", "label": "Work Codex", "config_dir": "~/.codex-work", "full_access": false},
     "grok": {"kind": "grok", "label": "Grok"},
-    "cursor": {"kind": "cursor", "label": "Cursor", "expected_email": "personal@example.com"}
+    "cursor": {"kind": "cursor", "label": "Cursor", "expected_email": "personal@example.com", "auth": "interactive"}
   },
-  "timeout_seconds": 7200
+  "aliases": {},
+  "timeout_seconds": 7200,
+  "log": {"dir": "~/.second-wind/log", "max_exchange_kb": 200, "prune_days": 30}
 }
