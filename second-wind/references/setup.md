@@ -1,3 +1,29 @@
+# Shared setup for Second Wind
+
+Both Claude Code and Codex load the same skill, use
+`~/.second-wind/config.json` and write `~/.second-wind/log`. Start with
+`python3 "$SW/scripts/second_wind.py" status` when already configured.
+
+For delegation without Claude's UI/hooks, copy the bundled
+`config.example.json` into `~/.second-wind/config.json`, set mode 600, and keep
+only your chosen named accounts. Enter real profile directories and expected
+emails, sign in with each official client, and check status. This creates no
+Claude hooks or background refresh agent. Use `--review` or `--work` explicitly
+on each shared runner call.
+
+If migrating Codex Wind, run
+`python3 "$SW/scripts/second_wind.py" migrate-codex-wind` once. It copies account
+metadata and legacy exchange history into the shared state, with a config backup
+and aliases for existing role names. It never reads tokens, changes sign-ins or
+removes the old source files. Repeat safely after a partial migration; imported
+ledger entries are deduplicated. Identity conflicts require correction before
+migration proceeds.
+
+The remaining wizard configures the optional **Claude Code integration**. Run it
+only when the user wants those hooks/panel in Claude Code. It also defines roles
+that the shared runner can use from either harness. Preserve additional accounts
+and aliases when rerunning it.
+
 # Setting up the accounts
 
 Config version 4. `references/config.md` describes every key; this file covers the

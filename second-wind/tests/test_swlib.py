@@ -2317,6 +2317,17 @@ class WriteRerun(Base):
     def settings(self):
         return read_json(os.path.join(self.primary_dir, "settings.json"))
 
+    def test_claude_setup_retains_shared_accounts_and_aliases(self):
+        self.write()
+        cfg=self.config()
+        cfg["accounts"]={"extra-reviewer":{"kind":"claude","label":"Extra","config_dir":"~/.claude-extra","expected_email":"extra@example.com"}}
+        cfg["aliases"]={"old-personal":"secondary"}
+        swlib.write_json_atomic(swlib.config_path(),cfg)
+        self.write()
+        after=self.config()
+        self.assertEqual(after["accounts"],cfg["accounts"])
+        self.assertEqual(after["aliases"],cfg["aliases"])
+
     def test_a_rerun_keeps_the_values_it_was_not_given(self):
         self.write("--timeout", "2400", "--five-hour", "70", "--seven-day", "60",
                    "--refresh-minutes", "45", "--model-picker", "on")

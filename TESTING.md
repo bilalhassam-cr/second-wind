@@ -16,7 +16,6 @@ Run from the repository root:
 python3 -m compileall -q second-wind/scripts codex-wind/scripts install.py
 for file in second-wind/scripts/*.sh install.sh; do sh -n "$file"; done
 python3 -m unittest discover -s second-wind/tests
-python3 -m unittest discover -s codex-wind/tests
 shellcheck -s sh second-wind/scripts/*.sh install.sh      # if shellcheck is installed
 ```
 
@@ -148,7 +147,7 @@ documentation, under these headings:
 ## Would I keep it
 ```
 
-## Codex Wind and the combined installer
+## One skill in both harnesses
 
 Run `./install.sh --claude`, `--codex` and `--both` into disposable skills
 folders with `--claude-dir` and `--codex-dir`. Check the selected SKILL.md files,
@@ -169,11 +168,36 @@ profiles, three Codex homes, Grok
 and Cursor each completed a work task with the exact proof file read back.
 The review write attempt left no file for both Claude profiles, all three Codex
 homes, Grok with its read-tool allow list, and Cursor in plan mode. Cursor ask
-mode wrote a file; both runners therefore use plan mode. These are macOS results
+mode wrote a file; the shared runner therefore uses plan mode. These are macOS results
 from a Codex desktop session with full local access, not Linux, a clean machine
 or a restricted Codex sandbox.
 
-Both runners' Codex review turns off the MCP servers listed by the client for
+The shared runner's Codex review turns off the MCP servers listed by the client for
 that workspace. The listing must succeed before a review can run. The shell
 sandbox alone does not constrain an MCP server. Account identities and plans
 that a client does not expose remain unverified by the runner's status command.
+
+
+## Unified migration regression checks
+
+Both installs must have `name: second-wind` and the same source content. All
+`run.sh` calls must go through `scripts/second_wind.py`, the same command used
+from Codex. Test version 4 roles, additional named accounts, aliases, shared
+ledger entries and explicit migration from the legacy version 1 config.
+Migration must keep original exchanges, index imported history only once, retain
+existing role pins and refuse mismatched emails without writing the shared
+config. Claude setup must preserve the additional accounts and aliases.
+
+With no host flag, test sole-harness detection, the interactive choice when both
+are present, and a clear refusal for an ambiguous non-interactive invocation.
+Retain the custom-directory CLI and explicit --claude, --codex and --both paths.
+An installed codex-wind folder is archived outside skill discovery after the
+canonical Codex install succeeds. Installation must not alter account config.
+
+The unified runner was verified on 20 October 2026 against seven local account
+roles: two Claude profiles, three Codex homes, Grok and Cursor. Each created an
+exact proof file in work mode; each review write attempt left its disposable
+workspace unchanged. Both run.sh and the Python command wrote the same ledger,
+and the personal Claude alias resolved to its existing role. Sixty-five legacy
+exchanges were copied and indexed; repeating migration copied none and added no
+duplicate entries. These results do not establish live Linux-client behaviour.
