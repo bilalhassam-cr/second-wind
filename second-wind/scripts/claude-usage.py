@@ -20,6 +20,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ptyreader  # noqa: E402
 import swlib  # noqa: E402
+from card_json import reset_epoch  # noqa: E402
 
 CLIENT = "claude"
 # These clients paint a dialog a word at a time, and the cleaned text keeps a
@@ -34,6 +35,17 @@ LOGIN = (r"Login:\s*Expired|/login\s+to|please\s+(?:sign|log)\s+in|"
          r"OAuth\s+token\s+(?:has\s+)?expired|credentials\s+(?:have\s+)?expired")
 USED = r"\d+%\s*used"
 RIGHT = b"\x1b[C"
+# The Usage tab's other states. It says it is loading, and when it cannot get
+# figures it says why on an "Error:" line, "Failed to load usage data" or
+# "Usage endpoint is rate limited. Please try again in a moment.", above an
+# "r to retry" footer. From 2.1.285 it paints the last figures it fetched at
+# once, of any age, says "Refreshing" while it asks again, and either repaints
+# them or says "Showing last-known usage as of 44m ago (rate limited ...)"
+# above the same footer.
+LOADING = r"Loading\s+usage\s+data"
+UNREACHABLE = r"r\s+to\s+retry"
+REFRESHING = r"Refreshing"
+STALE = r"last-known\s+usage"
 # A nested session inherits markers that change how the client behaves, and a
 # key in the environment would bill the API instead of the plan being measured.
 # The preflight and the panel drop the same list, or the two would be answering
@@ -177,6 +189,26 @@ def auth_state(config_dir):
     return bool(data.get("loggedIn")), data.get("email") or None
 
 
+# The desktop app keeps its sign-in to itself, so a terminal reader cannot open
+# /usage for an account the app alone is signed in to. The app session can: the
+# usage pop-up hands its own figures to statusline.sh every minute. Without a
+# terminal sign-in that reading is the account's reading, and its age says how
+# current it is. Replacing it with "run claude auth login" asked for a sign-in
+# nobody needed, every time the app had been closed for a quarter of an hour.
+SESSION_READS = ("OK: read inside a Claude session, which writes this account's "
+                 "figures while one is open. No terminal sign-in exists for it.")
+
+
+def session_reading(path):
+    """Whether the reading at this path was written by a Claude session's own
+    status line, the one source that needs no terminal sign-in."""
+    try:
+        with open(path) as handle:
+            return json.load(handle).get("source") == "status line"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def no_sign_in_message(dirs):
     """What to say when no profile for this role has a Claude Code sign-in.
 
@@ -245,23 +277,53 @@ def read_screen(config_dir, cwd, budget):
         stop = type_when_clear(b"/usage\r")
         if stop:
             return stop, screen.text
-        # Only ever Right, only while no figure is on screen, five at most.
+        # Only ever Right, only while nothing of the Usage tab is on screen,
+        # five at most. Right moves along the tabs, and pressed while the
+        # Usage tab was still loading it left for Config and Status, where the
+        # figures never came.
+        answers = {"figures": USED, "unreachable": UNREACHABLE,
+                   "loading": LOADING}
         for _ in range(5):
             chance = left(6)
             if chance is None:
                 return "budget: the usage figures", screen.text
-            if screen.wait_for(present=[USED], timeout=chance):
+            seen = screen.first_of(answers, timeout=chance)
+            if seen == "loading":
+                chance = left(30)
+                if chance is None:
+                    return "budget: the usage figures", screen.text
+                seen = screen.first_of({"figures": USED,
+                                        "unreachable": UNREACHABLE},
+                                       timeout=chance)
+                if seen is None:
+                    return "budget: the usage figures", screen.text
+            if seen == "unreachable":
+                return seen, screen.text
+            if seen == "figures":
                 break
             stop = type_when_clear(RIGHT)
             if stop:
                 return stop, screen.text
         if not re.search(USED, screen.text):
             return "no panel", screen.text
-        # The figures move while the panel scans local sessions; let it settle,
-        # but a panel already on screen is not thrown away for want of one.
-        chance = left(8)
-        if chance:
+        # The figures move while the panel scans local sessions, and the first
+        # ones painted can be old while it refreshes them, so the panel is read
+        # once nothing has been painted for a second and it has stopped
+        # refreshing. A panel already on screen is not thrown away for want of
+        # a settle, but figures still being refreshed are not a reading.
+        settle = min(ends, time.time() + 20)
+        while True:
+            chance = ptyreader.budget_left(settle, 20) or None
+            if chance is None:
+                break
             screen.wait_for(present=[USED], quiet=1.0, timeout=chance)
+            if not re.search(REFRESHING, screen.display[0]):
+                break
+        if re.search(STALE, screen.text, re.I) or \
+                re.search(UNREACHABLE, screen.text, re.I):
+            return "stale", screen.text
+        if re.search(REFRESHING, screen.display[0]):
+            return "budget: the refreshed figures", screen.text
         return "panel", screen.text
     finally:
         screen.close()
@@ -271,6 +333,28 @@ def tail(text):
     """The last of the screen on one line, for a status that has to explain
     itself in a sentence."""
     return " ".join(text.strip()[-300:].split())
+
+
+def error_line(text):
+    """What the Usage tab said on its "Error:" line, the last one painted after
+    the tabs appeared, so an earlier error elsewhere on screen is not taken."""
+    tabs = list(re.finditer(r"Status\s+Config\s+Usage", text))
+    start = tabs[-1].end() if tabs else 0
+    said = re.findall(r"Error:\s*([^\n]+)", text[start:])
+    return " ".join(said[-1].split()).rstrip(".") if said else ""
+
+
+def last_known(text):
+    """Why Claude showed old figures and how old, in its own words: " (rate
+    limited - try again in a moment), so it showed the ones from 44m ago".
+    Empty when the line cannot be read."""
+    found = re.search(STALE + r"\s+as\s+of\s+([^(\n]+?)\s*\(([^)\n]*)\)",
+                      text, re.I)
+    if not found:
+        return ""
+    why = " ".join(found.group(2).replace("\u2014", "-").split())
+    age = " ".join(found.group(1).split())
+    return " (%s), so it showed the ones from %s" % (why, age)
 
 
 def note(path, message):
@@ -305,16 +389,20 @@ def main():
     # Ask each profile whether it is signed in before spending the budget on
     # one. A profile the client will not answer about is still tried, because a
     # silent client is not evidence of a signed-out profile.
-    config_dir, silent = None, []
+    config_dir, silent, authenticated_email = None, [], None
     for candidate in present:
-        signed_in, _ = auth_state(candidate)
+        signed_in, actual_email = auth_state(candidate)
         if signed_in:
             config_dir = candidate
+            authenticated_email = actual_email
             break
         if signed_in is None:
             silent.append(candidate)
     if config_dir is None:
         if not silent:
+            if session_reading(out):
+                note(status, SESSION_READS)
+                return 0
             note(status, no_sign_in_message(present))
             return 2
         config_dir = silent[0]
@@ -348,6 +436,16 @@ def main():
         note(status, "LOGIN EXPIRED: run claude in a terminal for %s and sign in "
                      "again." % swlib.tilde(swlib.expand(config_dir)))
         return 2
+    if outcome == "unreachable":
+        note(status, "FAILED: Claude could not load this account's usage from "
+                     "its server (%s). Nothing was saved, so the last reading "
+                     "stands." % (error_line(text) or "no reason given"))
+        return 1
+    if outcome == "stale":
+        note(status, "FAILED: Claude could not get fresh figures for this "
+                     "account%s. They were not saved as current, so the last "
+                     "reading stands." % last_known(text))
+        return 1
     if outcome == "no panel":
         note(status, "FAILED: usage panel did not appear. A profile that has "
                      "never been opened shows onboarding first, so run claude "
@@ -362,12 +460,14 @@ def main():
     profile = cfg.get(a.role) or {}
     record = {
         "role": a.role, "worker": CLIENT,
-        "account": profile.get("account") or None,
+        "account": authenticated_email or None,
         "plan": data["plan"] or profile.get("plan") or None,
         "five_hour_pct": data["five_hour_pct"],
         "seven_day_pct": data["seven_day_pct"],
         "five_hour_resets": data["five_hour_resets"],
         "seven_day_resets": data["seven_day_resets"],
+        "five_hour_resets_at": reset_epoch(None, data["five_hour_resets"]),
+        "seven_day_resets_at": reset_epoch(None, data["seven_day_resets"]),
         "extra": {"config_dir": swlib.tilde(swlib.expand(config_dir)),
                   "model_weeks": data["model_weeks"]},
         "client_version": version,

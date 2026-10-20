@@ -84,3 +84,44 @@ Do not "simplify" these away; each cost real debugging time.
   (`plan_name`); taken as printed, every pinned Pro Lite read as a sign-in
   change. Behind its background server the panel names no address, so a Codex
   reading's account is unknown.
+- Skip on the Codex update dialog leaves an "Update available!" notice above
+  the input line. The words outlive the dialog, so a dialog is answered only
+  while the input line is off screen; answering the words typed "22" into the
+  composer and every Codex reading failed from 9 to 18 October 2026.
+- Every open Claude app session writes the primary's reading each minute, with
+  the windows from its own last response, so an idle session carries old
+  figures. `statusline.sh` drops a reading that is lower than the one on file
+  for the same window. Without a terminal sign-in the primary is read only this
+  way, and `claude-usage.py` keeps that reading rather than asking for a login.
+- launchd runs an overdue timer in a dark wake, when the Mac is asleep and has
+  no display and often no network. Most refresh failures from 9 to 18 October
+  2026 were Grok, Cursor and the second Claude failing together then.
+  `--if-claude-running` skips a wake whose `pmset -g systemstate` has no
+  Graphics.
+- Claude 2.1.285 paints the last figures it fetched at once, of any age, says
+  "Refreshing" and then repaints them or says "Showing last-known usage as of
+  44m ago (rate limited ...)". Read at the first figure, those old ones were
+  saved as current. The reader waits for the refresh to end and saves nothing
+  when the figures are last-known. On 18 October 2026, after about fifteen
+  forced refreshes in an hour, the server rate-limited the account for over an
+  hour, and every reading in that time was last-known. An hour after the last
+  fetch the tab drops the old figures and says only "Error: Usage endpoint is
+  rate limited". Every failed form ends in an "r to retry" footer.
+- A client that cannot reach its server says so where the panel would be. Each
+  reader matches that wording and reports it, and the Claude reader presses
+  Right only while nothing of the Usage tab is on screen: Right from a tab
+  still loading moved it on to Config and Status.
+
+## Both harnesses
+
+`codex-wind/` is the Codex skill, with its own Python runner, configuration and
+private exchanges. It can explicitly import Second Wind's account labels and
+profile paths, without credentials or settings. Run its tests separately with
+`python3 -m unittest discover -s codex-wind/tests`. `install.py` installs either
+skill or both; the shell wrapper keeps the old default and destination argument.
+Do not hard-code the author's account aliases into public examples.
+
+Cursor wrote a file in the 20 October 2026 live test in `--mode ask` despite its own help calling that
+read-only. Both runners now use `--mode plan`, which blocked the same live test.
+Both runners also disable configured Codex MCP servers in review mode: the shell
+sandbox alone does not constrain an MCP server.

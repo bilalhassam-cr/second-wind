@@ -2031,6 +2031,18 @@ class InstalledSettings(Base):
     def settings(self, folder):
         return read_json(os.path.join(folder, "settings.json"))
 
+    def test_check_accepts_the_same_script_through_a_symlink(self):
+        actual = os.path.join(self.home, "actual")
+        os.makedirs(actual)
+        script = os.path.join(actual, "hook.py")
+        with open(script, "w") as handle:
+            handle.write("# hook\n")
+        alias = os.path.join(self.home, "alias")
+        os.symlink(actual, alias)
+        self.assertTrue(sw_setup.same_command(os.path.join(alias, "hook.py"), script))
+        self.assertFalse(sw_setup.same_command(os.path.join(alias, "other.py"), script))
+        self.assertFalse(sw_setup.same_command(None, script))
+
     def test_the_narrowing_matchers_are_written(self):
         folder = self.profile()
         sw_setup.merge_settings(folder, events=("SessionStart", "StopFailure",
@@ -2086,6 +2098,31 @@ class InstalledSettings(Base):
                                                "labels": {"opus": "5h 2%"}}})
         sw_setup.merge_settings(folder, model_picker=False)
         self.assertNotIn("modelPicker", self.settings(folder))
+
+    def test_the_usage_panel_keeps_other_plugin_folders(self):
+        folder = self.profile({"env": {"CLAUDE_CODE_PLUGIN_DIRS": "~/mods/other",
+                                       "KEEP": "1"}})
+        sw_setup.merge_settings(folder, usage_panel=True)
+        entries = self.settings(folder)["env"]["CLAUDE_CODE_PLUGIN_DIRS"].split(os.pathsep)
+        self.assertEqual(entries[0], "~/mods/other")
+        self.assertEqual(os.path.basename(entries[1]), "usage-panel")
+        sw_setup.merge_settings(folder, usage_panel=True)
+        self.assertEqual(len(self.settings(folder)["env"]["CLAUDE_CODE_PLUGIN_DIRS"]
+                             .split(os.pathsep)), 2)
+        sw_setup.merge_settings(folder, usage_panel=False)
+        self.assertEqual(self.settings(folder)["env"],
+                         {"CLAUDE_CODE_PLUGIN_DIRS": "~/mods/other", "KEEP": "1"})
+
+    def test_the_usage_panel_leaves_no_empty_env_behind(self):
+        folder = self.profile({"theme": "dark"})
+        sw_setup.merge_settings(folder, usage_panel=True)
+        self.assertTrue(sw_setup.usage_panel_installed(self.settings(folder)))
+        sw_setup.merge_settings(folder, usage_panel=False)
+        self.assertEqual(self.settings(folder), {"theme": "dark"})
+
+    def test_the_usage_panel_ships_with_the_skill(self):
+        self.assertTrue(os.path.isfile(os.path.join(
+            sw_setup.usage_panel_dir(), ".claude-plugin", "plugin.json")))
 
 
 class TrustStore(Base):
@@ -2386,6 +2423,27 @@ class WriteRerun(Base):
         self.write("--model-picker", "off")
         self.assertEqual(self.settings()["modelPicker"], mine)
 
+    def test_the_usage_panel_is_on_by_default_and_carried(self):
+        self.write()
+        self.assertTrue(self.config()["refresh"]["usage_panel"])
+        self.assertTrue(sw_setup.usage_panel_installed(self.settings()))
+        self.write("--usage-panel", "off")
+        self.assertFalse(sw_setup.usage_panel_installed(self.settings()))
+        self.write()
+        self.assertFalse(self.config()["refresh"]["usage_panel"])
+
+    def test_the_usage_panel_switch_alone_touches_nothing_else(self):
+        self.write("--usage-panel", "off")
+        before = self.settings()
+        with contextlib.redirect_stdout(io.StringIO()):
+            sw_setup.cmd_usage_panel(True)
+        after = self.settings()
+        self.assertTrue(sw_setup.usage_panel_installed(after))
+        self.assertTrue(self.config()["refresh"]["usage_panel"])
+        after.pop("env")
+        before.pop("env", None)
+        self.assertEqual(after, before)
+
 
 class RuntimeMirror(Base):
     """The scheduled refresh runs from a mirror inside SW_HOME, because a
@@ -2536,6 +2594,69 @@ class MirroredRefreshRuns(Base):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stderr, "")
         self.assertFalse(os.path.exists(os.path.join(self.home, ".refresh.lock")))
+
+
+class TimerSkipsADarkWake(Base):
+    """The timer does nothing while the Mac is asleep.
+
+    launchd runs an overdue interval job in a dark wake: the Mac is asleep,
+    wakes for seconds of maintenance with no display and often no network,
+    and sleeps again. From 9 to 18 October 2026 about two thirds of the
+    refreshes started that way failed for Grok, Cursor and the second Claude
+    together, Cursor saying it could not even look up its server's name, and
+    together they made up most of the refresh failures logged. A dark wake is a
+    wake without graphics, which `pmset -g systemstate` names.
+
+    Each run here points the readers at a working directory that does not
+    exist, so a run that goes ahead says so in every status file and starts
+    no client, and one that is skipped leaves no status at all."""
+
+    AWAKE = "Current System Capabilities are: CPU Graphics Audio Network \n" \
+            "Current Power State: 4\n"
+    DARK = "Current System Capabilities are: CPU Network \n" \
+           "Current Power State: 4\n"
+
+    def run_refresh(self, systemstate, *args):
+        bin_dir = os.path.join(self.home, "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        with open(os.path.join(bin_dir, "pgrep"), "w") as handle:
+            handle.write("#!/bin/sh\nexit 0\n")
+        with open(os.path.join(bin_dir, "pmset"), "w") as handle:
+            if systemstate is None:
+                handle.write("#!/bin/sh\nexit 1\n")
+            else:
+                handle.write("#!/bin/sh\n[ \"$*\" = '-g systemstate' ] || exit 1\n"
+                             "cat <<'EOF'\n%sEOF\n" % systemstate)
+        for name in ("pgrep", "pmset"):
+            os.chmod(os.path.join(bin_dir, name), 0o755)
+        self.write_config(refresh={"interval_minutes": 15,
+                                   "workdir": os.path.join(self.home, "gone")})
+        return subprocess.run(
+            ["/bin/sh", os.path.join(SCRIPTS, "usage-refresh.sh")] + list(args),
+            capture_output=True, text=True, timeout=120,
+            env=dict(os.environ, SW_HOME=self.home,
+                     PATH=bin_dir + os.pathsep + os.environ.get("PATH", "")))
+
+    def went_ahead(self):
+        return os.path.exists(os.path.join(self.home,
+                                           "refresh-status-primary.txt"))
+
+    def test_the_timer_does_nothing_in_a_dark_wake(self):
+        done = self.run_refresh(self.DARK, "--if-claude-running")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertFalse(self.went_ahead())
+
+    def test_the_timer_reads_while_the_mac_is_awake(self):
+        self.run_refresh(self.AWAKE, "--if-claude-running")
+        self.assertTrue(self.went_ahead())
+
+    def test_a_power_state_it_cannot_read_does_not_stop_the_timer(self):
+        self.run_refresh(None, "--if-claude-running")
+        self.assertTrue(self.went_ahead())
+
+    def test_a_refresh_asked_for_by_hand_is_never_skipped(self):
+        self.run_refresh(self.DARK, "--force")
+        self.assertTrue(self.went_ahead())
 
 
 # Captured from `launchctl print gui/<uid>/com.second-wind.refresh` on a machine

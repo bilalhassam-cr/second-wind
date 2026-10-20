@@ -10,9 +10,11 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
           shellcheck -s sh second-wind/scripts/*.sh install.sh
       - name: python compiles
-        run: python3 -m compileall -q second-wind/scripts
+        run: python3 -m compileall -q second-wind/scripts codex-wind/scripts install.py
       - name: unit tests
-        run: python3 -m unittest discover -s second-wind/tests
+        run: |
+          python3 -m unittest discover -s second-wind/tests
+          python3 -m unittest discover -s codex-wind/tests
       - name: no personal data
         run: |
           # An email address is not the only way personal data leaks into a public
@@ -47,9 +49,11 @@ jobs:
             echo "author or employer name found; use a neutral placeholder"; fail=1
           fi
           # An em dash is easy to reintroduce in prose and violates the public
-          # writing convention even though it is not personal data.
+          # writing convention even though it is not personal data. Bytecode
+          # is not prose: the test step compiles an escaped em dash in source
+          # into the character itself.
           emdash=$(printf '\342\200\224')
-          if grep -rn "$emdash" --exclude-dir=.git .; then
+          if grep -rn "$emdash" --exclude-dir=.git --exclude-dir=__pycache__ .; then
             echo "em dash found; use British punctuation without em dashes"; fail=1
           fi
           exit $fail

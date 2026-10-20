@@ -1,0 +1,36 @@
+[>1u]11;?[2K[G
+
+  Cursor Agent
+  [2mv2026.10.14-0f9edde[22m
+  [2mTip: Use /config to customize Cursor settings and behavior.[22m
+
+
+
+ [48;5;233m                                                                                                                                                                                                      [49m
+ [48;5;233m [2m→ [22m[7mP[27m[2mlan, search, build anything[22m                                                                                                                                                                       [49m
+ [48;5;233m                                                                                                                                                                                                      [49m
+
+  [2mAuto[22m
+  [2m~/.second-wind/workdir[22m
+[?25l[?2004h]0;Cursor Agent[?2031h[?1004h[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[G [48;5;233m → [1m[36m/usage[39m[22m[7m [27m                                                                                                                                                                                            [49m
+ [48;5;233m                                                                                                                                                                                                      [49m
+
+  [2mAuto[22m
+  [2m~/.second-wind/workdir[22m
+[2K[1A[2K[1A[2K[G   → [1m/usage[22m                    [1mShow plan and on-demand usage[22m
+   [2m  /context[22m                  [2mShow context usage breakdown[22m
+[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[G [48;5;233m [2m→ [22m[7mP[27m[2mlan, search, build anything[22m                                                                                                                                                                       [49m
+ [48;5;233m                                                                                                                                                                                                      [49m
+
+   → [1m/usage[22m                    [1mShow plan and on-demand usage[22m
+   [2m  /context[22m                  [2mShow context usage breakdown[22m
+
+  [36mLoading usage data...[39m
+[2K[1A[2K[1A[2K[1A[2K[1A[2K[G  [2mAuto[22m
+  [2m~/.second-wind/workdir[22m
+
+  [36mLoading usage data...[39m
+[2K[1A[2K[G  [31mFailed to load usage data: [39m
+  [31m[2m[deadline_exceeded] the operation timed out[22m[39m
+  [2mView usage settings at [22m[34mhttps://cursor.com/dashboard?tab=usage[39m
+[2K[1A[2K[1A[2K[1A[2K[1A[2K[G

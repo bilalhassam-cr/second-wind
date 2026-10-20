@@ -29,6 +29,12 @@ LOGIN = (r"not\s+(?:signed|logged)\s+in|please\s+(?:sign|log)\s+in|"
          r"/login\s+to|session\s+(?:has\s+)?expired|Invalid\s+API\s+key")
 MENU = r"Show\s+plan\s+and\s+on-demand\s+usage"
 PANEL = r"Monthly\s+plan\s+and\s+on-demand\s+usage|\d+%\s*used"
+# Cursor says it is loading, then shows the panel or its own failure:
+# "Failed to load usage data: [unavailable] getaddrinfo ENOTFOUND" with no
+# network, "[deadline_exceeded] the operation timed out" ten seconds after
+# asking a server that did not answer.
+LOADING = r"Loading\s+usage\s+data"
+UNREACHABLE = r"Failed\s+to\s+load\s+usage\s+data"
 POOLS = (("included_pct", r"Included"), ("auto_pct", r"Auto"),
          ("api_pct", r"API"))
 
@@ -114,20 +120,31 @@ def read_screen(cwd, budget):
         stop = type_when_clear(b"\r")
         if stop:
             return stop, screen.text
+        answers = {"unreachable": UNREACHABLE, "panel": PANEL,
+                   "loading": LOADING}
         chance = left(15)
         if chance is None:
             return "budget: the usage panel", screen.text
-        if not screen.wait_for(present=[PANEL], timeout=chance):
-            # One retry, gated on the panel still being absent: an Enter can
-            # land on the completion list rather than on the input.
+        seen = screen.first_of(answers, timeout=chance)
+        if seen is None:
+            # One retry, gated on nothing of the panel having appeared: an
+            # Enter can land on the completion list rather than on the input.
+            # Once Cursor says it is loading, the Enter landed.
             stop = type_when_clear(b"\r")
             if stop:
                 return stop, screen.text
             chance = left(15)
             if chance is None:
                 return "budget: the usage panel", screen.text
-            if not screen.wait_for(present=[PANEL], timeout=chance):
-                return "no panel", screen.text
+            seen = screen.first_of(answers, timeout=chance)
+        if seen == "loading":
+            chance = left(20)
+            if chance is None:
+                return "budget: the usage panel", screen.text
+            seen = screen.first_of({"unreachable": UNREACHABLE, "panel": PANEL},
+                                   timeout=chance)
+        if seen != "panel":
+            return seen or "no panel", screen.text
         # A panel already on screen is not thrown away for want of a settle.
         chance = left(8)
         if chance:
@@ -141,6 +158,13 @@ def tail(text):
     """The last of the screen on one line, for a status that has to explain
     itself in a sentence."""
     return " ".join(text.strip()[-300:].split())
+
+
+def reason(text):
+    """Cursor's own words for why it could not load the panel: the bracketed
+    code and the message after it."""
+    found = re.search(UNREACHABLE + r":?\s*(\[[^\]\n]*\][^\n]*)", text, re.I)
+    return " ".join(found.group(1).split())[:200] if found else ""
 
 
 def note(path, message):
@@ -193,6 +217,11 @@ def main():
         note(status, "LOGIN EXPIRED: run cursor-agent in a terminal and sign in "
                      "again. An API key alone does not show usage.")
         return 2
+    if outcome == "unreachable":
+        note(status, "FAILED: Cursor could not load its usage from its server "
+                     "(%s). Nothing was saved, so the last reading stands."
+             % (reason(text) or "no reason given"))
+        return 1
     if outcome == "no panel":
         note(status, "FAILED: usage panel did not appear. Last of the screen: %s"
              % tail(text))

@@ -151,7 +151,8 @@ On macOS, setup installs a launchd agent, `com.second-wind.refresh`, that runs
 the one in the skill folder because a LaunchAgent cannot read `~/Documents`; see
 `troubleshooting.md`. `--if-claude-running` exits immediately unless a `claude` process
 or the Claude desktop app is running, so nothing starts a client on an idle
-machine. `--no-launchd` at setup skips it; run `usage-refresh.sh` from cron or by
+machine, and also in a dark wake, when macOS runs the overdue timer while the Mac
+sleeps and no reader could reach its server. `--no-launchd` at setup skips it; run `usage-refresh.sh` from cron or by
 hand instead. `setup.py --check` reports whether the agent is loaded.
 
 ## The model picker experiment
@@ -345,7 +346,7 @@ cursor-agent login
 ```
 
 Verify with `cursor-agent status --format json`. Work uses
-`cursor-agent -p --trust`. Review must add `--mode ask`. `--trust` by itself is
+`cursor-agent -p --trust`. Review must add `--mode plan`. `--trust` by itself is
 not read-only and wrote a file during live testing.
 
 Headless runs can authenticate with `CURSOR_API_KEY`, but `/usage` requires the

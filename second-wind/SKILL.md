@@ -67,6 +67,30 @@ The `--accounts` table is the different thing and stays as it is: it carries
 plan, version, headroom and reader status, and it is for diagnosis rather than
 for a glance.
 
+## The usage pop-up
+
+`usage-panel/` is a Claude Code mod that draws the same readings in colour:
+a strip above the prompt (a small usage ring, name and fullest figure per
+account, with Details and Hide), and a Usage panel (Details, or `/usage-panel`)
+with one row per limit: a bar for what is used, a striped tail for where the
+pace so far takes it by the refill, the figure, and a ring counting down to the
+refill. A limit on course to run out before its refill gets a warning line, and
+a toast fires when one crosses its threshold. Green is under 50%, amber from
+50%, red at the threshold. It reads `scripts/card_json.py`, which applies the brief's own rules, so the pop-up and
+the panel never disagree.
+
+It also keeps the primary reading current. A desktop-app session is signed in
+by the app, which shares that credential with no other process, so no reader
+can see the primary account from outside. The mod reads the session's own
+limits (`$.session.usage()`) every minute and whenever a window moves, and
+hands them to `statusline.sh`, the same writer a terminal session uses.
+
+Setup turns it on by default, by adding the folder to `CLAUDE_CODE_PLUGIN_DIRS`
+in the primary profile's settings `env` and touching no other entry there.
+`setup.py --usage-panel on|off` on its own switches it without rewriting the
+rest. It shows in sessions started after it is set. Its own test runs with
+`claude plugin test usage-panel`.
+
 ## The command surface
 
 **`/second-wind` with no arguments is the picker.** In the desktop app this is
@@ -147,7 +171,7 @@ they send back.
 
 Other options: `--codex3 on --codex3-dir DIR --codex3-label L`,
 `--codex-full-access on`, `--reader ~/.claude-usage`, `--five-hour 85`, `--seven-day 75`,
-`--refresh-minutes 30`, `--model-picker on`, `--no-launchd`, `--timeout 900`,
+`--refresh-minutes 30`, `--model-picker on`, `--usage-panel off`, `--no-launchd`, `--timeout 900`,
 `--force`, and the picker flags in `references/setup.md`. Finally, tell the user
 to **restart Claude Code**, then run `--check` and `--accounts`: settings are
 read at session start, and a running session can write the project list back
@@ -164,8 +188,8 @@ reading like success. Write the prompt to a file, or quoting becomes the job.
 ```
 
 **`--review` blocks file edits and shell work.** Claude loses its edit, write and
-shell tools and loads no MCP servers, Codex runs in a read-only sandbox, Grok
-drops Write, Edit and Bash, and Cursor adds `--mode ask`, since `--trust` alone
+shell tools and loads no MCP servers, Codex runs in a read-only sandbox with configured MCP servers disabled, Grok
+allows Read, Glob and Grep only, and Cursor adds `--mode plan`, since `--trust` alone
 is not read-only and wrote a file in testing. Use it to have work challenged, and
 whenever you are still editing the same files.
 
