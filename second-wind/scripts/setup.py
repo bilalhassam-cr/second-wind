@@ -143,6 +143,12 @@ def statusline_command():
     return os.path.join(HERE, "statusline.sh")
 
 
+def same_command(actual, expected):
+    """The installer may be reached through a symlink to the checkout."""
+    return (isinstance(actual, str) and
+            os.path.realpath(actual) == os.path.realpath(expected))
+
+
 def is_ours(command):
     """True for a command second-wind installed, in this version or an older
     one. Matched on the exact paths this install writes, on our own hook
@@ -1562,7 +1568,7 @@ def cmd_check():
             row(role + " settings", "UNREADABLE: %s" % tilde(path))
             faults.append("%s settings.json is not valid JSON." % role)
             continue
-        installed = data.get("statusLine", {}).get("command") == statusline_command() \
+        installed = same_command(data.get("statusLine", {}).get("command"), statusline_command()) \
             if isinstance(data.get("statusLine"), dict) else False
         row(role + " statusline", "installed" if installed else "MISSING")
         if not installed:
@@ -1572,7 +1578,7 @@ def cmd_check():
         hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
         for event in events:
             command = hook_command(event)
-            wired = any(inner.get("command") == command
+            wired = any(same_command(inner.get("command"), command)
                         for group in hooks.get(event, []) if isinstance(group, dict)
                         for inner in (group.get("hooks") or [])
                         if isinstance(inner, dict))

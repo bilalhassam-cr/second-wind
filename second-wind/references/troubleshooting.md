@@ -227,7 +227,7 @@ argument immediately after `-p`. Grok `/usage` has a weekly window only.
 
 `--trust` is not a read-only setting. It only skips the workspace trust prompt,
 and it wrote a file during live testing. Review must use
-`cursor-agent -p --trust --mode ask`.
+`cursor-agent -p --trust --mode plan`.
 
 Headless work can authenticate with `CURSOR_API_KEY`, but the usage reader needs
 the interactive `cursor-agent login`. On-demand may report unavailable even when

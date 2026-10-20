@@ -111,12 +111,12 @@ f="$SW_HOME/usage-$cache_role.json"
 # has since been replaced, is older than the reading on file and is dropped.
 # Two sessions report one reset time a second apart, so ten minutes either way
 # is the same window.
-older=$(jq -r --argjson f5 "$(asnum "$five")" --argjson a5 "$(asnum "$five_r")" \
+older=$(jq -r --arg account "$acct" --argjson f5 "$(asnum "$five")" --argjson a5 "$(asnum "$five_r")" \
               --argjson f7 "$(asnum "$week")" --argjson a7 "$(asnum "$week_r")" \
   'def behind(p; a; op; oa): p != null and a != null and op != null and oa != null
      and (a < oa - 600 or (a <= oa + 600 and p < op));
-   if behind($f5; $a5; .five_hour_pct; .five_hour_resets_at)
-      or behind($f7; $a7; .seven_day_pct; .seven_day_resets_at)
+   if (.account == $account or (.account == null and $account == "")) and (behind($f5; $a5; .five_hour_pct; .five_hour_resets_at)
+      or behind($f7; $a7; .seven_day_pct; .seven_day_resets_at))
    then "older" else "" end' "$f" 2>/dev/null)
 [ "$older" = older ] && exit 0
 jq -nc --arg a "$acct" --arg r "$cache_role" --arg p "$plan" --arg v "$version" \

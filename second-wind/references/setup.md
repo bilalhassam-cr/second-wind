@@ -346,7 +346,7 @@ cursor-agent login
 ```
 
 Verify with `cursor-agent status --format json`. Work uses
-`cursor-agent -p --trust`. Review must add `--mode ask`. `--trust` by itself is
+`cursor-agent -p --trust`. Review must add `--mode plan`. `--trust` by itself is
 not read-only and wrote a file during live testing.
 
 Headless runs can authenticate with `CURSOR_API_KEY`, but `/usage` requires the

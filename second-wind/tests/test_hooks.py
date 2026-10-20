@@ -1325,6 +1325,16 @@ class StatusLine(Base):
         cache = self.cached()
         self.assertEqual((cache["five_hour_pct"], cache["seven_day_pct"]), (13, 26))
 
+    def test_a_different_accounts_lower_reading_is_not_dropped(self):
+        five, week = self.now + 3600, self.now + 300000
+        self.run_statusline(self.limits(90, five, 80, week))
+        self.write_json(os.path.join(self.primary_dir, ".claude.json"),
+                        {"oauthAccount": {"emailAddress": "two@example.com"}})
+        self.run_statusline(self.limits(5, five, 10, week))
+        cache = self.cached()
+        self.assertEqual(cache["account"], "two@example.com")
+        self.assertEqual(cache["five_hour_pct"], 5)
+
     def test_a_new_window_is_written_though_its_figure_is_lower(self):
         five, week = self.now + 600, self.now + 300000
         self.run_statusline(self.limits(90, five, 60, week))

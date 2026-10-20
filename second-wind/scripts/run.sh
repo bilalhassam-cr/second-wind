@@ -54,7 +54,7 @@ is_int() { case "${1:-}" in ''|*[!0-9]*) return 1;; *) return 0;; esac; }
 # API-key delegation. The key is kept when the config records that sign-in, and
 # when the config says nothing at all, because an unrecorded auth is more likely
 # an old config than a bill.
-VENDOR_KEYS="ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY XAI_API_KEY CURSOR_API_KEY"
+VENDOR_KEYS="ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY CODEX_API_KEY XAI_API_KEY CURSOR_API_KEY CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY"
 creds_cleared=""
 creds_kept=""
 isolate_credentials() {
@@ -290,6 +290,10 @@ case "$worker" in
     set -- codex exec --skip-git-repo-check -C "$(pwd)" -o "$lastmsg"
     if [ "$mode" = review ]; then
       set -- "$@" -s read-only
+      # MCP servers run outside the shell sandbox. Disable those resolved by
+      # the official client for this workspace, or refuse the review.
+      overrides=$(python3 "$SCRIPT_DIR/codex-review.py") || exit 2
+      for override in $overrides; do set -- "$@" -c "$override"; done
     elif [ "$codex_full" = true ]; then
       # No sandbox and no approval prompts. Only when the config for this role
       # says full_access, which setup writes only when asked for by name.
@@ -321,7 +325,7 @@ case "$worker" in
     acct=$(cfg '.grok.account')
     grok_prompt=$(cat "$sendfile")
     if [ "$mode" = review ]; then
-      set -- grok --disallowed-tools "Write,Edit,Bash"
+      set -- grok --tools "Read,Glob,Grep" --disallowed-tools "Write,Edit,Bash" --no-subagents --disable-web-search
       sandbox_note="Write, Edit and Bash disallowed"
     else
       set -- grok --permission-mode bypassPermissions
@@ -340,8 +344,9 @@ case "$worker" in
     [ -z "$effort" ] || { echo "second-wind: --effort is not supported by cursor-agent; choose a parameterised --model instead" >&2; exit 2; }
     acct=$(cfg '.cursor.account')
     set -- cursor-agent -p --trust
-    # --trust only skips the workspace prompt. It does not prevent writes.
-    if [ "$mode" = review ]; then set -- "$@" --mode ask; sandbox_note="ask mode"
+    # --trust only skips the workspace prompt. In the 20 October 2026
+    # live test, ask mode also wrote a file. Plan mode blocked the same test.
+    if [ "$mode" = review ]; then set -- "$@" --mode plan; sandbox_note="plan mode"
     else sandbox_note="none, trust with writes"; fi
     [ -n "$model" ] && set -- "$@" --model "$model"
     sw_run "$tmo" "$@"; rc=$?

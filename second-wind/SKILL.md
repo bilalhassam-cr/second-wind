@@ -188,8 +188,8 @@ reading like success. Write the prompt to a file, or quoting becomes the job.
 ```
 
 **`--review` blocks file edits and shell work.** Claude loses its edit, write and
-shell tools and loads no MCP servers, Codex runs in a read-only sandbox, Grok
-drops Write, Edit and Bash, and Cursor adds `--mode ask`, since `--trust` alone
+shell tools and loads no MCP servers, Codex runs in a read-only sandbox with configured MCP servers disabled, Grok
+allows Read, Glob and Grep only, and Cursor adds `--mode plan`, since `--trust` alone
 is not read-only and wrote a file in testing. Use it to have work challenged, and
 whenever you are still editing the same files.
 

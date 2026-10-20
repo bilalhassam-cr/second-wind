@@ -111,3 +111,17 @@ Do not "simplify" these away; each cost real debugging time.
   reader matches that wording and reports it, and the Claude reader presses
   Right only while nothing of the Usage tab is on screen: Right from a tab
   still loading moved it on to Config and Status.
+
+## Both harnesses
+
+`codex-wind/` is the Codex skill, with its own Python runner, configuration and
+private exchanges. It can explicitly import Second Wind's account labels and
+profile paths, without credentials or settings. Run its tests separately with
+`python3 -m unittest discover -s codex-wind/tests`. `install.py` installs either
+skill or both; the shell wrapper keeps the old default and destination argument.
+Do not hard-code the author's account aliases into public examples.
+
+Cursor wrote a file in the 20 October 2026 live test in `--mode ask` despite its own help calling that
+read-only. Both runners now use `--mode plan`, which blocked the same live test.
+Both runners also disable configured Codex MCP servers in review mode: the shell
+sandbox alone does not constrain an MCP server.

@@ -2031,6 +2031,18 @@ class InstalledSettings(Base):
     def settings(self, folder):
         return read_json(os.path.join(folder, "settings.json"))
 
+    def test_check_accepts_the_same_script_through_a_symlink(self):
+        actual = os.path.join(self.home, "actual")
+        os.makedirs(actual)
+        script = os.path.join(actual, "hook.py")
+        with open(script, "w") as handle:
+            handle.write("# hook\n")
+        alias = os.path.join(self.home, "alias")
+        os.symlink(actual, alias)
+        self.assertTrue(sw_setup.same_command(os.path.join(alias, "hook.py"), script))
+        self.assertFalse(sw_setup.same_command(os.path.join(alias, "other.py"), script))
+        self.assertFalse(sw_setup.same_command(None, script))
+
     def test_the_narrowing_matchers_are_written(self):
         folder = self.profile()
         sw_setup.merge_settings(folder, events=("SessionStart", "StopFailure",

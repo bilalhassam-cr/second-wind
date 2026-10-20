@@ -1,6 +1,18 @@
-# second-wind
+# Second Wind + Codex Wind
 
-A Claude Code skill that puts your other subscriptions to work.
+Put your other subscriptions to work from Claude Code or Codex.
+
+| Your harness | Install | Integration |
+|---|---|---|
+| Claude Code | `./install.sh --claude` | **Second Wind**: delegation, usage readers, panel and task-boundary handover |
+| Codex CLI or desktop | `./install.sh --codex` | **Codex Wind**: named-account delegation and authentication checks |
+| Both | `./install.sh --both` | Both skills, with separate configuration and logs |
+
+Both can delegate to Claude Code, Codex, Grok Build and Cursor Agent through
+the official clients. Each call names one account and uses that account's own
+sign-in. [Codex Wind setup and commands](codex-wind/README.md).
+
+The sections below describe **Second Wind for Claude Code**.
 
 Many people running Claude Code also pay for a second Claude account, a ChatGPT
 plan with Codex, SuperGrok or X Premium+, or Cursor Pro. `second-wind` routes
@@ -62,10 +74,10 @@ Tested versions:
 
 | Client | Version tested |
 |---|---|
-| Claude Code | 2.1.251 |
-| Codex | 0.153.0 |
-| Grok | 1.0.13 |
-| Cursor Agent | 2026.08.31 |
+| Claude Code | 2.1.304 |
+| Codex | 0.163.0 |
+| Grok | 1.0.62 |
+| Cursor Agent | 2026.10.19 |
 | macOS | 26 |
 
 This release has not yet been exercised on a clean machine. The clean-install
@@ -103,16 +115,24 @@ keep them about the process.
 
 ```bash
 git clone https://github.com/bilalhassam-cr/second-wind second-wind
-cd second-wind && ./install.sh
+cd second-wind
+./install.sh --both      # or --claude, or --codex
 ```
 
-`install.sh` copies the skill into `~/.claude/skills/second-wind`. Pass a
-directory to install somewhere else, and `--link` (before the directory) to
-symlink the checkout instead of copying it, which is what you want if you are
-editing the skill itself. Either way it makes sure the shell scripts, `setup.py`
-and the hooks are executable, since Claude Code runs the hooks by path.
+With no flag, `./install.sh` still installs Second Wind only. The existing URL
+and directory names are kept, so old clone and install commands continue to work.
 
-Restart Claude Code so a new session sees it, then say `set up second-wind`.
+The installer copies Second Wind to `~/.claude/skills/second-wind` and Codex Wind
+to `${CODEX_HOME:-~/.codex}/skills/codex-wind`, according to your choice. Use
+`--claude-dir DIR` or `--codex-dir DIR` to choose other skills folders. The legacy
+`./install.sh DIR` still selects the Claude skills folder. `--link` links the
+checkout for development; moving that checkout then breaks the installation.
+Reinstalling replaces the selected skill, with rollback if replacement fails;
+configuration and account sign-ins live elsewhere and are not overwritten.
+
+Restart your selected harness. In Claude Code, say `set up second-wind`. In
+Codex, say `set up codex-wind`, or follow [its setup guide](codex-wind/README.md).
+Installing a skill does not sign in any account or grant full access.
 
 ## Setup
 
@@ -174,9 +194,11 @@ Every call goes through one runner, which is what records it:
 ```
 
 Claude review mode drops its edit, write and shell tools and loads no MCP
-servers. Codex uses a read-only sandbox. Grok drops Write, Edit and Bash. Cursor
-adds `--mode ask`; its `--trust` flag alone is not read-only and was seen writing
-a file during testing. Work mode is unattended and unrestricted in the current
+servers. Codex uses a read-only sandbox and disables configured MCP servers for
+that invocation. Grok drops Write, Edit and Bash. Cursor
+adds `--mode plan`; its `--trust` flag and, in the 20 October live test,
+`--mode ask` both allowed a file write in live testing. Plan mode blocked the
+same test. Work mode is unattended and unrestricted in the current
 directory, so do not point it at a directory you would not let an agent modify.
 
 A Codex worker is sandboxed and cannot launch a browser: Chrome aborts at

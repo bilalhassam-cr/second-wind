@@ -20,6 +20,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ptyreader  # noqa: E402
 import swlib  # noqa: E402
+from card_json import reset_epoch  # noqa: E402
 
 CLIENT = "claude"
 # These clients paint a dialog a word at a time, and the cleaned text keeps a
@@ -388,11 +389,12 @@ def main():
     # Ask each profile whether it is signed in before spending the budget on
     # one. A profile the client will not answer about is still tried, because a
     # silent client is not evidence of a signed-out profile.
-    config_dir, silent = None, []
+    config_dir, silent, authenticated_email = None, [], None
     for candidate in present:
-        signed_in, _ = auth_state(candidate)
+        signed_in, actual_email = auth_state(candidate)
         if signed_in:
             config_dir = candidate
+            authenticated_email = actual_email
             break
         if signed_in is None:
             silent.append(candidate)
@@ -458,12 +460,14 @@ def main():
     profile = cfg.get(a.role) or {}
     record = {
         "role": a.role, "worker": CLIENT,
-        "account": profile.get("account") or None,
+        "account": authenticated_email or None,
         "plan": data["plan"] or profile.get("plan") or None,
         "five_hour_pct": data["five_hour_pct"],
         "seven_day_pct": data["seven_day_pct"],
         "five_hour_resets": data["five_hour_resets"],
         "seven_day_resets": data["seven_day_resets"],
+        "five_hour_resets_at": reset_epoch(None, data["five_hour_resets"]),
+        "seven_day_resets_at": reset_epoch(None, data["seven_day_resets"]),
         "extra": {"config_dir": swlib.tilde(swlib.expand(config_dir)),
                   "model_weeks": data["model_weeks"]},
         "client_version": version,

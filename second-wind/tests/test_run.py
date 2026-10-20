@@ -19,9 +19,11 @@ SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
                        "scripts")
 RUN = os.path.join(SCRIPTS, "run.sh")
 VENDOR_KEYS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
-               "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY",
-               "CURSOR_API_KEY")
+               "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "XAI_API_KEY",
+               "CURSOR_API_KEY", "CLAUDE_CODE_USE_BEDROCK",
+               "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
 STUB = """#!/bin/sh
+if [ "$1" = mcp ]; then printf '[{"name":"writer","enabled":true}]\\n'; exit 0; fi
 env > "$SW_TEST_ENV"
 echo 'stub worker reply'
 """
@@ -173,6 +175,7 @@ class Credentials(unittest.TestCase):
 
 
 ARGS_STUB = """#!/bin/sh
+if [ "$1" = mcp ]; then printf '[{"name":"writer","enabled":true}]\\n'; exit 0; fi
 env > "$SW_TEST_ENV"
 printf '%s\\n' "$@" > "$SW_TEST_ARGS"
 echo 'stub worker reply'
@@ -268,10 +271,22 @@ class CodexHomes(unittest.TestCase):
         self.run_codex("codex2", "--review")
         args = self.args_seen()
         self.assertIn("read-only", args)
+        self.assertIn("mcp_servers.writer.enabled=false", args)
+        self.assertIn("apps._default.enabled=false", args)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", args)
         text = self.exchange()
         self.assertEqual(self.header(text, "Browser guard applied"), "yes")
         self.assertEqual(self.header(text, "Sandbox"), "read-only")
+
+    def test_an_unreadable_mcp_list_refuses_review(self):
+        path = os.path.join(self.bin, "codex")
+        with open(path, "w") as handle:
+            handle.write("#!/bin/sh\nif [ \"$1\" = login ]; then echo 'Logged in using ChatGPT'; exit 0; fi\nif [ \"$1\" = mcp ]; then echo 'not json'; exit 0; fi\necho 'MUST NOT RUN'\n")
+        os.chmod(path, 0o755)
+        self.write_config()
+        done = self.run_codex("codex2", expect=2)
+        self.assertIn("refusing", done.stderr)
+        self.assertNotIn("MUST NOT RUN", done.stdout)
 
     def test_work_mode_without_full_access_keeps_the_sandbox_and_the_guard(self):
         self.write_config(full_access=False)

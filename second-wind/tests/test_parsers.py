@@ -602,6 +602,9 @@ class ReaderMainTests(unittest.TestCase):
         with open(self.out) as handle:
             record = json.load(handle)
         self.assertEqual(record["role"], "primary")
+        self.assertEqual(record["account"], "user@example.com")
+        self.assertIsInstance(record["five_hour_resets_at"], int)
+        self.assertIsInstance(record["seven_day_resets_at"], int)
         self.assertEqual(record["worker"], "claude")
         self.assertEqual(record["five_hour_pct"], 23)
         self.assertEqual(record["seven_day_pct"], 35)

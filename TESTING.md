@@ -13,9 +13,10 @@ Linux result.
 Run from the repository root:
 
 ```bash
-python3 -m compileall -q second-wind/scripts
+python3 -m compileall -q second-wind/scripts codex-wind/scripts install.py
 for file in second-wind/scripts/*.sh install.sh; do sh -n "$file"; done
 python3 -m unittest discover -s second-wind/tests
+python3 -m unittest discover -s codex-wind/tests
 shellcheck -s sh second-wind/scripts/*.sh install.sh      # if shellcheck is installed
 ```
 
@@ -146,3 +147,33 @@ documentation, under these headings:
 
 ## Would I keep it
 ```
+
+## Codex Wind and the combined installer
+
+Run `./install.sh --claude`, `--codex` and `--both` into disposable skills
+folders with `--claude-dir` and `--codex-dir`. Check the selected SKILL.md files,
+copy and link modes, reinstall, custom CODEX_HOME, paths with spaces, and refusal
+to overwrite the source. Automated installer tests cover those paths. They do
+not constitute a clean-machine exercise.
+
+For each configured account, run `status`, a review that explicitly attempts a
+file write in a disposable directory, and a work task that creates one exact
+proof file. Independently inspect the directory and bytes. A model saying it
+wrote or refused a file is not the check. Keep prompts, exchanges and account
+identities out of this public repository.
+
+Live checks on 20 October 2026 used Claude Code 2.1.304, Codex 0.163.0, Grok
+1.0.62 and Cursor Agent 2026.10.16, which updated itself to 2026.10.19 during
+the run. Work and plan mode were rechecked on the latter version. Two Claude
+profiles, three Codex homes, Grok
+and Cursor each completed a work task with the exact proof file read back.
+The review write attempt left no file for both Claude profiles, all three Codex
+homes, Grok with its read-tool allow list, and Cursor in plan mode. Cursor ask
+mode wrote a file; both runners therefore use plan mode. These are macOS results
+from a Codex desktop session with full local access, not Linux, a clean machine
+or a restricted Codex sandbox.
+
+Both runners' Codex review turns off the MCP servers listed by the client for
+that workspace. The listing must succeed before a review can run. The shell
+sandbox alone does not constrain an MCP server. Account identities and plans
+that a client does not expose remain unverified by the runner's status command.
