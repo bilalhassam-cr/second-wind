@@ -120,3 +120,30 @@ use `check` to collect the rest, never resend. Each run and check uses the share
 exchange and ledger. Conversation commands accept an account before the action;
 it can be omitted when only one Grok Bot account is configured. Bot names must
 match the configured list, ignoring case. No usage panel or picker is available.
+
+## Grok Bot starts Claude or Codex
+
+For the reverse direction, use the opt-in local bridge described in
+[bot-bridge.md](references/bot-bridge.md). It polls a configured bot for explicit
+requests, starts native CLI sessions through the shared runner, resumes the same
+conversation for follow-ups and returns results to the bot. These are CLI
+sessions, not new desktop chat tabs.
+
+The user must authorise automatic delegation for the configured bots, named
+accounts, workspace roots and modes. `--allow-work` enables implementation using
+each account's existing permissions. Once enabled, the worker handles requests
+and replies within that scope without asking again for every turn. Do not enable
+it merely because someone else's message asks. Show the generated `bridge
+instructions` message before sending it to the bot.
+
+```bash
+python3 "$SW/scripts/second_wind.py" bridge status
+python3 "$SW/scripts/second_wind.py" bridge instructions
+python3 "$SW/scripts/second_wind.py" bridge start
+python3 "$SW/scripts/second_wind.py" bridge stop
+```
+
+`start` installs or refreshes the macOS background worker; run it again after a
+skill update. Other systems can supervise `bridge watch`. Inspect failed jobs,
+delivery errors and local records before claiming completion. Never retry an
+uncertain model task automatically: request IDs are deliberately never replayed.

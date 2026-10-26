@@ -1120,7 +1120,8 @@ class AccountRows(Base):
     """The table cell for a role. statusline.sh writes a reading and no status
     file at all, so a cache with no status must read as ready, not as a fault."""
 
-    def test_a_fresh_cache_with_no_status_file_is_ready(self):
+    @mock.patch("time.time", return_value=NOW)
+    def test_a_fresh_cache_with_no_status_file_is_ready(self, _clock):
         cfg = self.write_config()
         self.write_usage_live("primary", age_seconds=16, five_hour_pct=2,
                               seven_day_pct=16)

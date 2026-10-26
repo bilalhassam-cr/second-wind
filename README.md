@@ -183,4 +183,21 @@ private cursors, timeout recovery, identity checks and key redaction. Grok Bot w
 verified live on macOS on 26 October 2026 (setup, status, read, delegation, the
 unknown-name refusal, and no key in logs). There is no usage panel or picker integration.
 
+## Grok Bot can start local sessions
+
+An opt-in [return bridge](second-wind/references/bot-bridge.md) lets an existing
+Grok Bot request a named Claude or Codex CLI session, send follow-ups to its native
+session UUID and receive results. It runs locally with no inbound listening port.
+Enable the source bot, destination accounts, workspace roots and review/work modes
+explicitly. The macOS worker runs through launchd; other systems can supervise the
+foreground command. These are native CLI conversations, not desktop chat tabs.
+
+The automated bridge tests exercise duplicate requests, native resume arguments,
+workspace validation, identity failures, cancellation, worker failures, crash
+recovery and reply delivery retries against synthetic clients and a local HTTP
+server. On macOS, live testing on 26 October 2026 verified Grok Bot initiating
+a Codex session and a Claude session, each writing a bounded test file, resuming
+the same native UUID on a follow-up and returning the remembered value to the
+bot. The test also exercised the launchd worker with the configured user API key.
+
 MIT. See [LICENSE](LICENSE).

@@ -546,6 +546,15 @@ def command_run(args: argparse.Namespace) -> int:
         profile = account(config, args.account)
     except (WindError, OSError, ValueError) as exc:
         raise WindError(str(exc) + "; nothing sent") from None
+    native = bool(getattr(args, "session_result", None) or getattr(args, "resume", None))
+    if native and profile.get("kind", "claude") not in ("claude", "codex"):
+        raise WindError("native sessions require Claude or Codex")
+    if getattr(args, "resume", None):
+        import uuid
+        try:
+            uuid.UUID(args.resume)
+        except ValueError:
+            raise WindError("resume requires a native session UUID") from None
     if profile.get("kind") == "grokbot":
         return run_grokbot(args, config, profile)
     if args.bot:
@@ -607,6 +616,10 @@ def command_run(args: argparse.Namespace) -> int:
             "You are in review mode. Do not edit files or run shell commands that change anything. "
             "Do not claim to have changed anything.\n\n" + prompt
         )
+    if native:
+        command += ["--output-format", "json"] if kind == "claude" else ["--json"]
+        if getattr(args, "resume", None) and kind == "claude":
+            command += ["--resume", args.resume]
     if args.model:
         command += ["--model", args.model]
     if args.effort:
@@ -639,12 +652,53 @@ def command_run(args: argparse.Namespace) -> int:
             prompt_file.write_text(prompt)
             prompt_file.chmod(0o600)
             command += ["--prompt-file", str(prompt_file)]
+        if native and kind == "codex" and getattr(args, "resume", None):
+            command += ["resume", args.resume, "-"]
+        session_id = None
         try:
             returncode, output, timed_out, diagnostics = run_process(
                 command, env=clean_env(profile), cwd=workspace,
                 prompt=prompt, timeout=timeout,
             )
-            if kind == "codex" and returncode == 0:
+            if native:
+                raw_output = output
+                if kind == "codex":
+                    for line in raw_output.splitlines():
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(event, dict) and event.get("type") == "thread.started":
+                            session_id = event.get("thread_id")
+                else:
+                    try:
+                        event = json.loads(raw_output)
+                        session_id = event.get("session_id")
+                        output = event.get("result", "")
+                        if not isinstance(output, str):
+                            output = ""
+                        if event.get("is_error"):
+                            returncode = returncode or 4
+                    except (ValueError, AttributeError):
+                        output = ""
+                        returncode = returncode or 4
+                        diagnostics += "\nInvalid Claude session response\n"
+                if session_id:
+                    import uuid
+                    try:
+                        session_id = str(uuid.UUID(session_id))
+                    except (ValueError, TypeError, AttributeError):
+                        session_id = None
+                if returncode == 0 and not session_id:
+                    returncode = 4
+                    diagnostics += "\nClient returned no valid native session id\n"
+                if getattr(args, "session_result", None):
+                    metadata = Path(args.session_result).expanduser()
+                    with metadata.open("w") as handle:
+                        metadata.chmod(0o600)
+                        json.dump({"session_id": session_id, "account": args.account,
+                                   "workspace": str(workspace), "exit_code": returncode}, handle)
+            if kind == "codex" and (returncode == 0 or native):
                 output = final.read_text() if final.is_file() else ""
             if kind == "grok" and returncode == 0:
                 try:
@@ -1187,6 +1241,8 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--model")
     run.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
     run.add_argument("--timeout", type=int)
+    run.add_argument("--resume", help="continue a native Claude or Codex session UUID")
+    run.add_argument("--session-result", help="write native session metadata to a private JSON file")
     run.set_defaults(handler=command_run)
     grokbot = commands.add_parser("grokbot", help="talk to a configured persistent bot")
     grokbot.add_argument("account", nargs="?")
@@ -1202,6 +1258,13 @@ def parser() -> argparse.ArgumentParser:
     grokbot.add_argument("--default")
     grokbot.add_argument("--label")
     grokbot.set_defaults(handler=command_grokbot)
+    if __name__ == "__main__":
+        sys.modules.setdefault("second_wind", sys.modules[__name__])
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from bot_bridge import add_parser
+    add_parser(commands)
     return root
 
 
