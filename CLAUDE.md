@@ -10,7 +10,10 @@ govern the repo.
   runtime. Check before every commit: `grep -riE '<your-name>|<your-domain>' .`
   The reader fixtures use `user@example.com`; keep that exclusion in the CI grep.
 - **Nothing that resembles a relay.** This runs official clients, one sign-in per
-  account. Do not add token multiplexing, proxying or anything that presents one
+  account. Grok Bot is the exception: it has no client to run and uses Cursor's
+  API with the user's own Cursor API key, created by the user, never a session
+  or OAuth token. One account per key, with no relay or multiplexing.
+  Do not add token multiplexing, proxying or anything that presents one
   endpoint spending several subscriptions. That is the architecture that draws
   enforcement, and it would make the tool unpublishable.
 - **Never read an OAuth token.** Usage comes from driving the vendor's own client
@@ -39,6 +42,13 @@ policy greps.
 
 Do not "simplify" these away; each cost real debugging time.
 
+- Grok Bot session lookup by name creates an empty bot when the name does not
+  match the app. Refuse a newly created session before sending.
+- Grok Bot routes answer on api.cursor.com and return 404 on api2. Cursor
+  withdrew the official client from `@grok/agent-sdk` 0.2.29 on 23 October 2026.
+- Grok Bot can return null `queued` and `inFlight`. Treat them as zero and false.
+  A slow-starting bot can report idle before picking up a message; no reply
+  without a busy turn means collect with `check`, never resend.
 - Setting `CLAUDE_CONFIG_DIR=$HOME/.claude` breaks auth. Only set it for non-default profiles.
 - A sign-in completes against whichever account the browser already holds and ignores `--email`.
 - `jq '.x // empty'` returns empty for `false`. Booleans need `cfgbool`.

@@ -165,8 +165,6 @@ its hooks, restore the previous status line and unload its refresh agent.
 The shared configuration, history, sign-ins and archived legacy files remain
 until you choose to remove them.
 
-MIT. See [LICENSE](LICENSE).
-
 ## Grok Bot (experimental)
 
 Grok Bot is an **experimental** destination for existing persistent agents in
@@ -181,5 +179,8 @@ sending it. Review restrictions are instructions and cannot be enforced remotely
 The bot receives message context, not access to the caller's files.
 
 The local fake-server tests cover named delegation, busy refusal, reply collection,
-private cursors, timeout recovery, identity checks and key redaction. No live
-Grok Bot verification is claimed here. There is no usage panel or picker integration.
+private cursors, timeout recovery, identity checks and key redaction. Grok Bot was
+verified live on macOS on 26 October 2026 (setup, status, read, delegation, the
+unknown-name refusal, and no key in logs). There is no usage panel or picker integration.
+
+MIT. See [LICENSE](LICENSE).

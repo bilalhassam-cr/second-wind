@@ -410,6 +410,7 @@ Setup verifies `/v0/me`, stores its email as `expected_email`, and backs up an
 existing config before writing. It does not contact a bot. Confirm names with
 `grokbot bots` before delegating. There is no create-bot command: the undocumented
 name lookup itself can create an empty bot if the spelling is wrong. A recent
-empty bot produces a warning. Bots act as the user through connected apps;
+empty bot is refused before sending: nothing sent. The user may want to delete
+the empty bot in the app. Bots act as the user through connected apps;
 show any message you composed to the user before sending it and delegate only
 the authorised task. Review restrictions cannot be enforced remotely.

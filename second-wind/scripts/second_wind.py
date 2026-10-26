@@ -30,6 +30,10 @@ VENDOR_KEYS = (
 )
 
 
+class GrokBotRefused(RuntimeError):
+    pass
+
+
 class WindError(RuntimeError):
     pass
 
@@ -118,9 +122,12 @@ def account(config: dict[str, Any], name: str) -> dict[str, Any]:
             raise WindError("Grok Bot api_key_env must name an environment variable")
         bots = value.get("bots")
         if (not isinstance(bots, list) or not bots or
-                any(not isinstance(bot, str) or not bot.strip() for bot in bots) or
+                any(not isinstance(bot, str) or not bot.strip() or bot != bot.strip() for bot in bots) or
                 len({bot.casefold() for bot in bots}) != len(bots)):
-            raise WindError("Grok Bot bots must be distinct non-empty names")
+            raise WindError("Grok Bot bots must be distinct non-empty names with no surrounding spaces")
+        default = value.get("default_bot")
+        if not isinstance(default, str) or default != default.strip():
+            raise WindError("Grok Bot default_bot must have no surrounding spaces")
         grokbot_name(value)
     return dict(value, _role=name)
 
@@ -351,6 +358,11 @@ def record_exchange(
     text = text.replace("## Prompt sent", f"- Sandbox: {sandbox}\n- Browser guard applied: {'yes' if guard else 'no'}\n"
                         f"- Credentials cleared: {' '.join(cleared)}\n"
                         f"- Credentials kept: {kept_note}\n\n## Prompt sent", 1)
+    if kind == "grokbot":
+        source = profile.get("api_key_env") or profile.get("api_key_file")
+        text = re.sub(r"- Credentials cleared:.*\n- Credentials kept:.*\n",
+                      lambda match: "- No subprocess is started.\n- Credentials kept: " + source +
+                      ", used to authenticate to api.cursor.com\n", text, count=1)
     cap = int((config.get("log") or {}).get("max_exchange_kb", 200)) * 1024
     if len(text.encode()) > cap:
         text = text.encode()[:cap].decode("utf-8", errors="ignore") + "\n[Exchange capped on disk; stdout was complete.]\n"
@@ -391,7 +403,8 @@ def command_status(args: argparse.Namespace) -> int:
         except (WindError, OSError, subprocess.SubprocessError) as exc:
             failed = True
             canonical = config.get("aliases", {}).get(name, name)
-            state = "NOT READY" if config["accounts"].get(canonical, {}).get("kind") == "grokbot" else "BLOCKED"
+            state = "NOT READY" if (config["accounts"].get(canonical, {}).get("kind") == "grokbot"
+                                     and ("key is missing" in str(exc) or "401" in str(exc))) else "BLOCKED"
             print(f"{state} {name:<19} {exc}")
     return 3 if failed else 0
 
@@ -528,12 +541,17 @@ def command_migrate(args: argparse.Namespace) -> int:
 
 
 def command_run(args: argparse.Namespace) -> int:
-    config = load_config()
-    profile = account(config, args.account)
+    try:
+        config = load_config()
+        profile = account(config, args.account)
+    except (WindError, OSError, ValueError) as exc:
+        raise WindError(str(exc) + "; nothing sent") from None
     if profile.get("kind") == "grokbot":
         return run_grokbot(args, config, profile)
     if args.bot:
         raise WindError("--bot is only available for Grok Bot")
+    if not (args.review or args.work):
+        raise WindError("run requires --review or --work")
     status = auth_status(profile)
     workspace = Path(args.workspace).expanduser().resolve()
     prompt_path = Path(args.prompt_file).expanduser().resolve()
@@ -678,6 +696,14 @@ def command_run(args: argparse.Namespace) -> int:
     return returncode
 
 
+class GrokBotNotIssued(WindError):
+    """The deadline passed before the request was issued."""
+
+
+class GrokBotTransient(WindError):
+    """The server may have accepted a request whose response was lost."""
+
+
 class GrokBot:
     """The withdrawn client's conversation routes, one configured bot per call."""
 
@@ -688,6 +714,8 @@ class GrokBot:
             self.key = os.environ.get(variable, "").strip()
         else:
             path = Path(profile["api_key_file"]).expanduser()
+            if not path.exists():
+                raise WindError("Grok Bot key is missing; check the configured key file")
             if path.stat().st_mode & 0o777 != 0o600 or not path.is_file():
                 raise WindError("Grok Bot key file must be a regular chmod 600 file")
             self.key = path.read_text().strip()
@@ -712,6 +740,8 @@ class GrokBot:
         if body is not None:
             headers["content-type"] = "application/json"
             data = json.dumps(body).encode()
+        if deadline is not None and time.monotonic() >= deadline:
+            raise GrokBotNotIssued("Grok Bot deadline reached before request")
         timeout = 60 if deadline is None else min(60, max(0.001, deadline - time.monotonic()))
         request = urllib.request.Request(self.base + route, data=data, headers=headers)
         class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -726,6 +756,8 @@ class GrokBot:
                 raise ValueError("expected an object")
             return result
         except urllib.error.HTTPError as exc:
+            if route.endswith("/messages") and 400 <= exc.code < 500:
+                raise GrokBotRefused(str(exc.code)) from None
             if exc.code == 404:
                 raise WindError("Grok Bot route returned 404; Cursor may have withdrawn the routes") from None
             if exc.code == 401:
@@ -735,12 +767,15 @@ class GrokBot:
                 detail = error.get("error") or error.get("message") or "request failed"
             except (ValueError, AttributeError):
                 detail = "request failed"
-            raise WindError(self.scrub(f"Grok Bot HTTP {exc.code}: {detail}")) from None
-        except (OSError, ValueError, http.client.HTTPException) as exc:
-            raise WindError(self.scrub(f"Grok Bot request failed: {exc}")) from None
+            error_type = GrokBotTransient if exc.code >= 500 else WindError
+            raise error_type(self.scrub(f"Grok Bot HTTP {exc.code}: {detail}")) from None
+        except ValueError as exc:
+            raise WindError(self.scrub(f"Grok Bot malformed response: {exc}")) from None
+        except (OSError, http.client.HTTPException) as exc:
+            raise GrokBotTransient(self.scrub(f"Grok Bot request failed: {exc}")) from None
 
-    def identity(self):
-        result = self.request("/v0/me")
+    def identity(self, deadline=None):
+        result = self.request("/v0/me", deadline=deadline)
         email = str(result.get("userEmail") or "")
         if not email:
             raise WindError("Grok Bot identity response has no email")
@@ -748,17 +783,18 @@ class GrokBot:
         if expected and expected.casefold() != email.casefold():
             raise WindError(self.scrub(f"Grok Bot identity mismatch: expected {expected}, got {email}"))
         return {"email": self.scrub(email), "authMethod": "grokbot", "subscriptionType": "Grok Bot",
-                "identity_verified": True}
+                "identity_verified": bool(expected)}
 
-    def session(self, bot):
-        result = self.request("/v0/grokbot/sessions", {"name": bot})
-        if not result.get("id"):
-            raise WindError("Grok Bot session response has no id")
-        created = result.get("createdAtMs", 0)
-        warning = ""
-        if str(result.get("latestUpdatedSeq")) == "-1" and 0 <= time.time() * 1000 - float(created) < 120000:
-            warning = "Grok Bot looks newly created; check the exact name in the app before continuing."
-        return result, warning
+    def session(self, bot, deadline=None):
+        result = self.request("/v0/grokbot/sessions", {"name": bot}, deadline)
+        if not result.get("id") or result.get("latestUpdatedSeq") is None:
+            raise WindError("Grok Bot malformed session response")
+        created = result.get("createdAtMs")
+        if str(result["latestUpdatedSeq"]) == "-1" and (created is None or
+                abs(time.time() * 1000 - float(created)) < 120000):
+            raise WindError("Cursor created an empty bot under that name; the configured name probably "
+                            "does not match the app. You may want to delete the empty bot in the app.")
+        return result, ""
 
     def route(self, session, suffix):
         from urllib.parse import quote
@@ -766,10 +802,15 @@ class GrokBot:
 
     def page(self, session, cursor, deadline=None):
         from urllib.parse import urlencode
-        return self.request(self.route(session, "entries?") + urlencode({"afterUpdatedSeq": cursor}), deadline=deadline)
+        route = self.route(session, "entries?") + urlencode({"afterUpdatedSeq": cursor})
+        try:
+            return self.request(route, deadline=deadline)
+        except GrokBotTransient:
+            return self.request(route, deadline=deadline)
 
     def collect(self, session, cursor, deadline, confirm=True, checkpoint=None):
         texts, idle_count, saw_busy = [], 0, False
+        self.saw_busy = False
         interval = max(0.001, float(os.environ.get("SW_GROKBOT_POLL_SECONDS", "2")))
         while time.monotonic() < deadline:
             try:
@@ -778,17 +819,27 @@ class GrokBot:
                 if time.monotonic() >= deadline:
                     return "\n\n".join(texts), cursor, False
                 raise
+            if page.get("latestUpdatedSeq") is None or not isinstance(page.get("entries"), list):
+                raise WindError("Grok Bot malformed reply page")
+            if (any(not isinstance(entry, dict) for entry in page["entries"]) or
+                    not isinstance(page.get("turn") or {}, dict)):
+                raise WindError("Grok Bot malformed reply page")
+            try:
+                int(page["latestUpdatedSeq"])
+            except (ValueError, TypeError):
+                raise WindError("Grok Bot malformed reply sequence") from None
             cursor = str(page["latestUpdatedSeq"])
             entries = page.get("entries", [])
             texts.extend(entry["text"] for entry in entries
                          if entry.get("kind") == "send-message" and isinstance(entry.get("text"), str))
             if checkpoint:
-                checkpoint(cursor)
+                checkpoint(cursor, texts)
             turn = page.get("turn") or {}
-            busy = bool(turn.get("inFlight") or turn.get("queued", 0) > 0)
+            busy = bool(turn.get("inFlight") or (turn.get("queued") or 0) > 0)
             saw_busy = saw_busy or busy
+            self.saw_busy = saw_busy
             if not confirm and busy:
-                raise WindError("Grok Bot is busy with an earlier turn; nothing sent. Use check or interrupt.")
+                raise WindError("Grok Bot is busy with an earlier turn. Use read for turns started in the app, or interrupt when asked.")
             idle = not entries and not busy and turn.get("idle") is True
             idle_count = idle_count + 1 if idle else 0
             if idle_count >= (1 if not confirm or saw_busy else 4):
@@ -822,79 +873,234 @@ def save_grokbot_state(path, data):
         Path(temporary).unlink(missing_ok=True)
 
 
+def grokbot_outcome(phase, interrupted=False, rejected=None, settled=False, text=False, busy=False):
+    if phase == "before":
+        return (130 if interrupted else 2), "Nothing sent.\n"
+    if phase == "sending":
+        if rejected is not None:
+            return 2, f"Nothing sent: Cursor rejected the message ({rejected}).\n"
+        return (130 if interrupted else 124), "The message may have been delivered. Collect with check; never resend.\n"
+    if interrupted:
+        return 130, "Delivered. Collect with check; never resend.\n"
+    if settled and text:
+        return 0, ""
+    if settled and busy:
+        return 4, "Delivered; the bot finished without replying. Never resend.\n"
+    return 124, "Delivered. Collect with check; never resend.\n"
+
+
 def run_grokbot(args, config, profile):
-    import uuid
-    bot = grokbot_name(profile, args.bot)
-    if args.model or args.effort:
-        raise WindError("Grok Bot does not support --model or --effort")
-    workspace = Path(args.workspace).expanduser().resolve()
-    if not workspace.is_dir():
-        raise WindError("workspace is not a directory")
-    prompt = Path(args.prompt_file).expanduser().read_text()
-    if not prompt.strip():
-        raise WindError("prompt file is empty")
-    timeout = args.timeout if args.timeout is not None else int(config.get("timeout_seconds", 7200))
-    if timeout <= 0:
-        raise WindError("timeout must be a positive number of seconds")
-    client = GrokBot(profile)
-    status = client.identity()
-    mode = "work" if args.work else "review"
-    prompt = "Everything you need is in this message; you cannot see the caller's files.\n\n" + prompt
-    diagnostics = ""
-    if mode == "review":
-        prompt = ("Report only. Do not send, post, buy, delete, contact anyone or change anything.\n\n" + prompt)
-        diagnostics = "Review restriction is an instruction only, not enforced on the remote bot.\n"
-    path = exchange_path(config, args.account, workspace)
-    path.touch(mode=0o600, exist_ok=False)
-    started = time.monotonic()
-    deadline = started + timeout
-    output, code = "", 2
+    phase, rejected, was_interrupted = "before", None, False
+    client, state, path = None, None, None
+    output, diagnostics, settled = "", "", False
+    previous_int = signal.getsignal(signal.SIGINT)
+    previous_term = signal.getsignal(signal.SIGTERM)
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupted)
     try:
-        session, warning = client.session(bot)
-        if warning:
-            diagnostics += warning + "\n"
-            print(warning, file=sys.stderr)
-        _, cursor, settled = client.collect(session, "-1", deadline, confirm=False)
-        if not settled:
-            raise WindError("Grok Bot did not become idle; nothing sent")
-        state_path = grokbot_state(profile, bot)
-        state = {"cursor": cursor, "session": session, "workspace": str(workspace), "mode": mode}
-        save_grokbot_state(state_path, state)
-        result = client.request(client.route(session, "messages"), {"text": prompt, "messageId": str(uuid.uuid4())}, deadline)
-        if result.get("delivery") not in ("accepted_temporal", "duplicate"):
-            raise WindError("Grok Bot message was not accepted: " + str(result.get("delivery")))
-        def checkpoint(cursor):
-            state["cursor"] = cursor
+        try:
+            import uuid
+            bot = grokbot_name(profile, args.bot)
+            if args.model or args.effort:
+                raise WindError("Grok Bot does not support --model or --effort")
+            workspace = Path(args.workspace).expanduser().resolve()
+            if not workspace.is_dir():
+                raise WindError("workspace is not a directory")
+            prompt = Path(args.prompt_file).expanduser().read_text()
+            if not prompt.strip():
+                raise WindError("prompt file is empty")
+            timeout = args.timeout if args.timeout is not None else int(config.get("timeout_seconds", 7200))
+            if timeout <= 0:
+                raise WindError("timeout must be a positive number of seconds")
+            client = GrokBot(profile)
+            status = {"email": "unknown", "authMethod": "grokbot"}
+            mode = "work" if args.work else "review"
+            prompt = "Everything you need is in this message; you cannot see the caller's files.\n\n" + prompt
+            diagnostics = ""
+            if mode == "review":
+                prompt = ("Report only. Do not send, post, buy, delete, contact anyone or change anything.\n\n" + prompt)
+                diagnostics = "Review restriction is an instruction only, not enforced on the remote bot.\n"
+            path = exchange_path(config, args.account, workspace)
+            path.touch(mode=0o600, exist_ok=False)
+            started = time.monotonic()
+            deadline = started + timeout
+            output, settled = "", False
+            status = client.identity(deadline)
+            state_path = grokbot_state(profile, bot)
+            if state_path.exists():
+                previous = json.loads(state_path.read_text())
+                if previous.get("unread"):
+                    raise WindError("unread replies from the last run; run check first")
+                if previous.get("open"):
+                    raise WindError("an earlier message has not been collected; run check first")
+            session, _ = client.session(bot, deadline)
+            _, cursor, settled = client.collect(session, str(session["latestUpdatedSeq"]), deadline, confirm=False)
+            if not settled:
+                raise WindError("Grok Bot did not become idle")
+            state = {"cursor": cursor, "session": json.loads(client.scrub(json.dumps(session))),
+                     "workspace": str(workspace), "mode": mode, "unread": []}
             save_grokbot_state(state_path, state)
-        output, cursor, settled = client.collect(session, cursor, deadline, checkpoint=checkpoint)
-        state["cursor"] = cursor
-        save_grokbot_state(state_path, state)
-        code = (0 if output.strip() else 4) if settled else 124
-    except (WindError, ValueError, KeyError, TypeError) as exc:
-        code = 124 if time.monotonic() >= deadline else 2
-        diagnostics += client.scrub(exc) + "\n"
-    return finish_grokbot(client, config, profile, status, path, workspace, mode, prompt,
-                          output, code, started, diagnostics, bot)
+            settled = False
+            if time.monotonic() >= deadline:
+                raise GrokBotNotIssued("Grok Bot deadline reached before request")
+            # Record the marker before entering the sending phase: a failed save
+            # must still read as nothing sent.
+            state["open"] = True
+            save_grokbot_state(state_path, state)
+            phase = "sending"
+            result = client.request(client.route(session, "messages"), {"text": prompt, "messageId": str(uuid.uuid4())}, deadline)
+            if result.get("delivery") not in ("accepted_temporal", "duplicate"):
+                raise WindError("Grok Bot message was not accepted: " + str(result.get("delivery")))
+            phase = "after"
+            def checkpoint(cursor, texts):
+                state.update(cursor=cursor, unread=[client.scrub(text) for text in texts])
+                save_grokbot_state(state_path, state)
+            output, cursor, settled = client.collect(session, cursor, deadline, checkpoint=checkpoint)
+        except GrokBotNotIssued as exc:
+            phase = "before"
+            diagnostics += str(exc) + "\n"
+        except GrokBotRefused as exc:
+            rejected = str(exc)
+        except KeyboardInterrupt:
+            was_interrupted = True
+            diagnostics += "Interrupted.\n"
+        except Exception as exc:
+            settled = False
+            diagnostics += (client.scrub(exc) if client else str(exc)) + "\n"
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        if state:
+            output = "\n\n".join(state.get("unread", []))
+        code, delivery = grokbot_outcome(phase, was_interrupted, rejected, settled, bool(output.strip()),
+                                        getattr(client, "saw_busy", False))
+        try:
+            if client and path:
+                finish_grokbot(client, config, profile, status, path, workspace, mode, prompt,
+                               output, code, started, diagnostics, bot, delivery=delivery)
+                if state:
+                    if not was_interrupted:
+                        state["unread"] = []
+                    # In a run, exit 2 and an interrupt before sending both mean
+                    # nothing went out, so no message is left to collect.
+                    if code in (0, 2, 4) or phase == "before":
+                        state["open"] = False
+                    save_grokbot_state(state_path, state)
+            elif diagnostics:
+                print(diagnostics.rstrip(), file=sys.stderr)
+        except (Exception, KeyboardInterrupt) as exc:
+            was_interrupted = was_interrupted or isinstance(exc, KeyboardInterrupt)
+            code, delivery = grokbot_outcome(phase, was_interrupted, rejected)
+            print(client.scrub(exc) if client else str(exc), file=sys.stderr)
+        print(delivery, file=sys.stderr, end="")
+        return code
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGINT, previous_int)
 
 
 def finish_grokbot(client, config, profile, status, path, workspace, mode, prompt,
-                   output, code, started, diagnostics, bot):
-    if code == 124:
-        diagnostics += (f"Bot may still be working. Collect the rest with grokbot {profile['_role']} "
-                        f"check --bot {bot!r}; never resend the task.\n")
+                   output, code, started, diagnostics, bot, printed="", delivery=""):
     if code == 4:
         diagnostics += "Grok Bot returned an empty reply.\n"
     output, prompt, diagnostics = map(client.scrub, (output, prompt, diagnostics))
     record_exchange(path, name=profile["_role"], profile=profile, status=status,
                     workspace=workspace, mode=mode, command=["grokbot", bot], prompt=prompt,
                     output=output, returncode=code, elapsed=time.monotonic() - started,
-                    diagnostics=diagnostics, config=config)
+                    diagnostics=diagnostics + delivery, config=config)
     if output:
-        print(output)
+        remaining = output[len(client.scrub(printed)):].lstrip("\n") if printed else output
+        if remaining:
+            print(remaining)
     if diagnostics:
         print(diagnostics.rstrip(), file=sys.stderr)
     print(f"second-wind: exchange {path}", file=sys.stderr)
     return code
+
+
+def check_grokbot(args):
+    started = time.monotonic()
+    client, state = None, None
+    diagnostics, status = "", {"email": "unknown", "authMethod": "grokbot"}
+    phase = "waiting"
+    previous_int = signal.getsignal(signal.SIGINT)
+    previous_term = signal.getsignal(signal.SIGTERM)
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        try:
+            config = load_config()
+            name = args.account
+            if not name:
+                names = [name for name, value in config["accounts"].items() if value.get("kind") == "grokbot"]
+                if len(names) != 1:
+                    raise WindError("specify a Grok Bot account; choose one of: " + ", ".join(names))
+                name = names[0]
+            profile = account(config, name)
+            if profile.get("kind") != "grokbot":
+                raise WindError("account is not a Grok Bot destination")
+            bot = grokbot_name(profile, args.bot)
+            state_path = grokbot_state(profile, bot)
+            if args.wait < 0:
+                raise WindError("wait must not be negative")
+            if not state_path.exists():
+                raise WindError("no saved cursor for this bot; use read for recent conversation")
+            state = json.loads(state_path.read_text())
+            client = GrokBot(profile)
+            status = client.identity(started + args.wait)
+            unread = list(state.get("unread", []))
+            def checkpoint(cursor, texts):
+                state.update(cursor=cursor, unread=unread + [client.scrub(text) for text in texts])
+                save_grokbot_state(state_path, state)
+            _, _, settled = client.collect(state["session"], state["cursor"], started + args.wait, checkpoint=checkpoint)
+            phase = "settled" if settled else "waiting"
+        except KeyboardInterrupt:
+            phase, diagnostics = ("interrupted" if state is not None else "interrupted-usage"), "Interrupted.\n"
+        except Exception as exc:
+            phase, diagnostics = ("error" if state is not None else "usage"), (client.scrub(exc) if client else str(exc)) + "\n"
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        texts = "\n\n".join(state.get("unread", [])) if state else ""
+        outcomes = {
+            "usage": (2, ""),
+            "settled": (0, "" if texts else "no new replies; the bot is idle\n"),
+            "waiting": (124, "more may follow; check again; never resend\n" if texts else
+                        "still working, nothing new yet; check again later; never resend\n"),
+            "error": (124, "the earlier message was delivered; check again; never resend\n"),
+            "interrupted": (130, "the earlier message was delivered; check again; never resend\n"),
+            "interrupted-usage": (130, ""),
+        }
+        code, delivery = outcomes[phase]
+        try:
+            if texts or phase == "error":
+                if client is None:
+                    class KeyFreeScrub:
+                        def scrub(self, value):
+                            return str(value)
+                    client = KeyFreeScrub()
+                workspace = Path(state["workspace"]) if state else Path.cwd()
+                path = exchange_path(config, profile["_role"], workspace)
+                finish_grokbot(client, config, profile, status, path, workspace,
+                               state.get("mode", "review") if state else "review",
+                               "Collect replies after the saved cursor; no message sent.",
+                               texts, code, started, diagnostics, bot, delivery=delivery)
+            elif diagnostics:
+                print(diagnostics.rstrip(), file=sys.stderr)
+            if client and state and phase != "interrupted":
+                state["unread"] = []
+                if phase == "settled":
+                    state["open"] = False
+                save_grokbot_state(state_path, state)
+        except (Exception, KeyboardInterrupt) as exc:
+            phase = "interrupted" if isinstance(exc, KeyboardInterrupt) else "error"
+            code, delivery = outcomes[phase]
+            print(client.scrub(exc), file=sys.stderr)
+        print(delivery, end="", file=sys.stderr if code else sys.stdout)
+        return code
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGINT, previous_int)
 
 
 def command_grokbot(args):
@@ -923,6 +1129,8 @@ def command_grokbot(args):
         write_config(data)
         print("Grok Bot account configured: " + name)
         return 0
+    if args.action == "check":
+        return check_grokbot(args)
     config = load_config()
     name = args.account
     if not name:
@@ -939,30 +1147,6 @@ def command_grokbot(args):
     bot = grokbot_name(profile, args.bot)
     client = GrokBot(profile)
     status = client.identity()
-    state_path = grokbot_state(profile, bot)
-    if args.action == "check":
-        if args.wait < 0:
-            raise WindError("wait must not be negative")
-        if not state_path.exists():
-            raise WindError("no saved cursor for this bot; use read for recent conversation")
-        state = json.loads(state_path.read_text())
-        started = time.monotonic()
-        workspace = Path(state["workspace"])
-        path = exchange_path(config, profile["_role"], workspace)
-        def checkpoint(cursor):
-            state["cursor"] = cursor
-            save_grokbot_state(state_path, state)
-        output, diagnostics, code = "", "", 2
-        try:
-            output, cursor, settled = client.collect(state["session"], state["cursor"], started + max(args.wait, 0.1), checkpoint=checkpoint)
-            state["cursor"] = cursor
-            save_grokbot_state(state_path, state)
-            code = (0 if output.strip() else 4) if settled else 124
-        except (WindError, ValueError, KeyError, TypeError) as exc:
-            diagnostics = client.scrub(exc)
-        return finish_grokbot(client, config, profile, status, path, workspace, state["mode"],
-                              "Collect replies after the saved cursor; no message sent.", output,
-                              code, started, diagnostics, bot)
     session, warning = client.session(bot)
     if warning:
         print(warning, file=sys.stderr)

@@ -387,12 +387,42 @@ Your accounts, their logins and their own settings are untouched throughout.
 - **404:** Cursor may have withdrawn the undocumented routes. Stop and report
   this; do not retry through another host or switch to a different API.
 - **Busy:** an earlier turn is still running. Nothing was sent. Use `grokbot
-  ACCOUNT check --bot NAME --wait 30` to collect it, or `interrupt` when asked.
+  ACCOUNT read --bot NAME` for turns started in the app, or `interrupt` when asked.
+  `check` collects only runs second-wind started.
 - **Unexpectedly created bot:** the name lookup can create an empty bot. Check
-  the exact name in the app and correct the configured list. There is no `--new`.
+  the exact name in the app and correct the configured list. Nothing is sent; you
+  may want to delete the empty bot in the app. There is no `--new`.
 - **Exit 124:** the bot may still be working. Partial replies are printed and
   recorded. Use `grokbot ACCOUNT check --bot NAME --wait 30` for the rest; never
   resend the task. A saved cursor prevents already collected replies reappearing.
 - **NOT READY:** set the configured key variable or check that the key file is
   chmod 600. A 401 means the key was rejected. An identity mismatch blocks run;
   verify the intended account before deliberately updating its pin.
+
+For `run`, every failure before the messages request exits 2 and says nothing
+was sent (130 for an interruption). A 4xx from the messages route also exits 2:
+Cursor rejected the message. Any other failure during that request exits 124
+(130 if interrupted): the message may have been delivered. Collect with `check`;
+never resend it, including after an unreadable response or unexpected delivery.
+After acceptance, a settled turn with reply text exits 0. A settled turn that
+was seen busy but finished without replying exits 4: delivered, never resend.
+Every other accepted outcome exits 124 (130 if interrupted), including polling,
+recording errors and an idle turn that never showed busy. It was delivered;
+collect with `check`, never resend. Unread replies block a new run until checked.
+
+For `check`, a usage error (config cannot load, unknown account, unknown or
+misspelt `--bot`, no saved state for this bot, or negative `--wait`) exits 2
+with a plain message and no delivery claim: nothing about delivery is known.
+All other outcomes below apply after the state file is loaded.
+
+For `check`, a settled turn exits 0 and prints its replies, or says
+"no new replies; the bot is idle". A turn still working exits 124: with text,
+"more may follow; check again; never resend"; without text,
+"still working, nothing new yet; check again later; never resend".
+Any error exits 124 and says the earlier message was delivered: check again,
+never resend. An interruption exits 130 and keeps unread replies for the next
+check. Checks with no reply text and no error write no exchange or ledger line.
+
+A run with an earlier message still open refuses a new task: run `check` first.
+The marker clears when the run finishes with exit 0 or 4, or `check` settles.
+Unread replies also require `check` before another run.
