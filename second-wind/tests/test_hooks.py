@@ -186,7 +186,9 @@ class Base(unittest.TestCase):
         while time.time() < deadline:
             if os.path.exists(path):
                 with open(path) as handle:
-                    return handle.read()
+                    text = handle.read()
+                if text.endswith("\n"):
+                    return text
             time.sleep(0.05)
         self.fail("%s never appeared" % name)
 
