@@ -390,3 +390,26 @@ use `grok` and `cursor-agent`, never `agent`.
 ## Terms of use
 
 Covered once, in the README. Read it before installing.
+
+## Grok Bot (experimental)
+
+Create a Cursor user API key in the Cursor dashboard. Store it in an environment
+variable, or in a private file with `chmod 600`; do not paste it into a prompt,
+config or command argument. This uses a user API key, never an OAuth token.
+Ask the user for the exact existing bot names as the Grok Bot app shows them.
+Then run non-interactive setup with the chosen key source:
+
+```bash
+python3 "$SW/scripts/second_wind.py" grokbot setup --account grokbot \
+  --key-env CURSOR_API_KEY --bots "Assistant,Research" --default Assistant --label "Grok Bot"
+# Alternative key source: --key-file ~/.config/second-wind/cursor-key
+python3 "$SW/scripts/second_wind.py" status grokbot
+```
+
+Setup verifies `/v0/me`, stores its email as `expected_email`, and backs up an
+existing config before writing. It does not contact a bot. Confirm names with
+`grokbot bots` before delegating. There is no create-bot command: the undocumented
+name lookup itself can create an empty bot if the spelling is wrong. A recent
+empty bot produces a warning. Bots act as the user through connected apps;
+show any message you composed to the user before sending it and delegate only
+the authorised task. Review restrictions cannot be enforced remotely.

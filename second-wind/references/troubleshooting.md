@@ -381,3 +381,18 @@ is a manual file copy. It prints the two workdir trust entries to delete by hand
 because editing those files while a client is running risks corrupting them.
 
 Your accounts, their logins and their own settings are untouched throughout.
+
+## Grok Bot
+
+- **404:** Cursor may have withdrawn the undocumented routes. Stop and report
+  this; do not retry through another host or switch to a different API.
+- **Busy:** an earlier turn is still running. Nothing was sent. Use `grokbot
+  ACCOUNT check --bot NAME --wait 30` to collect it, or `interrupt` when asked.
+- **Unexpectedly created bot:** the name lookup can create an empty bot. Check
+  the exact name in the app and correct the configured list. There is no `--new`.
+- **Exit 124:** the bot may still be working. Partial replies are printed and
+  recorded. Use `grokbot ACCOUNT check --bot NAME --wait 30` for the rest; never
+  resend the task. A saved cursor prevents already collected replies reappearing.
+- **NOT READY:** set the configured key variable or check that the key file is
+  chmod 600. A 401 means the key was rejected. An identity mismatch blocks run;
+  verify the intended account before deliberately updating its pin.

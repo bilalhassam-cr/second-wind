@@ -1,6 +1,6 @@
 ---
 name: second-wind
-description: Delegate a task from Claude Code or Codex to a named Claude, Codex, Grok or Cursor account for independent review or authorised implementation. Use for a second opinion, another subscription, announced task-boundary handover, account checks, or Second Wind setup.
+description: Delegate a task from Claude Code or Codex to a named Claude, Codex, Grok, Cursor or Grok Bot account for independent review or authorised implementation. Use for a second opinion, another subscription, announced task-boundary handover, account checks, or Second Wind setup.
 ---
 
 # Second Wind
@@ -95,3 +95,28 @@ configured, `setup.py --card` shows their cached usage; present that panel verba
 Accounts configured only under `accounts` do not have usage-panel integration. Routing a future task remains the caller's
 decision; nothing silently rotates accounts. `/second-wind off` in Claude Code
 clears its route. A direct Codex delegation lasts for the one requested task.
+
+## Grok Bot
+
+Grok Bot is an experimental destination for existing persistent bots, separate
+from Grok Build. Bots act as the user: delegate only what the user asked for,
+and show the user any message you composed yourself before sending it. Ask for
+the exact bot names shown in the app before non-interactive setup; read
+[setup.md](references/setup.md). Never read an OAuth token or put a key in config.
+
+```bash
+python3 "$SW/scripts/second_wind.py" run grokbot --bot Assistant \
+  --prompt-file /absolute/path/to/prompt.txt --workspace /absolute/path/to/project --review
+python3 "$SW/scripts/second_wind.py" grokbot bots
+python3 "$SW/scripts/second_wind.py" grokbot read --bot Assistant --last 10
+python3 "$SW/scripts/second_wind.py" grokbot check --bot Assistant --wait 30
+python3 "$SW/scripts/second_wind.py" grokbot interrupt --bot Assistant
+```
+
+Include all needed context in the message: the bot cannot see local files.
+Review is a report-only instruction, not enforced on the remote bot. The runner
+refuses a bot busy with an earlier turn. Exit 124 means it may still be working;
+use `check` to collect the rest, never resend. Each run and check uses the shared
+exchange and ledger. Conversation commands accept an account before the action;
+it can be omitted when only one Grok Bot account is configured. Bot names must
+match the configured list, ignoring case. No usage panel or picker is available.

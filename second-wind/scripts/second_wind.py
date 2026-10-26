@@ -100,7 +100,7 @@ def account(config: dict[str, Any], name: str) -> dict[str, Any]:
         choices = ", ".join(sorted(config["accounts"]))
         raise WindError(f"unknown account {name!r}; choose one of: {choices}")
     kind = value.get("kind", "claude")
-    if kind not in ("claude", "codex", "grok", "cursor"):
+    if kind not in ("claude", "codex", "grok", "cursor", "grokbot"):
         raise WindError(f"unsupported client kind: {kind}")
     required = ("label", "config_dir", "expected_email") if kind == "claude" else ("label",)
     for key in required:
@@ -108,6 +108,20 @@ def account(config: dict[str, Any], name: str) -> dict[str, Any]:
             raise WindError(f"account {name!r} is missing {key}")
     if kind == "codex" and not value.get("config_dir"):
         raise WindError(f"account {name!r} needs its own config_dir")
+    if kind == "grokbot":
+        sources = [key for key in ("api_key_env", "api_key_file") if value.get(key)]
+        if len(sources) != 1 or not isinstance(value[sources[0]], str):
+            raise WindError("Grok Bot needs exactly one api_key_env or api_key_file")
+        if value.get("expected_email") is not None and not isinstance(value["expected_email"], str):
+            raise WindError("Grok Bot expected_email must be a string")
+        if value.get("api_key_env") and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value["api_key_env"]):
+            raise WindError("Grok Bot api_key_env must name an environment variable")
+        bots = value.get("bots")
+        if (not isinstance(bots, list) or not bots or
+                any(not isinstance(bot, str) or not bot.strip() for bot in bots) or
+                len({bot.casefold() for bot in bots}) != len(bots)):
+            raise WindError("Grok Bot bots must be distinct non-empty names")
+        grokbot_name(value)
     return dict(value, _role=name)
 
 
@@ -144,6 +158,8 @@ def claude_binary() -> str:
 
 def auth_status(profile: dict[str, Any]) -> dict[str, Any]:
     kind = profile.get("kind", "claude")
+    if kind == "grokbot":
+        return GrokBot(profile).identity()
     if kind != "claude":
         return other_auth_status(profile, kind)
     proc = subprocess.run(
@@ -326,7 +342,8 @@ def record_exchange(
                "none, bypassPermissions" if kind == "claude" else
                "read-only" if kind == "codex" and mode == "review" else
                "none, full access" if kind == "codex" and profile.get("full_access") is True else
-               "workspace-write" if kind == "codex" else mode)
+               "workspace-write" if kind == "codex" else
+               "not enforced, remote bot instruction only" if kind == "grokbot" and mode == "review" else mode)
     guard = kind == "codex" and (mode == "review" or profile.get("full_access") is not True)
     kept = "CURSOR_API_KEY" if kind == "cursor" and profile.get("auth") == "api_key" else ""
     cleared = [key for key in (*VENDOR_KEYS, "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY") if key != kept]
@@ -373,7 +390,9 @@ def command_status(args: argparse.Namespace) -> int:
             )
         except (WindError, OSError, subprocess.SubprocessError) as exc:
             failed = True
-            print(f"BLOCKED {name:<19} {exc}")
+            canonical = config.get("aliases", {}).get(name, name)
+            state = "NOT READY" if config["accounts"].get(canonical, {}).get("kind") == "grokbot" else "BLOCKED"
+            print(f"{state} {name:<19} {exc}")
     return 3 if failed else 0
 
 
@@ -511,6 +530,10 @@ def command_migrate(args: argparse.Namespace) -> int:
 def command_run(args: argparse.Namespace) -> int:
     config = load_config()
     profile = account(config, args.account)
+    if profile.get("kind") == "grokbot":
+        return run_grokbot(args, config, profile)
+    if args.bot:
+        raise WindError("--bot is only available for Grok Bot")
     status = auth_status(profile)
     workspace = Path(args.workspace).expanduser().resolve()
     prompt_path = Path(args.prompt_file).expanduser().resolve()
@@ -655,6 +678,309 @@ def command_run(args: argparse.Namespace) -> int:
     return returncode
 
 
+class GrokBot:
+    """The withdrawn client's conversation routes, one configured bot per call."""
+
+    def __init__(self, profile):
+        self.profile = profile
+        variable = profile.get("api_key_env")
+        if variable:
+            self.key = os.environ.get(variable, "").strip()
+        else:
+            path = Path(profile["api_key_file"]).expanduser()
+            if path.stat().st_mode & 0o777 != 0o600 or not path.is_file():
+                raise WindError("Grok Bot key file must be a regular chmod 600 file")
+            self.key = path.read_text().strip()
+        if not self.key:
+            raise WindError("Grok Bot key is missing; set the configured environment variable or key file")
+        self.base = os.environ.get("SW_GROKBOT_BASE_URL", "https://api.cursor.com").rstrip("/")
+        # Test overrides must never send a real key to an arbitrary host.
+        if self.base != "https://api.cursor.com" and not re.fullmatch(r"http://127\.0\.0\.1:[0-9]+", self.base):
+            raise WindError("Grok Bot base URL override must be a loopback test server")
+
+    def scrub(self, value):
+        return str(value).replace(self.key, "[redacted]")
+
+    def request(self, route, body=None, deadline=None):
+        import http.client
+        import urllib.request
+        import urllib.error
+        import uuid
+        headers = {"authorization": "Bearer " + self.key,
+                   "x-cursor-client-type": "agent-serve", "x-request-id": str(uuid.uuid4())}
+        data = None
+        if body is not None:
+            headers["content-type"] = "application/json"
+            data = json.dumps(body).encode()
+        timeout = 60 if deadline is None else min(60, max(0.001, deadline - time.monotonic()))
+        request = urllib.request.Request(self.base + route, data=data, headers=headers)
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, fp, code, message, headers, url):
+                return None
+        try:
+            # Never forward the bearer key to a redirected host.
+            opener = urllib.request.build_opener(NoRedirect)
+            with opener.open(request, timeout=timeout) as response:
+                result = json.load(response)
+            if not isinstance(result, dict):
+                raise ValueError("expected an object")
+            return result
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise WindError("Grok Bot route returned 404; Cursor may have withdrawn the routes") from None
+            if exc.code == 401:
+                raise WindError("Grok Bot key rejected (401 Invalid User API Key)") from None
+            try:
+                error = json.loads(exc.read())
+                detail = error.get("error") or error.get("message") or "request failed"
+            except (ValueError, AttributeError):
+                detail = "request failed"
+            raise WindError(self.scrub(f"Grok Bot HTTP {exc.code}: {detail}")) from None
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            raise WindError(self.scrub(f"Grok Bot request failed: {exc}")) from None
+
+    def identity(self):
+        result = self.request("/v0/me")
+        email = str(result.get("userEmail") or "")
+        if not email:
+            raise WindError("Grok Bot identity response has no email")
+        expected = self.profile.get("expected_email")
+        if expected and expected.casefold() != email.casefold():
+            raise WindError(self.scrub(f"Grok Bot identity mismatch: expected {expected}, got {email}"))
+        return {"email": self.scrub(email), "authMethod": "grokbot", "subscriptionType": "Grok Bot",
+                "identity_verified": True}
+
+    def session(self, bot):
+        result = self.request("/v0/grokbot/sessions", {"name": bot})
+        if not result.get("id"):
+            raise WindError("Grok Bot session response has no id")
+        created = result.get("createdAtMs", 0)
+        warning = ""
+        if str(result.get("latestUpdatedSeq")) == "-1" and 0 <= time.time() * 1000 - float(created) < 120000:
+            warning = "Grok Bot looks newly created; check the exact name in the app before continuing."
+        return result, warning
+
+    def route(self, session, suffix):
+        from urllib.parse import quote
+        return "/v0/grokbot/sessions/" + quote(str(session["id"]), safe="") + "/" + suffix
+
+    def page(self, session, cursor, deadline=None):
+        from urllib.parse import urlencode
+        return self.request(self.route(session, "entries?") + urlencode({"afterUpdatedSeq": cursor}), deadline=deadline)
+
+    def collect(self, session, cursor, deadline, confirm=True, checkpoint=None):
+        texts, idle_count, saw_busy = [], 0, False
+        interval = max(0.001, float(os.environ.get("SW_GROKBOT_POLL_SECONDS", "2")))
+        while time.monotonic() < deadline:
+            try:
+                page = self.page(session, cursor, deadline)
+            except WindError:
+                if time.monotonic() >= deadline:
+                    return "\n\n".join(texts), cursor, False
+                raise
+            cursor = str(page["latestUpdatedSeq"])
+            entries = page.get("entries", [])
+            texts.extend(entry["text"] for entry in entries
+                         if entry.get("kind") == "send-message" and isinstance(entry.get("text"), str))
+            if checkpoint:
+                checkpoint(cursor)
+            turn = page.get("turn") or {}
+            busy = bool(turn.get("inFlight") or turn.get("queued", 0) > 0)
+            saw_busy = saw_busy or busy
+            if not confirm and busy:
+                raise WindError("Grok Bot is busy with an earlier turn; nothing sent. Use check or interrupt.")
+            idle = not entries and not busy and turn.get("idle") is True
+            idle_count = idle_count + 1 if idle else 0
+            if idle_count >= (1 if not confirm or saw_busy else 4):
+                return "\n\n".join(texts), cursor, True
+            time.sleep(min(interval, max(0, deadline - time.monotonic())))
+        return "\n\n".join(texts), cursor, False
+
+
+def grokbot_name(profile, requested=None):
+    requested = requested or profile.get("default_bot")
+    for name in profile["bots"]:
+        if requested and name.casefold() == requested.casefold():
+            return name
+    raise WindError("unknown bot; choose one of: " + ", ".join(profile["bots"]))
+
+
+def grokbot_state(profile, bot):
+    identity = profile["_role"] + "\n" + bot
+    return home_dir() / ("grokbot-" + hashlib.sha256(identity.encode()).hexdigest() + ".json")
+
+
+def save_grokbot_state(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(data, handle)
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def run_grokbot(args, config, profile):
+    import uuid
+    bot = grokbot_name(profile, args.bot)
+    if args.model or args.effort:
+        raise WindError("Grok Bot does not support --model or --effort")
+    workspace = Path(args.workspace).expanduser().resolve()
+    if not workspace.is_dir():
+        raise WindError("workspace is not a directory")
+    prompt = Path(args.prompt_file).expanduser().read_text()
+    if not prompt.strip():
+        raise WindError("prompt file is empty")
+    timeout = args.timeout if args.timeout is not None else int(config.get("timeout_seconds", 7200))
+    if timeout <= 0:
+        raise WindError("timeout must be a positive number of seconds")
+    client = GrokBot(profile)
+    status = client.identity()
+    mode = "work" if args.work else "review"
+    prompt = "Everything you need is in this message; you cannot see the caller's files.\n\n" + prompt
+    diagnostics = ""
+    if mode == "review":
+        prompt = ("Report only. Do not send, post, buy, delete, contact anyone or change anything.\n\n" + prompt)
+        diagnostics = "Review restriction is an instruction only, not enforced on the remote bot.\n"
+    path = exchange_path(config, args.account, workspace)
+    path.touch(mode=0o600, exist_ok=False)
+    started = time.monotonic()
+    deadline = started + timeout
+    output, code = "", 2
+    try:
+        session, warning = client.session(bot)
+        if warning:
+            diagnostics += warning + "\n"
+            print(warning, file=sys.stderr)
+        _, cursor, settled = client.collect(session, "-1", deadline, confirm=False)
+        if not settled:
+            raise WindError("Grok Bot did not become idle; nothing sent")
+        state_path = grokbot_state(profile, bot)
+        state = {"cursor": cursor, "session": session, "workspace": str(workspace), "mode": mode}
+        save_grokbot_state(state_path, state)
+        result = client.request(client.route(session, "messages"), {"text": prompt, "messageId": str(uuid.uuid4())}, deadline)
+        if result.get("delivery") not in ("accepted_temporal", "duplicate"):
+            raise WindError("Grok Bot message was not accepted: " + str(result.get("delivery")))
+        def checkpoint(cursor):
+            state["cursor"] = cursor
+            save_grokbot_state(state_path, state)
+        output, cursor, settled = client.collect(session, cursor, deadline, checkpoint=checkpoint)
+        state["cursor"] = cursor
+        save_grokbot_state(state_path, state)
+        code = (0 if output.strip() else 4) if settled else 124
+    except (WindError, ValueError, KeyError, TypeError) as exc:
+        code = 124 if time.monotonic() >= deadline else 2
+        diagnostics += client.scrub(exc) + "\n"
+    return finish_grokbot(client, config, profile, status, path, workspace, mode, prompt,
+                          output, code, started, diagnostics, bot)
+
+
+def finish_grokbot(client, config, profile, status, path, workspace, mode, prompt,
+                   output, code, started, diagnostics, bot):
+    if code == 124:
+        diagnostics += (f"Bot may still be working. Collect the rest with grokbot {profile['_role']} "
+                        f"check --bot {bot!r}; never resend the task.\n")
+    if code == 4:
+        diagnostics += "Grok Bot returned an empty reply.\n"
+    output, prompt, diagnostics = map(client.scrub, (output, prompt, diagnostics))
+    record_exchange(path, name=profile["_role"], profile=profile, status=status,
+                    workspace=workspace, mode=mode, command=["grokbot", bot], prompt=prompt,
+                    output=output, returncode=code, elapsed=time.monotonic() - started,
+                    diagnostics=diagnostics, config=config)
+    if output:
+        print(output)
+    if diagnostics:
+        print(diagnostics.rstrip(), file=sys.stderr)
+    print(f"second-wind: exchange {path}", file=sys.stderr)
+    return code
+
+
+def command_grokbot(args):
+    if args.action == "setup":
+        args.account = args.setup_account or args.account
+        if not (args.key_env or args.key_file) or not args.bots:
+            raise WindError("setup requires --key-env or --key-file, and --bots")
+        name = args.account or "grokbot"
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
+            raise WindError("invalid account name")
+        bots = [bot.strip() for bot in args.bots.split(",") if bot.strip()]
+        profile = {"kind": "grokbot", "label": args.label or "Grok Bot", "bots": bots,
+                   "default_bot": args.default or (bots[0] if bots else "")}
+        profile["api_key_env" if args.key_env else "api_key_file"] = args.key_env or args.key_file
+        raw = json.loads(config_path().read_text()) if config_path().exists() else {"version": 4, "accounts": {}}
+        data = json.loads(json.dumps(raw))
+        if name in data.get("aliases", {}) or (name in data and name != "accounts"):
+            raise WindError("account name conflicts with an existing role or alias")
+        existing = data.setdefault("accounts", {}).get(name)
+        if existing and existing.get("kind") != "grokbot":
+            raise WindError("account name belongs to another client kind")
+        data["accounts"][name] = profile
+        checked = account(normalise_config(data), name)
+        profile["default_bot"] = grokbot_name(checked, profile["default_bot"])
+        profile["expected_email"] = GrokBot(checked).identity()["email"]
+        write_config(data)
+        print("Grok Bot account configured: " + name)
+        return 0
+    config = load_config()
+    name = args.account
+    if not name:
+        names = [name for name, value in config["accounts"].items() if value.get("kind") == "grokbot"]
+        if len(names) != 1:
+            raise WindError("specify a Grok Bot account; choose one of: " + ", ".join(names))
+        name = names[0]
+    profile = account(config, name)
+    if profile.get("kind") != "grokbot":
+        raise WindError("account is not a Grok Bot destination")
+    if args.action == "bots":
+        print("\n".join(profile["bots"]))
+        return 0
+    bot = grokbot_name(profile, args.bot)
+    client = GrokBot(profile)
+    status = client.identity()
+    state_path = grokbot_state(profile, bot)
+    if args.action == "check":
+        if args.wait < 0:
+            raise WindError("wait must not be negative")
+        if not state_path.exists():
+            raise WindError("no saved cursor for this bot; use read for recent conversation")
+        state = json.loads(state_path.read_text())
+        started = time.monotonic()
+        workspace = Path(state["workspace"])
+        path = exchange_path(config, profile["_role"], workspace)
+        def checkpoint(cursor):
+            state["cursor"] = cursor
+            save_grokbot_state(state_path, state)
+        output, diagnostics, code = "", "", 2
+        try:
+            output, cursor, settled = client.collect(state["session"], state["cursor"], started + max(args.wait, 0.1), checkpoint=checkpoint)
+            state["cursor"] = cursor
+            save_grokbot_state(state_path, state)
+            code = (0 if output.strip() else 4) if settled else 124
+        except (WindError, ValueError, KeyError, TypeError) as exc:
+            diagnostics = client.scrub(exc)
+        return finish_grokbot(client, config, profile, status, path, workspace, state["mode"],
+                              "Collect replies after the saved cursor; no message sent.", output,
+                              code, started, diagnostics, bot)
+    session, warning = client.session(bot)
+    if warning:
+        print(warning, file=sys.stderr)
+    if args.action == "interrupt":
+        client.request(client.route(session, "interrupt"), {"reason": "User requested interrupt through Second Wind"})
+        print("Grok Bot interrupt requested")
+        return 0
+    if args.last <= 0:
+        raise WindError("last must be positive")
+    cursor = str(max(-1, int(session["latestUpdatedSeq"]) - args.last * 4))
+    page = client.page(session, cursor)
+    messages = [entry for entry in page.get("entries", []) if entry.get("kind") in ("message", "send-message")]
+    for entry in messages[-args.last:]:
+        role = "bot" if entry["kind"] == "send-message" else "user"
+        print(client.scrub(f"{role}: {entry.get('text', '')}"))
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="second-wind")
     commands = root.add_subparsers(dest="command", required=True)
@@ -670,13 +996,28 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("account")
     run.add_argument("--prompt-file", required=True)
     run.add_argument("--workspace", required=True)
-    access = run.add_mutually_exclusive_group(required=True)
+    access = run.add_mutually_exclusive_group()
     access.add_argument("--review", action="store_true")
     access.add_argument("--work", action="store_true")
+    run.add_argument("--bot")
     run.add_argument("--model")
     run.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
     run.add_argument("--timeout", type=int)
     run.set_defaults(handler=command_run)
+    grokbot = commands.add_parser("grokbot", help="talk to a configured persistent bot")
+    grokbot.add_argument("account", nargs="?")
+    grokbot.add_argument("action", choices=("bots", "read", "check", "interrupt", "setup"))
+    grokbot.add_argument("--bot")
+    grokbot.add_argument("--last", type=int, default=10)
+    grokbot.add_argument("--wait", type=float, default=30)
+    grokbot.add_argument("--account", dest="setup_account")
+    keys = grokbot.add_mutually_exclusive_group()
+    keys.add_argument("--key-env")
+    keys.add_argument("--key-file")
+    grokbot.add_argument("--bots")
+    grokbot.add_argument("--default")
+    grokbot.add_argument("--label")
+    grokbot.set_defaults(handler=command_grokbot)
     return root
 
 

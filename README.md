@@ -166,3 +166,20 @@ The shared configuration, history, sign-ins and archived legacy files remain
 until you choose to remove them.
 
 MIT. See [LICENSE](LICENSE).
+
+## Grok Bot (experimental)
+
+Grok Bot is an **experimental** destination for existing persistent agents in
+xAI's desktop app. It uses an undocumented API whose official client Cursor
+withdrew on 23 October 2026. Routes may disappear without notice. This is separate
+from Grok Build and uses a Cursor user API key, stored outside configuration.
+See [setup](second-wind/references/setup.md#grok-bot-experimental).
+
+Bots act as the user through their connected apps. Delegate only what the user
+asked for, and show the user any message the calling agent composed before
+sending it. Review restrictions are instructions and cannot be enforced remotely.
+The bot receives message context, not access to the caller's files.
+
+The local fake-server tests cover named delegation, busy refusal, reply collection,
+private cursors, timeout recovery, identity checks and key redaction. No live
+Grok Bot verification is claimed here. There is no usage panel or picker integration.

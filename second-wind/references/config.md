@@ -9,7 +9,7 @@ this same file; installation does not create a second configuration.
 | Key | Meaning |
 |---|---|
 | `version` | Config schema version. This build writes and expects 4. `--check` fails an older one. |
-| `accounts` | Additional named delegation accounts, used from either harness. Each has `kind` (`claude`, `codex`, `grok`, `cursor`) and `label`. Claude and Codex require `config_dir`; Claude also requires `expected_email`. Codex/Cursor compare `expected_email` when their client reports it. These accounts have no Claude usage-panel or picker integration. |
+| `accounts` | Additional named delegation accounts, used from either harness. Each has `kind` (`claude`, `codex`, `grok`, `cursor`, `grokbot`) and `label`. Claude and Codex require `config_dir`; Claude also requires `expected_email`. Codex/Cursor compare `expected_email` when their client reports it. These accounts have no Claude usage-panel or picker integration. |
 | `aliases` | Old account name to canonical account name, such as `{"old-personal":"secondary"}`. Aliases share the destination's sign-in and ledger role; they are not separate profiles. Do not reuse existing role names. |
 | `level` | `reviewer`, `worker` or `relief`. Sets `defaults.mode`, `failover.enabled` and which hooks setup installs. |
 | `primary.config_dir` | The profile that orchestrates and holds the conversation. Usually `~/.claude`. |
@@ -166,3 +166,28 @@ the runtime mirror and the launchd agent, restores a status line it
 replaced, and leaves accounts and logins alone. It leaves
 the workdir trust entries in place, because removing them means editing files a running
 client may be writing, and it prints where to delete them by hand.
+
+## Grok Bot account
+
+| Key | Meaning |
+|---|---|
+| `accounts.<name>.kind` | `grokbot` uses the experimental persistent-bot conversation routes. |
+| `api_key_env`, `api_key_file` | Exactly one: the environment variable holding the Cursor user API key, or a regular chmod 600 file holding it. The key itself never belongs in config. |
+| `expected_email` | Key owner's email, verified by setup and compared before delegation. |
+| `bots`, `default_bot` | Exact existing bot names from the app and the default name. Matching ignores case and sends the configured spelling. |
+
+```json
+{
+  "kind": "grokbot",
+  "label": "Grok Bot",
+  "api_key_env": "CURSOR_API_KEY",
+  "expected_email": "user@example.com",
+  "bots": ["Assistant", "Research"],
+  "default_bot": "Assistant"
+}
+```
+
+Put this entry under `accounts`, for example as `grokbot`. Alternatively replace
+`api_key_env` with `"api_key_file": "~/.config/second-wind/cursor-key"`.
+Read cursors live in private `grokbot-*.json` files under `SW_HOME` (normally
+`~/.second-wind`). These accounts have no usage-panel or picker integration.
