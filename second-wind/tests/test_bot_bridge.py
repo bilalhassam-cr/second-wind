@@ -322,6 +322,7 @@ else:
             return subprocess.CompletedProcess(command, 0, '', '')
         with mock.patch.dict(os.environ, self.env, clear=True), \
              mock.patch.object(bridge.sys, 'platform', 'darwin'), \
+             mock.patch.object(bridge.sw.GrokBot, 'identity', return_value={'email': 'user@example.com'}), \
              mock.patch.object(Path, 'home', return_value=self.root), \
              mock.patch.object(bridge.subprocess, 'run', side_effect=launch), \
              mock.patch.object(bridge.time, 'sleep'):
