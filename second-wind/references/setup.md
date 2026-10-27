@@ -406,6 +406,10 @@ HOME=~/.second-wind/antigravity/work agy
 ```
 
 The CLI never prints the signed-in email, so status reports AUTH, not READY.
+An account with a `home` runs agy with `SSH_CONNECTION` set, which makes agy
+keep its sign-in in that home's own file instead of trying a keychain macOS
+cannot find there. Without it macOS asks every hour where to store
+"antigravity".
 Delegation pipes the prompt on stdin with no `-p` (`-p` takes the prompt as
 its value) and reads the JSON envelope. Review adds `--mode plan --sandbox`,
 which wrote nothing in live testing. Headless runs deny shell commands, and a

@@ -1707,6 +1707,22 @@ def agy_path(profile):
     return GEMINI_APP_AGY if os.access(GEMINI_APP_AGY, os.X_OK) else None
 
 
+def antigravity_home_env(env, profile):
+    """Point agy at an account's own HOME, where its sign-in lives.
+
+    macOS finds no keychain under a substitute HOME, so agy's hourly token
+    save made the system ask, every hour, where to store "antigravity". The
+    real keychain is no answer: agy names its item the same for every
+    account, so a second account there would overwrite the first. agy's own
+    file storage is, and agy chooses it by itself in an SSH session, which
+    is the one switch it offers. Accounts without a home keep the keychain.
+    """
+    if profile.get("home"):
+        env["HOME"] = expand(profile["home"])
+        env["SSH_CONNECTION"] = "127.0.0.1 0 127.0.0.1 0"
+    return env
+
+
 def antigravity_accounts(cfg=None):
     cfg = load_config() if cfg is None else cfg
     accounts = cfg.get("accounts") or {}

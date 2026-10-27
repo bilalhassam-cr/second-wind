@@ -37,7 +37,7 @@ PRO = [
 FAKE = """#!{python}
 import os, sys
 from pathlib import Path
-Path(os.environ["AGY_MARK"]).write_text(os.environ["HOME"] + " " + " ".join(sys.argv[1:]))
+Path(os.environ["AGY_MARK"]).write_text(os.environ["HOME"] + " " + " ".join(sys.argv[1:]) + " SSH=" + os.environ.get("SSH_CONNECTION", "none"))
 assert "GEMINI_API_KEY" not in os.environ
 sys.stdout.write(Path(os.environ["AGY_REPLY"]).read_text())
 """
@@ -90,6 +90,9 @@ class Reader(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("OK ag-work Gemini Models: 5h 50% used, week 25% used", out)
         self.assertTrue(self.mark.read_text().startswith(str(self.home) + " -p /usage --output-format json"))
+        self.assertNotIn("SSH=none", self.mark.read_text())
+        self.run_reader("--account", "ag")
+        self.assertIn("SSH=none", self.mark.read_text())
         path = Path(swlib.antigravity_usage_path("ag-work"))
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(json.loads(path.read_text())["groups"][0]["name"], "Gemini Models")

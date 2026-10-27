@@ -160,7 +160,11 @@ def clean_env(profile: dict[str, Any]) -> dict[str, str]:
         home = Path(profile["home"]).expanduser().resolve()
         if not home.is_dir():
             raise WindError(f"Antigravity home does not exist: {home}. Create it and sign in with HOME={home} agy")
-        env["HOME"] = str(home)
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import swlib
+        swlib.antigravity_home_env(env, dict(profile, home=str(home)))
     if kind in ("claude", "codex"):
         configured = Path(profile["config_dir"]).expanduser().resolve()
         if not configured.is_dir():

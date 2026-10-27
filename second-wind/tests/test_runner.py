@@ -258,7 +258,7 @@ assert ('file-viewing tools' in prompt) == ('--mode' in sys.argv)
 assert 'GEMINI_API_KEY' not in os.environ and 'AGY_ADC_AUTH' not in os.environ
 if '--model' in sys.argv and sys.argv[sys.argv.index('--model')+1]=='missing-model':
  print(json.dumps(dict(status='ERROR',response='',error='model missing-model is not recognized'))); sys.exit(1)
-print(json.dumps(dict(status='SUCCESS',response='ARGS='+' '.join(sys.argv[1:])+' HOME='+os.environ['HOME'])))
+print(json.dumps(dict(status='SUCCESS',response='ARGS='+' '.join(sys.argv[1:])+' HOME='+os.environ['HOME']+' SSH='+os.environ.get('SSH_CONNECTION','none'))))
 '''
 
     def test_antigravity_review_is_plan_mode_and_prompt_is_stdin(self):
@@ -272,6 +272,7 @@ print(json.dumps(dict(status='SUCCESS',response='ARGS='+' '.join(sys.argv[1:])+'
         self.assertIn('--output-format json', review.stdout)
         self.assertIn('--model gemini-4-argon-high', review.stdout)
         self.assertIn('--effort high', review.stdout)
+        self.assertIn('SSH=none', review.stdout)  # the default account keeps the keychain
         self.assertNotIn('--dangerously-skip-permissions', review.stdout)
         work = self.task('agy', '--work')
         self.assertEqual(work.returncode, 0, work.stderr)
@@ -288,6 +289,7 @@ print(json.dumps(dict(status='SUCCESS',response='ARGS='+' '.join(sys.argv[1:])+'
         result = self.task('agy2', '--review')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('HOME=' + str(home.resolve()), result.stdout)
+        self.assertNotIn('SSH=none', result.stdout)  # file token storage, never the shared keychain
         self.assertIn('--model account-model', result.stdout)
         override = self.task('agy2', '--review', '--model', 'run-model')
         self.assertIn('--model run-model', override.stdout)

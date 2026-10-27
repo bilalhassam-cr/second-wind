@@ -29,12 +29,9 @@ def environment(profile):
     env = os.environ.copy()
     for key in CLEARED:
         env.pop(key, None)
-    if profile.get("home"):
-        home = swlib.expand(profile["home"])
-        if not os.path.isdir(home):
-            raise ValueError("home does not exist: %s" % home)
-        env["HOME"] = home
-    return env
+    if profile.get("home") and not os.path.isdir(swlib.expand(profile["home"])):
+        raise ValueError("home does not exist: %s" % swlib.expand(profile["home"]))
+    return swlib.antigravity_home_env(env, profile)
 
 
 def parse(output):

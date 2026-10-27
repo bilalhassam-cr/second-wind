@@ -128,6 +128,14 @@ Do not "simplify" these away; each cost real debugging time.
   the CLI. A headless shell command is denied and the turn ends with an empty
   answer and a stderr notice, so Antigravity review tells the model to use its
   file tools; without that, Gemini Flash failed a review by reaching for `cat`.
+- macOS finds no keychain under a substitute `HOME`, so agy's hourly token
+  save under a separate-home account raised "A keychain cannot be found to
+  store antigravity" every hour. The real keychain is no fix: agy names its
+  item `gemini`/`antigravity` for every account, so a second account there
+  overwrites the first. A home-local preference file is ignored, and a
+  `login.keychain-db` placed in the home cannot be unlocked by password. agy
+  uses its own file storage in an SSH session, so separate-home accounts run
+  with `SSH_CONNECTION` set (`swlib.antigravity_home_env`).
 - `agy -p /usage --output-format json` answers headless with every quota pool
   and costs no tokens, so it is the usage reader. Never probe agy's local
   server or reuse its OAuth client for quota: Google's terms warn against it.
