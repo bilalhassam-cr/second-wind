@@ -224,22 +224,16 @@ def binary(kind: str) -> str:
     return found
 
 
-# The Gemini desktop app bundles the Antigravity CLI without putting it on PATH.
-GEMINI_APP_AGY = "/Applications/Gemini.app/Contents/Helpers/agy"
-
-
 def agy_binary(profile: dict[str, Any]) -> str:
-    configured = profile.get("binary")
-    if configured:
-        path = Path(configured).expanduser()
-        if not (path.is_file() and os.access(path, os.X_OK)):
-            raise WindError(f"Antigravity binary is not executable: {path}")
-        return str(path)
-    found = shutil.which("agy")
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import swlib
+    found = swlib.agy_path(profile)
     if found:
         return found
-    if os.access(GEMINI_APP_AGY, os.X_OK):
-        return GEMINI_APP_AGY
+    if profile.get("binary"):
+        raise WindError(f"Antigravity binary is not executable: {Path(profile['binary']).expanduser()}")
     raise WindError("agy is not on PATH and the Gemini app is not installed; set binary for this account")
 
 
@@ -812,6 +806,12 @@ def command_run(args: argparse.Namespace) -> int:
         with open(os.devnull, "w") as sink:
             subprocess.Popen(["/bin/sh", str(refresh), "--force", "--only", role, "primary"],
                              env=clean_env(profile), stdin=subprocess.DEVNULL, stdout=sink, stderr=sink,
+                             start_new_session=True)
+    if kind == "antigravity" and os.environ.get("SW_NO_REFRESH") != "1":
+        reader = Path(__file__).with_name("antigravity-usage.py")
+        with open(os.devnull, "w") as sink:
+            subprocess.Popen([sys.executable, str(reader), "--account", role],
+                             env=os.environ.copy(), stdin=subprocess.DEVNULL, stdout=sink, stderr=sink,
                              start_new_session=True)
     return returncode
 

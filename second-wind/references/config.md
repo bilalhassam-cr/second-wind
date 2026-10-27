@@ -105,6 +105,7 @@ On-demand availability is context and does not override those pools. Unknown sor
 ├── usage-codex.json           last Codex status-panel reading
 ├── usage-grok.json            last Grok weekly reading
 ├── usage-cursor.json          last Cursor monthly-pools reading
+├── usage-antigravity-NAME.json  last reading of each Antigravity account's quota pools
 ├── refresh-status-*.txt       one outcome line per role: OK, LOGIN EXPIRED,
 │                              NO CLI SIGN-IN, TRUST PROMPT, PARSER MISMATCH
 │                              or FAILED

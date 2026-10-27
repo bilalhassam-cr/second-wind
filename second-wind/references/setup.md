@@ -412,6 +412,17 @@ which wrote nothing in live testing. Headless runs deny shell commands, and a
 denial ends the turn with an empty answer, so review tells the model to read
 files with its own tools. Work adds `--dangerously-skip-permissions`.
 
+Limits come from agy's own `/usage`, which answers headless and costs no
+tokens: `agy -p /usage --output-format json` lists each quota pool (Gemini,
+Claude and GPT, and on Pro a separate Argon pool) with its 5-hour and weekly
+windows, the fraction left and the reset time. `antigravity-usage.py` reads it
+for every Antigravity account, under each account's `home`, and the panel
+shows one row per account: Gemini's pool in the two columns, any other pool
+that has been used in the note beneath. The scheduled refresh runs it, keeping
+a reading younger than ten minutes, and every Antigravity delegation refreshes
+its own account afterwards. Some plans report only weekly windows; the 5-hour
+column then reads n/a.
+
 ## The `agent` command collision
 
 Cursor's installer runs `rm -f ~/.local/bin/agent` and takes that generic name.

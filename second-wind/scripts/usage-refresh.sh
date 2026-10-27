@@ -5,6 +5,7 @@
 #
 #   --force               read even when the cached figure is still fresh
 #   --only ROLE ...       only these roles: primary secondary codex codex2 codex3 grok cursor
+#                         antigravity (every Antigravity account)
 #   --if-claude-running   do nothing unless Claude is actually in use, which is
 #                         what the launchd timer passes
 #
@@ -162,6 +163,15 @@ for role in $due; do
     cursor) start cursor cursor-agent "$HERE/cursor-usage.py" ;;
   esac
 done
+# Antigravity accounts are named accounts, not roles. Their reader asks agy's
+# own /usage, costs no tokens, and keeps a reading younger than ten minutes.
+case " $only " in
+  "  "|*" antigravity "*)
+    older=10
+    [ "$force" = true ] && older=0
+    (python3 "$HERE/antigravity-usage.py" --if-older "$older" --cwd "$workdir" >/dev/null 2>&1 || true) &
+    pids="$pids $!" ;;
+esac
 for pid in $pids; do wait "$pid" || true; done
 # The status files are overwritten every run and the diary keeps only the kind,
 # so the reason for every failure is kept here, or an outage cannot be

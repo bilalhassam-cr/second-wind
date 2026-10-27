@@ -17,6 +17,7 @@ or from ``scripts/hooks/``:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import swlib
 """
+import calendar
 import glob
 import hashlib
 import json
@@ -1006,6 +1007,7 @@ RUNTIME_FILES = (
     "codex-status.py",
     "grok-usage.py",
     "cursor-usage.py",
+    "antigravity-usage.py",
     "model-picker.py",
 )
 
@@ -1686,6 +1688,99 @@ def field_note_refresh(cfg=None):
     return field_note("refresh", cfg=cfg, outcomes=outcomes)
 
 
+# ------------------------------------------------------------ antigravity
+
+# The Gemini desktop app bundles the Antigravity CLI without putting it on PATH.
+GEMINI_APP_AGY = "/Applications/Gemini.app/Contents/Helpers/agy"
+
+
+def agy_path(profile):
+    """The agy to run for an account: its own binary, then PATH, then the
+    Gemini app's copy. None when there is none."""
+    configured = profile.get("binary")
+    if configured:
+        path = expand(configured)
+        return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
+    found = shutil.which("agy")
+    if found:
+        return found
+    return GEMINI_APP_AGY if os.access(GEMINI_APP_AGY, os.X_OK) else None
+
+
+def antigravity_accounts(cfg=None):
+    cfg = load_config() if cfg is None else cfg
+    accounts = cfg.get("accounts") or {}
+    return [name for name in sorted(accounts)
+            if isinstance(accounts[name], dict) and accounts[name].get("kind") == "antigravity"]
+
+
+def antigravity_usage_path(name):
+    return os.path.join(sw_home(), "usage-antigravity-%s.json" % re.sub(r"[^A-Za-z0-9_-]", "-", name))
+
+
+def load_antigravity_usage(name):
+    try:
+        with open(antigravity_usage_path(name)) as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def antigravity_reset(value):
+    """An agy reset time, '2026-11-03T15:44:39Z', in the panel's own shape."""
+    try:
+        stamp = time.strptime(str(value), "%Y-%m-%dT%H:%M:%SZ")
+        local = time.localtime(calendar.timegm(stamp))
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    return "%s %d" % (time.strftime("%H:%M %b", local), local.tm_mday)
+
+
+def _antigravity_windows(group):
+    windows = {}
+    for bucket in group.get("buckets") or []:
+        if bucket.get("window") in ("5h", "weekly"):
+            windows[bucket["window"]] = bucket
+    return windows
+
+
+def antigravity_main_group(usage):
+    """Gemini's own pool drives the row, because it is the one with both
+    windows on every plan seen; the others go in the note."""
+    groups = usage.get("groups") or []
+    for group in groups:
+        if str(group.get("name", "")).startswith("Gemini Models"):
+            return group
+    return groups[0] if groups else None
+
+
+def antigravity_group_note(group):
+    """'Gemini 4 Argon week 1%', or nothing when the pool is untouched, the
+    same rule model_week_note follows."""
+    parts = []
+    for window, word in (("5h", "5h"), ("weekly", "week")):
+        bucket = _antigravity_windows(group).get(window)
+        if bucket is not None and number(bucket.get("used_pct")):
+            parts.append("%s %d%%" % (word, round(number(bucket["used_pct"]))))
+    return "%s %s" % (group.get("name"), " ".join(parts)) if parts else ""
+
+
+def antigravity_summary(usage):
+    """One line per reading, for the reader's own output."""
+    if usage.get("error"):
+        return "FAILED: %s" % usage["error"]
+    parts = []
+    for group in usage.get("groups") or []:
+        cells = []
+        for window, word in (("5h", "5h"), ("weekly", "week")):
+            bucket = _antigravity_windows(group).get(window)
+            if bucket is not None:
+                cells.append("%s %d%% used" % (word, round(number(bucket.get("used_pct")) or 0)))
+        parts.append("%s: %s" % (group.get("name"), ", ".join(cells) or "no windows"))
+    return "; ".join(parts) or "no pools reported"
+
+
 def brief_card(cfg=None, now=None):
     """The usage panel, as lines to be reproduced verbatim.
 
@@ -1708,10 +1803,12 @@ def brief_card(cfg=None, now=None):
     """
     cfg = load_config() if cfg is None else cfg
     roles = enabled_roles(cfg)
-    if not roles:
+    agy = antigravity_accounts(cfg)
+    if not roles and not agy:
         return []
     labels = {role: role_label(role, cfg) for role in roles}
-    width = max(len(label) for label in labels.values())
+    agy_labels = {name: str((cfg["accounts"][name]).get("label") or name) for name in agy}
+    width = max(len(label) for label in [*labels.values(), *agy_labels.values()])
 
     def note_line(notes):
         notes = [note for note in notes if note]
@@ -1759,6 +1856,31 @@ def brief_card(cfg=None, now=None):
         # figures are still shown, because they are real; what the note says is
         # whose figures they are.
         rows.append(row)
+        rows.extend(note_line(notes))
+
+    # Antigravity accounts are named accounts, not roles, and have one reader.
+    current = time.time() if now is None else now
+    for name in agy:
+        label = agy_labels[name].ljust(width)
+        usage = load_antigravity_usage(name)
+        if not usage:
+            rows.append("%s  no current reading, refreshing" % label)
+            continue
+        if number(usage.get("read_at")) is not None:
+            ages.append(max(0, current - number(usage["read_at"])))
+        if usage.get("error"):
+            rows.append("%s  usage reading failed: %s" % (label, str(usage["error"])[:80]))
+            continue
+        main = antigravity_main_group(usage)
+        windows = _antigravity_windows(main or {})
+        five = number((windows.get("5h") or {}).get("used_pct"))
+        week = number((windows.get("weekly") or {}).get("used_pct"))
+        reset = antigravity_reset((windows.get("weekly") or {}).get("reset_time"))
+        notes = [antigravity_group_note(group) for group in usage.get("groups") or []
+                 if group is not main]
+        notes.append("resets %s" % reset if reset else "")
+        rows.append("%s  %s %s  %s %s" % (label, usage_bar(five), _pct_cell(five),
+                                          usage_bar(week), _pct_cell(week)))
         rows.extend(note_line(notes))
 
     header = "%s  %s  %s" % (" " * width,

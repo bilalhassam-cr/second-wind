@@ -95,7 +95,7 @@ do not install its hooks into Codex or assume Codex has that UI.
 
 In Codex, use the shared runner. If Claude integration roles have also been
 configured, `setup.py --card` shows their cached usage; present that panel verbatim.
-Accounts configured only under `accounts` do not have usage-panel integration. Routing a future task remains the caller's
+Accounts configured only under `accounts` do not have usage-panel integration, except Antigravity, whose own `/usage` feeds a panel row per account. Routing a future task remains the caller's
 decision; nothing silently rotates accounts. `/second-wind off` in Claude Code
 clears its route. A direct Codex delegation lasts for the one requested task.
 
