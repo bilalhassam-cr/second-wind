@@ -4,8 +4,9 @@
 
 Get an independent review, delegate a task, or hand work to another account
 directly from Claude Code or Codex. Second Wind runs Claude Code, Codex, Grok
-Build, Cursor Agent and the Antigravity CLI through their official clients, with one named destination
-per call and a record of what happened.
+Build, Cursor Agent and Google's Antigravity CLI for Gemini through their
+official clients, with one named destination per call and a record of what
+happened. It can also hand tasks to persistent Grok Bot agents (experimental).
 
 **Works in Claude Code and Codex.** Both harnesses load the same `second-wind`
 skill, use the same runner and account configuration, and write to one delegation
@@ -165,6 +166,28 @@ were enabled, first run `python3 "$SW/scripts/setup.py" --uninstall` to remove
 its hooks, restore the previous status line and unload its refresh agent.
 The shared configuration, history, sign-ins and archived legacy files remain
 until you choose to remove them.
+
+## Gemini through the Antigravity CLI
+
+Google's Antigravity CLI, `agy`, is a destination for Gemini models on your own
+Google AI plan. It installs on its own or comes bundled in the Gemini macOS app,
+and Second Wind finds either. Which models an account has depends on its plan,
+so pass an exact ID from `agy models`. See
+[setup](second-wind/references/setup.md#antigravity-cli).
+
+Review runs agy in plan mode with its terminal sandbox, and work skips its
+permission prompts. Neither is an operating-system sandbox. A second Google
+account gets its own folder (`home`), and Second Wind keeps that account's
+sign-in in agy's own file rather than the keychain, where agy stores every
+account under the same name.
+
+Limits come from agy's own `/usage`, which costs no tokens. Each account has a
+usage-panel row with its Gemini 5-hour and weekly windows, and any other pool it
+has used, such as a separate Argon week, in the note beneath.
+
+Verified live on macOS on 27 and 28 October 2026 with two Google accounts side
+by side: status, a review on each, a work-mode write, the usage panel and both
+of its refreshes, and an hourly sign-in renewal with no keychain prompt.
 
 ## Grok Bot (experimental)
 
