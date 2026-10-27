@@ -27,6 +27,8 @@ VENDOR_KEYS = (
     "CODEX_API_KEY",
     "XAI_API_KEY",
     "CURSOR_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
 )
 
 
@@ -104,7 +106,7 @@ def account(config: dict[str, Any], name: str) -> dict[str, Any]:
         choices = ", ".join(sorted(config["accounts"]))
         raise WindError(f"unknown account {name!r}; choose one of: {choices}")
     kind = value.get("kind", "claude")
-    if kind not in ("claude", "codex", "grok", "cursor", "grokbot"):
+    if kind not in ("claude", "codex", "grok", "cursor", "grokbot", "antigravity"):
         raise WindError(f"unsupported client kind: {kind}")
     required = ("label", "config_dir", "expected_email") if kind == "claude" else ("label",)
     for key in required:
@@ -112,6 +114,12 @@ def account(config: dict[str, Any], name: str) -> dict[str, Any]:
             raise WindError(f"account {name!r} is missing {key}")
     if kind == "codex" and not value.get("config_dir"):
         raise WindError(f"account {name!r} needs its own config_dir")
+    if "model" in value and (not isinstance(value["model"], str) or not value["model"].strip()):
+        raise WindError(f"account {name!r} model must be a non-empty string")
+    if kind == "antigravity":
+        for key in ("home", "binary"):
+            if key in value and (not isinstance(value[key], str) or not value[key].strip()):
+                raise WindError(f"Antigravity {key} must be a non-empty path")
     if kind == "grokbot":
         sources = [key for key in ("api_key_env", "api_key_file") if value.get(key)]
         if len(sources) != 1 or not isinstance(value[sources[0]], str):
@@ -143,9 +151,16 @@ def clean_env(profile: dict[str, Any]) -> dict[str, str]:
                 "OPENAI_BASE_URL", "CURSOR_API_ENDPOINT", "CLAUDECODE",
                 "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
                 "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_CHILD_SESSION",
-                "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID"):
+                "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID",
+                "GOOGLE_APPLICATION_CREDENTIALS", "AGY_ADC_AUTH"):
         env.pop(key, None)
     kind = profile.get("kind", "claude")
+    if kind == "antigravity" and profile.get("home"):
+        # agy keeps one sign-in per HOME, so a second account needs its own.
+        home = Path(profile["home"]).expanduser().resolve()
+        if not home.is_dir():
+            raise WindError(f"Antigravity home does not exist: {home}. Create it and sign in with HOME={home} agy")
+        env["HOME"] = str(home)
     if kind in ("claude", "codex"):
         configured = Path(profile["config_dir"]).expanduser().resolve()
         if not configured.is_dir():
@@ -209,12 +224,38 @@ def binary(kind: str) -> str:
     return found
 
 
+# The Gemini desktop app bundles the Antigravity CLI without putting it on PATH.
+GEMINI_APP_AGY = "/Applications/Gemini.app/Contents/Helpers/agy"
+
+
+def agy_binary(profile: dict[str, Any]) -> str:
+    configured = profile.get("binary")
+    if configured:
+        path = Path(configured).expanduser()
+        if not (path.is_file() and os.access(path, os.X_OK)):
+            raise WindError(f"Antigravity binary is not executable: {path}")
+        return str(path)
+    found = shutil.which("agy")
+    if found:
+        return found
+    if os.access(GEMINI_APP_AGY, os.X_OK):
+        return GEMINI_APP_AGY
+    raise WindError("agy is not on PATH and the Gemini app is not installed; set binary for this account")
+
+
+def client_binary(profile: dict[str, Any]) -> str:
+    kind = profile.get("kind", "claude")
+    return agy_binary(profile) if kind == "antigravity" else binary(kind)
+
+
 def other_auth_status(profile: dict[str, Any], kind: str) -> dict[str, Any]:
-    command = {"codex": ["login", "status"], "grok": ["models"], "cursor": ["status"]}[kind]
-    proc = subprocess.run([binary(kind), *command], env=clean_env(profile),
-                          text=True, capture_output=True, timeout=30, check=False)
+    command = {"codex": ["login", "status"], "grok": ["models"], "cursor": ["status"],
+               "antigravity": ["models"]}[kind]
+    proc = subprocess.run([client_binary(profile), *command], env=clean_env(profile),
+                          text=True, capture_output=True, timeout=60 if kind == "antigravity" else 30, check=False)
     output = proc.stdout + proc.stderr
-    if proc.returncode or re.search(r"not (?:logged|signed) in|unauthenticated|login required", output, re.I):
+    if proc.returncode or re.search(r"not (?:logged|signed) in|unauthenticated|login required|"
+                                    r"please sign in|authentication required", output, re.I):
         raise WindError(f"{kind} authentication check failed: {output.strip()[:1000]}")
     if kind == "cursor" and profile.get("auth") == "api_key":
         if not os.environ.get("CURSOR_API_KEY"):
@@ -350,7 +391,9 @@ def record_exchange(
                "read-only" if kind == "codex" and mode == "review" else
                "none, full access" if kind == "codex" and profile.get("full_access") is True else
                "workspace-write" if kind == "codex" else
-               "not enforced, remote bot instruction only" if kind == "grokbot" and mode == "review" else mode)
+               "not enforced, remote bot instruction only" if kind == "grokbot" and mode == "review" else
+               "plan mode, terminal sandbox, not an OS sandbox" if kind == "antigravity" and mode == "review" else
+               "none, dangerously-skip-permissions" if kind == "antigravity" else mode)
     guard = kind == "codex" and (mode == "review" or profile.get("full_access") is not True)
     kept = "CURSOR_API_KEY" if kind == "cursor" and profile.get("auth") == "api_key" else ""
     cleared = [key for key in (*VENDOR_KEYS, "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY") if key != kept]
@@ -578,7 +621,7 @@ def command_run(args: argparse.Namespace) -> int:
         raise WindError("timeout must be a positive number of seconds")
 
     kind = profile.get("kind", "claude")
-    command = [binary(kind)]
+    command = [client_binary(profile)]
     if kind == "claude":
         command += ["-p", "--add-dir", str(workspace)]
         if mode == "work":
@@ -611,6 +654,16 @@ def command_run(args: argparse.Namespace) -> int:
             raise WindError("Cursor does not support --effort; use a parameterised --model")
         command += ["-p", "--trust"]
         command += ["--mode", "plan"] if mode == "review" else ["--force"]
+    elif kind == "antigravity":
+        # No -p: it takes the prompt as its value. With stdin not a terminal
+        # agy reads the prompt from stdin, which keeps it out of ps.
+        command += ["--output-format", "json", "--add-dir", str(workspace), "--print-timeout", f"{timeout}s"]
+        command += ["--mode", "plan", "--sandbox"] if mode == "review" else ["--dangerously-skip-permissions"]
+        if mode == "review":
+            # Headless review denies shell commands and a denial ends the turn
+            # with no answer; Gemini Flash reaches for cat unless told not to.
+            prompt = ("Terminal commands are blocked in this session and end it. "
+                      "Read files only with your file-viewing tools.\n\n" + prompt)
     if mode == "review":
         prompt = (
             "You are in review mode. Do not edit files or run shell commands that change anything. "
@@ -620,8 +673,9 @@ def command_run(args: argparse.Namespace) -> int:
         command += ["--output-format", "json"] if kind == "claude" else ["--json"]
         if getattr(args, "resume", None) and kind == "claude":
             command += ["--resume", args.resume]
-    if args.model:
-        command += ["--model", args.model]
+    model = args.model or profile.get("model")
+    if model:
+        command += ["--model", model]
     if args.effort:
         if kind == "codex":
             command += ["-c", f'model_reasoning_effort="{args.effort}"']
@@ -712,6 +766,18 @@ def command_run(args: argparse.Namespace) -> int:
                 except ValueError as exc:
                     returncode, output = 4, ""
                     diagnostics += f"\nInvalid Grok final response: {exc}\n"
+            if kind == "antigravity" and not timed_out:
+                try:
+                    result = json.loads(output[output.index("{"):])
+                    if not isinstance(result, dict) or not isinstance(result.get("response"), str):
+                        raise ValueError("missing response")
+                    output = result["response"]
+                    if result.get("status") != "SUCCESS":
+                        returncode = returncode or 4
+                        diagnostics += f"\nAntigravity status {result.get('status')}: {result.get('error') or ''}\n"
+                except ValueError as exc:
+                    returncode, output = returncode or 4, ""
+                    diagnostics += f"\nInvalid Antigravity response: {exc}\n"
         except (OSError, subprocess.SubprocessError) as exc:
             returncode, output, timed_out, diagnostics = 2, "", False, str(exc)
     if returncode == 0 and not output.strip():
@@ -730,7 +796,7 @@ def command_run(args: argparse.Namespace) -> int:
         output=output,
         returncode=returncode,
         elapsed=elapsed,
-        diagnostics=diagnostics, config=config, model=args.model or "default", effort=args.effort or "default",
+        diagnostics=diagnostics, config=config, model=model or "default", effort=args.effort or "default",
     )
     if output:
         print(output, end="" if output.endswith("\n") else "\n")

@@ -8,6 +8,8 @@
     "codex-work": {"kind": "codex", "label": "Work Codex", "config_dir": "~/.codex-work", "full_access": false},
     "grok": {"kind": "grok", "label": "Grok"},
     "cursor": {"kind": "cursor", "label": "Cursor", "expected_email": "personal@example.com", "auth": "interactive"},
+    "antigravity": {"kind": "antigravity", "label": "Antigravity", "model": "gemini-3.8-flash-high"},
+    "antigravity-work": {"kind": "antigravity", "label": "Work Antigravity", "home": "~/.second-wind/antigravity/work"},
     "grokbot": {"kind": "grokbot", "label": "Grok Bot", "api_key_env": "CURSOR_API_KEY", "expected_email": "user@example.com", "bots": ["Assistant", "Research"], "default_bot": "Assistant"}
   },
   "aliases": {},

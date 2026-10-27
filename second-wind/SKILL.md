@@ -1,6 +1,6 @@
 ---
 name: second-wind
-description: Delegate a task from Claude Code or Codex to a named Claude, Codex, Grok, Cursor or Grok Bot account for independent review or authorised implementation. Use for a second opinion, another subscription, announced task-boundary handover, account checks, or Second Wind setup.
+description: Delegate a task from Claude Code or Codex to a named Claude, Codex, Grok, Cursor, Antigravity or Grok Bot account for independent review or authorised implementation. Use for a second opinion, another subscription, announced task-boundary handover, account checks, or Second Wind setup.
 ---
 
 # Second Wind
@@ -56,16 +56,19 @@ python3 "$SW/scripts/second_wind.py" run ACCOUNT \
 
 Use `--work` instead for changes the user has authorised. Optional `--model`,
 `--effort` and `--timeout` select one run's settings; Cursor has no separate effort
-flag. Leave model choice to the official client unless the task specifies it.
+flag. An account's optional `model` is its default and `--model` overrides it.
+Otherwise leave model choice to the official client unless the task specifies it.
 The older `run.sh ACCOUNT PROMPT-FILE ...` command calls this same runner.
 
 Review restricts Claude to Read/Glob/Grep, disables its hooks and loads no MCP
 servers. Codex gets its read-only sandbox with resolved MCP servers disabled.
-Grok gets a read-tool allow list; Cursor uses plan mode. The latter two are not
-operating-system sandboxes. A restriction that a live client fails to enforce
+Grok gets a read-tool allow list; Cursor uses plan mode; Antigravity uses plan
+mode with its terminal sandbox and is told to read files without shell commands.
+The last three are not operating-system sandboxes. A restriction that a live client fails to enforce
 must be reported, never described as verified read-only behaviour.
 
 Work is unattended: Claude/Grok bypass permission prompts, Cursor uses force,
+Antigravity skips permissions,
 and Codex uses workspace-write with automatic approval review. Only an account
 explicitly configured with `full_access: true` gets unsandboxed Codex work.
 Scope remains the user's authorised task. Sandboxed Codex workers return browser

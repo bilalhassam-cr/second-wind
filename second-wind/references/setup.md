@@ -381,6 +381,37 @@ interactive browser login, so an API-key sign-in is delegation only and
 pools plus a reset date. On-demand may appear unavailable even when the account
 holds credit.
 
+## Antigravity CLI
+
+The Antigravity CLI, `agy`, spends the Google AI plan of the account it signs
+in with. It installs on its own or comes bundled in the Gemini macOS app at
+`/Applications/Gemini.app/Contents/Helpers/agy`, which is not on PATH; the
+runner looks there after PATH. The app's own sign-in does not carry to the
+CLI. Sign in once, interactively:
+
+```bash
+agy
+```
+
+Choose Google OAuth. The browser lands on a page with a code; paste it back
+into the terminal. `agy models` then lists the account's models, and which
+models appear depends on the plan. Pass an exact ID from that list.
+
+agy keeps one sign-in per `HOME`. For a second Google account, give it its own
+folder, sign in there and set that folder as the account's `home`:
+
+```bash
+mkdir -p ~/.second-wind/antigravity/work
+HOME=~/.second-wind/antigravity/work agy
+```
+
+The CLI never prints the signed-in email, so status reports AUTH, not READY.
+Delegation pipes the prompt on stdin with no `-p` (`-p` takes the prompt as
+its value) and reads the JSON envelope. Review adds `--mode plan --sandbox`,
+which wrote nothing in live testing. Headless runs deny shell commands, and a
+denial ends the turn with an empty answer, so review tells the model to read
+files with its own tools. Work adds `--dangerously-skip-permissions`.
+
 ## The `agent` command collision
 
 Cursor's installer runs `rm -f ~/.local/bin/agent` and takes that generic name.

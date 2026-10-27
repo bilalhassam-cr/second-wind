@@ -4,7 +4,7 @@
 
 Get an independent review, delegate a task, or hand work to another account
 directly from Claude Code or Codex. Second Wind runs Claude Code, Codex, Grok
-Build and Cursor Agent through their official clients, with one named destination
+Build, Cursor Agent and the Antigravity CLI through their official clients, with one named destination
 per call and a record of what happened.
 
 **Works in Claude Code and Codex.** Both harnesses load the same `second-wind`
@@ -96,8 +96,9 @@ calls the same Python runner. Neither host silently rotates accounts.
 
 Review restricts Claude to read/search tools with hooks and MCP disabled; Codex
 uses its read-only sandbox with resolved MCP servers disabled; Grok gets a read
-allow list; Cursor uses plan mode. Grok and Cursor tool modes are not operating-
-system sandboxes. Cursor ask mode wrote a file in a live boundary test, so it is
+allow list; Cursor uses plan mode; Antigravity uses plan mode with its terminal
+sandbox. Grok, Cursor and Antigravity tool modes are not operating-system
+sandboxes. Cursor ask mode wrote a file in a live boundary test, so it is
 not used for review. Work mode is unattended and must stay within the task you
 have authorised. Codex work is sandboxed unless that account explicitly enables
 `full_access`; keep browser verification on the calling session when sandboxed.

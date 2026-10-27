@@ -245,6 +245,70 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('GROK OK', result.stdout)
 
+    AGY = '''import sys,os,json
+if sys.argv[1]=='models':
+ if os.environ.get('AGY_SIGNED_OUT'): print('Error: Please sign in to view available models.'); sys.exit(1)
+ print('gemini-4-argon-high\\tGemini 4 Argon (High)')
+ sys.exit(0)
+prompt=sys.stdin.read()
+assert 'A bounded task.' in prompt
+assert not any('A bounded task.' in a for a in sys.argv)
+assert '-p' not in sys.argv and '--print' not in sys.argv
+assert ('file-viewing tools' in prompt) == ('--mode' in sys.argv)
+assert 'GEMINI_API_KEY' not in os.environ and 'AGY_ADC_AUTH' not in os.environ
+if '--model' in sys.argv and sys.argv[sys.argv.index('--model')+1]=='missing-model':
+ print(json.dumps(dict(status='ERROR',response='',error='model missing-model is not recognized'))); sys.exit(1)
+print(json.dumps(dict(status='SUCCESS',response='ARGS='+' '.join(sys.argv[1:])+' HOME='+os.environ['HOME'])))
+'''
+
+    def test_antigravity_review_is_plan_mode_and_prompt_is_stdin(self):
+        self.update('agy', kind='antigravity', label='Antigravity')
+        self.fake('agy', self.AGY)
+        self.env['GEMINI_API_KEY'] = 'inherited'
+        self.env['AGY_ADC_AUTH'] = '1'
+        review = self.task('agy', '--review', '--model', 'gemini-4-argon-high', '--effort', 'high')
+        self.assertEqual(review.returncode, 0, review.stderr)
+        self.assertIn('--mode plan --sandbox', review.stdout)
+        self.assertIn('--output-format json', review.stdout)
+        self.assertIn('--model gemini-4-argon-high', review.stdout)
+        self.assertIn('--effort high', review.stdout)
+        self.assertNotIn('--dangerously-skip-permissions', review.stdout)
+        work = self.task('agy', '--work')
+        self.assertEqual(work.returncode, 0, work.stderr)
+        self.assertIn('--dangerously-skip-permissions', work.stdout)
+        self.assertNotIn('--mode plan', work.stdout)
+        log = sorted((Path(self.env['SW_HOME'])/'exchanges').glob('*.md'))[0].read_text()
+        self.assertIn('- Sandbox: plan mode, terminal sandbox, not an OS sandbox', log)
+
+    def test_antigravity_second_account_runs_in_its_own_home(self):
+        home = self.root / 'agy-second'
+        home.mkdir()
+        self.update('agy2', kind='antigravity', label='Antigravity second', home=str(home), model='account-model')
+        self.fake('agy', self.AGY)
+        result = self.task('agy2', '--review')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('HOME=' + str(home.resolve()), result.stdout)
+        self.assertIn('--model account-model', result.stdout)
+        override = self.task('agy2', '--review', '--model', 'run-model')
+        self.assertIn('--model run-model', override.stdout)
+        self.assertNotIn('account-model', override.stdout)
+        self.update('agy3', kind='antigravity', label='Missing', home=str(self.root / 'absent'))
+        missing = self.task('agy3', '--review')
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn('home does not exist', missing.stderr)
+
+    def test_antigravity_error_status_and_sign_out_are_failures(self):
+        self.update('agy', kind='antigravity', label='Antigravity')
+        self.fake('agy', self.AGY)
+        bad = self.task('agy', '--review', '--model', 'missing-model')
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn('not recognized', bad.stderr)
+        self.assertNotIn('ARGS=', bad.stdout)
+        self.env['AGY_SIGNED_OUT'] = '1'
+        out = self.task('agy', '--review')
+        self.assertEqual(out.returncode, 2)
+        self.assertIn('authentication check failed', out.stderr)
+
     def test_migration_preserves_aliases_and_shared_roles(self):
         target=Path(self.env['SW_HOME'])/'config.json'
         target.write_text(json.dumps({'version':4,'primary':{'config_dir':str(self.home/'.claude'),'account':'work@example.com','label':'Work'}}))

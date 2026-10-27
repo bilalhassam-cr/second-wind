@@ -122,6 +122,13 @@ Do not "simplify" these away; each cost real debugging time.
   Right only while nothing of the Usage tab is on screen: Right from a tab
   still loading moved it on to Config and Status.
 
+- agy's `-p` takes the prompt as its value; `-p=-` sends a literal dash. With
+  stdin not a terminal and no `-p`, agy reads the prompt from stdin.
+- agy keeps one sign-in per `HOME`, and the Gemini app's sign-in never reaches
+  the CLI. A headless shell command is denied and the turn ends with an empty
+  answer and a stderr notice, so Antigravity review tells the model to use its
+  file tools; without that, Gemini Flash failed a review by reaching for `cat`.
+
 ## Both harnesses
 
 `second-wind/` is the single skill installed in both Claude Code and Codex.

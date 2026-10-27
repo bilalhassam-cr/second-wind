@@ -9,7 +9,7 @@ this same file; installation does not create a second configuration.
 | Key | Meaning |
 |---|---|
 | `version` | Config schema version. This build writes and expects 4. `--check` fails an older one. |
-| `accounts` | Additional named delegation accounts, used from either harness. Each has `kind` (`claude`, `codex`, `grok`, `cursor`, `grokbot`) and `label`. Claude and Codex require `config_dir`; Claude also requires `expected_email`. Codex/Cursor compare `expected_email` when their client reports it. These accounts have no Claude usage-panel or picker integration. |
+| `accounts` | Additional named delegation accounts, used from either harness. Each has `kind` (`claude`, `codex`, `grok`, `cursor`, `antigravity`, `grokbot`) and `label`. Claude and Codex require `config_dir`; Claude also requires `expected_email`. Any account may set `model`, its default model, which `--model` overrides. Antigravity takes an optional `home`, the `HOME` its sign-in lives under (one sign-in per `HOME`, so a second account needs its own), and an optional `binary`; otherwise `agy` on PATH, then the copy bundled in the Gemini macOS app. Codex/Cursor compare `expected_email` when their client reports it. These accounts have no Claude usage-panel or picker integration. |
 | `aliases` | Old account name to canonical account name, such as `{"old-personal":"secondary"}`. Aliases share the destination's sign-in and ledger role; they are not separate profiles. Do not reuse existing role names. |
 | `level` | `reviewer`, `worker` or `relief`. Sets `defaults.mode`, `failover.enabled` and which hooks setup installs. |
 | `primary.config_dir` | The profile that orchestrates and holds the conversation. Usually `~/.claude`. |
