@@ -8,11 +8,22 @@ official client and under the account's own HOME, and saves one reading per
 account for the usage panel. It never reads a credential: probing agy's local
 server or reusing its OAuth client is what Google's terms warn against.
 
+agy gets a closed pipe as stdin. When its silent sign-in fails (offline, or a
+token it cannot refresh), print mode starts an interactive OAuth flow unless
+stdin is a pipe: it opens the system browser on a Google sign-in page and waits
+a minute. The launchd timer handed it /dev/null, so every fifteen minutes while
+the Mac was offline a sign-in page appeared. With a pipe it stops at once with
+"authentication required". The reader also skips the run while the Mac cannot
+reach Google, keeping the last reading, and sends agy's own log to one file
+per account instead of a new file under the account's home on every run.
+
   antigravity-usage.py [--account NAME ...] [--if-older MINUTES] [--cwd DIR]
 """
 import argparse
 import json
 import os
+import re
+import socket
 import subprocess
 import sys
 import time
@@ -63,16 +74,44 @@ def parse(output):
     return pools
 
 
+PROBE_HOST = ("oauth2.googleapis.com", 443)
+
+
+def online(timeout=4.0):
+    """Whether agy's token endpoint can be reached at all. A run while the Mac
+    is offline can only fail, and a failure would replace a good reading."""
+    try:
+        socket.create_connection(PROBE_HOST, timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
+def agy_log_path(name):
+    return os.path.join(swlib.sw_home(), "log", "agy-usage-%s.log" % re.sub(r"[^A-Za-z0-9_-]", "-", name))
+
+
 def read(name, profile, cwd):
     binary = swlib.agy_path(profile)
     if not binary:
         raise ValueError("agy is not on PATH and the Gemini app is not installed")
-    proc = subprocess.run([binary, "-p", "/usage", "--output-format", "json"],
-                          env=environment(profile), cwd=cwd, text=True,
-                          capture_output=True, timeout=90, check=False)
-    output = proc.stdout + proc.stderr
-    if "sign in" in output.lower() and "SUCCESS" not in proc.stdout:
-        raise ValueError("not signed in; run agy once with this account's HOME")
+    log = agy_log_path(name)
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    # stdin is a closed pipe, on purpose. agy decides whether it may start its
+    # browser sign-in from stdin alone: a pipe means "no terminal, stop with
+    # 'authentication required'"; /dev/null, which launchd and most detached
+    # callers hand it, lets it open a Google sign-in page and wait a minute.
+    # Measured on agy 1.5.3, 9 Nov 2026, with every stdin and session variant.
+    proc = subprocess.run([binary, "-p", "/usage", "--output-format", "json", "--log-file", log],
+                          env=environment(profile), cwd=cwd, text=True, input="",
+                          capture_output=True, timeout=90, check=False, start_new_session=True)
+    output = (proc.stdout + proc.stderr).lower()
+    if "SUCCESS" not in proc.stdout and any(
+            mark in output for mark in ("sign in", "log in", "not logged in", "authentication required",
+                                        "authentication failed")):
+        home = swlib.expand(profile["home"]) if profile.get("home") else None
+        raise ValueError("not signed in; sign in once in a terminal with %sagy (unattended runs never open a browser)"
+                         % ("HOME=%s SSH_CONNECTION='127.0.0.1 0 127.0.0.1 0' " % home if home else ""))
     return parse(proc.stdout)
 
 
@@ -88,6 +127,7 @@ def main(argv=None):
     accounts = cfg.get("accounts") or {}
     cwd = a.cwd or swlib.sw_home()
     failed = False
+    reachable = None
     for name in names:
         profile = accounts.get(name)
         if not isinstance(profile, dict) or profile.get("kind") != "antigravity":
@@ -98,6 +138,13 @@ def main(argv=None):
         age = time.time() - (swlib.number(cached.get("read_at")) or 0)
         if a.if_older > 0 and cached.get("groups") and not cached.get("error") and age < a.if_older * 60:
             print("OK %s %s (cached %s)" % (name, swlib.antigravity_summary(cached), swlib.short_age(age)))
+            continue
+        if reachable is None:
+            reachable = online()
+        if not reachable:
+            # Not a failure of the account: nothing is written, the last reading stands.
+            print("SKIPPED %s: offline, kept the last reading%s"
+                  % (name, " (%s old)" % swlib.short_age(age) if cached.get("read_at") else ""))
             continue
         try:
             reading = {"read_at": time.time(), "groups": read(name, profile, cwd)}

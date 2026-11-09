@@ -164,10 +164,12 @@ for role in $due; do
   esac
 done
 # Antigravity accounts are named accounts, not roles. Their reader asks agy's
-# own /usage, costs no tokens, and keeps a reading younger than ten minutes.
+# own /usage and costs no tokens, but every run starts agy's server and its
+# background updater, so the timer keeps a reading younger than an hour. The
+# runner refreshes the account it just used, so a fresh figure follows a job.
 case " $only " in
   "  "|*" antigravity "*)
-    older=10
+    older=60
     [ "$force" = true ] && older=0
     (python3 "$HERE/antigravity-usage.py" --if-older "$older" --cwd "$workdir" >/dev/null 2>&1 || true) &
     pids="$pids $!" ;;

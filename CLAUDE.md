@@ -139,6 +139,17 @@ Do not "simplify" these away; each cost real debugging time.
 - `agy -p /usage --output-format json` answers headless with every quota pool
   and costs no tokens, so it is the usage reader. Never probe agy's local
   server or reuse its OAuth client for quota: Google's terms warn against it.
+- agy 1.5.3 decides from stdin alone whether it may start its browser sign-in.
+  When silent auth fails (offline, or a token it cannot refresh) and stdin is
+  not a pipe, print mode opens accounts.google.com in the browser and waits a
+  minute; with a pipe it stops at once with "authentication required". The
+  launchd timer handed it /dev/null, so a Google sign-in page appeared every
+  fifteen minutes while the Mac was offline. The reader gives agy a closed
+  pipe (`input=""`), skips the run while oauth2.googleapis.com is unreachable,
+  and the timer re-reads hourly, not every tick: each run starts agy's server,
+  its background updater and, without `--log-file`, a new log file under the
+  account's home (1,600 of them by 9 Nov 2026). Verified with every stdin and
+  session variant on 9 Nov 2026.
 
 ## Both harnesses
 
