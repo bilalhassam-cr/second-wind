@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 from types import SimpleNamespace
 
+sys.path.insert(0, str(Path(__file__).parent))  # so the file also runs by itself
 from test_grokbot import GrokBotTests
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'

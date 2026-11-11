@@ -209,6 +209,30 @@ def session_reading(path):
         return False
 
 
+def session_reading_is_ahead(current, record, started):
+    """Whether the reading on file should stand instead of this panel's.
+
+    Only a status-line reading written since this reader started, and only
+    when its figures are at least the panel's. Written recently is not read
+    recently: an idle session rewrites the figures from its own last response,
+    and within one window usage only rises, so a lower figure is an older one
+    however new its timestamp.
+    """
+    if current.get("source") != "status line":
+        return False
+    if (swlib.number(current.get("cached_at")) or 0) <= started:
+        return False
+    compared = False
+    for key in ("five_hour_pct", "seven_day_pct"):
+        mine, theirs = swlib.number(record.get(key)), swlib.number(current.get(key))
+        if mine is None or theirs is None:
+            continue
+        if theirs < mine:
+            return False
+        compared = True
+    return compared
+
+
 def no_sign_in_message(dirs):
     """What to say when no profile for this role has a Claude Code sign-in.
 
@@ -373,6 +397,7 @@ def main():
     ap.add_argument("--budget", type=float, default=60)
     ap.add_argument("--dump", default="", help="write the cleaned panel text here")
     a = ap.parse_args()
+    started = time.time()
 
     cfg = swlib.load_config()
     refresh = cfg.get("refresh") or {}
@@ -473,6 +498,13 @@ def main():
         "client_version": version,
         "cached_at": int(time.time()),
     }
+    # A Claude session's status line may have written while this reader was
+    # at the panel, and its figures are the newer ones. Atomic replacement
+    # stops a torn file, not an older reading landing on a newer one.
+    current = swlib.load_usage(a.role)
+    if session_reading_is_ahead(current, record, started):
+        note(status, "OK: a Claude session wrote a newer reading while the panel was read.")
+        return 0
     swlib.write_json_atomic(out, record)
     note(status, "OK")
     return 0

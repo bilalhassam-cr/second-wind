@@ -47,10 +47,18 @@ def reset_epoch(at, text, now=None):
         hour, minute, month, day = (int(parts[0]), int(parts[1]), parts[2], int(parts[3])) \
             if len(parts) == 4 else (0, 0, parts[0], int(parts[1]))
         number = dt.datetime.strptime(month, "%b").month
-        when = dt.datetime(today.year, number, day, hour, minute)
-        if when < today - dt.timedelta(days=1):
-            when = when.replace(year=today.year + 1)
-        return int(when.timestamp())
+        # The year is the one that puts the date nearest to now. A reset is
+        # never months away, so "31 Dec" read ten minutes into January is
+        # last year's, and "Jan 2" read in late December is next year's.
+        best = None
+        for year in (today.year - 1, today.year, today.year + 1):
+            try:
+                when = dt.datetime(year, number, day, hour, minute)
+            except ValueError:
+                continue
+            if best is None or abs(when - today) < abs(best - today):
+                best = when
+        return int(best.timestamp()) if best else None
     clock = _TIME_ONLY.search(text)
     if not clock:
         return None

@@ -73,8 +73,13 @@ time, one command at a time.
    the hooks that notice a limit. Relief: full access, and handover at a task
    boundary when the primary crosses its thresholds.
 
-7. **Write the config with one command**, workers `on` or `off` as chosen, each
-   Codex role with its directory and the name the user gave it, and
+7. **Write the config with one command.** `--primary DIR` and `--level LEVEL`
+   are required. `--secondary` takes the second Claude profile's directory, not
+   `on` or `off`; leave it out when there is none. `--codex`, `--codex2`,
+   `--codex3`, `--grok` and `--cursor` take `on`, `off` or `auto`. For example:
+   `setup.py --write --primary ~/.claude --secondary ~/.claude-secondary --level
+   reviewer --codex on --grok off --cursor off`. Give
+   each Codex role its directory and the name the user gave it, and
    `--field-notes on` when this is a test round (say in one line what the notes
    hold and never hold, and recommend on), then
    tell the user to restart Claude Code and run `--check` and `--accounts`. The
@@ -355,10 +360,11 @@ It installs at `~/.grok/bin/grok`. Verify the sign-in with `grok models`, which
 sends no model prompt.
 
 **Never set `XAI_API_KEY`.** The `api.x.ai` developer API is a separate paid
-product. Grok Build must use the consumer allowance. Work uses
-`grok --permission-mode bypassPermissions -p "<prompt>"`; review uses
-`grok --disallowed-tools "Write,Edit,Bash" -p "<prompt>"`. The prompt must follow
-`-p` immediately, or Grok reports that `--single` needs a value.
+product. Grok Build must use the consumer allowance. The runner passes the
+prompt as a private file, never on the command line. Work runs
+`grok --output-format json --permission-mode bypassPermissions --prompt-file FILE`;
+review runs `grok --output-format json --tools Read,Glob,Grep --disallowed-tools
+Write,Edit,Bash --no-subagents --disable-web-search --prompt-file FILE`.
 
 Grok `/usage` has one weekly window and no 5-hour window.
 
@@ -371,9 +377,10 @@ curl https://cursor.com/install -fsS | bash
 cursor-agent login
 ```
 
-Verify with `cursor-agent status --format json`. Work uses
-`cursor-agent -p --trust`. Review must add `--mode plan`. `--trust` by itself is
-not read-only and wrote a file during live testing.
+Verify with `cursor-agent status --format json`. Work runs
+`cursor-agent -p --trust --force`; review runs `cursor-agent -p --trust --mode plan`,
+with the prompt on standard input both times. `--trust` by itself is not
+read-only and wrote a file during live testing.
 
 Headless runs can authenticate with `CURSOR_API_KEY`, but `/usage` requires the
 interactive browser login, so an API-key sign-in is delegation only and
@@ -423,7 +430,7 @@ windows, the fraction left and the reset time. `antigravity-usage.py` reads it
 for every Antigravity account, under each account's `home`, and the panel
 shows one row per account: Gemini's pool in the two columns, any other pool
 that has been used in the note beneath. The scheduled refresh runs it, keeping
-a reading younger than ten minutes, and every Antigravity delegation refreshes
+a reading younger than an hour, and every Antigravity delegation refreshes
 its own account afterwards. Some plans report only weekly windows; the 5-hour
 column then reads n/a.
 

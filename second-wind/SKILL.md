@@ -80,9 +80,28 @@ implementation needs separate worktrees. Inspect the actual diff and verify
 work yourself. A worker's completion statement is not proof.
 
 A non-zero exit, timeout (124), interruption (130), or empty response (4) is a
-failed delegation. Report it as failure. Keep the account's answer distinct from
+failed delegation. Exit 75 means the account is out of allowance: its last
+usage reading said so and nothing was sent, or the vendor refused the run. Say
+so and offer another account; pass `--ignore-usage` only when the user says the
+reading is wrong. Exit 2 means nothing was sent. Report every one as failure. Keep the account's answer distinct from
 your own judgment and give the exchange location. Every harness uses the same
 ledger; review it with `python3 "$SW/scripts/report.py" 7`.
+
+## Health and updates
+
+```bash
+python3 "$SW/scripts/health.py"          # what needs the user, and the fix for each
+python3 "$SW/scripts/update.py" --check  # is there a newer version
+python3 "$SW/scripts/update.py"          # show what is new, ask, then update
+```
+
+Run `health.py` when a usage row says a refresh failed, when a delegation fails
+in a way that looks like sign-in, or when the user asks whether everything is
+working. Relay its "Needs you" items with their fix exactly; they name the
+account and the command. A line starting "Needs you:" in the session brief is
+the same report: pass it on once, do not act on it yourself. A sign-in is the
+user's to do. Update only when the user asks; it fast-forwards the checkout the
+skill was installed from and refuses one with local changes.
 
 ## Harness integration
 

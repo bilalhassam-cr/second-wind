@@ -177,7 +177,12 @@ def apply(cfg=None, on=None):
     block = picker_block(describe(cfg), cfg)
     if current == block:
         return "the model picker already says this."
-    swlib.backup_once(path)
+    # This runs from a timer, against a file Claude Code and its user also
+    # write. If it changed since it was read, somebody else's edit is in it and
+    # ours can wait for the next refresh.
+    if read_settings(path) != data:
+        return "%s changed while it was being read, so it was left alone." % swlib.tilde(path)
+    swlib.backup_once(path, stamped=False)
     data["modelPicker"] = block
     swlib.write_json_atomic(path, data, mode=0o600)
     return "model picker: %s" % block["options"][0]["description"]

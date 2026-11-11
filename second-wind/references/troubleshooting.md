@@ -3,6 +3,15 @@
 ## Start here: is it actually working?
 
 ```bash
+python3 "$SW/scripts/health.py"
+```
+
+This says what needs you and gives the fix for each: which account to sign in
+to again and the command for it, which client to update, when the fault is in
+Second Wind itself. `--tidy` also clears its own surplus backups. For every
+link in the chain, in full:
+
+```bash
 python3 "$SW/scripts/setup.py" --check
 ```
 
@@ -206,7 +215,10 @@ python3 "$SW/scripts/report.py" 7
 ```
 
 The runner warns when a worker exits zero and returns nothing, and exit 124 means
-it was killed on the timeout (`timeout_seconds`, 600 by default). In `--work`
+it was killed on the timeout (`timeout_seconds`: 600 in a config setup wrote, 7200
+when the key is absent). Exit 75 means the account is out of allowance: either
+its last reading said so and nothing was sent, or the vendor refused the run.
+Choose another account, or pass `--ignore-usage` if the reading is wrong. In `--work`
 mode, verify the artefact yourself.
 
 Exchange files are capped at 200 KB and pruned after 30 days. The ledger line
@@ -219,9 +231,10 @@ Never set `XAI_API_KEY`. It selects the separately paid `api.x.ai` developer API
 instead of the SuperGrok or X Premium+ consumer allowance. The runner removes the
 variable before every Grok delegation.
 
-Grok work is `grok --permission-mode bypassPermissions -p "<prompt>"`; review is
-`grok --disallowed-tools "Write,Edit,Bash" -p "<prompt>"`. The prompt must be the
-argument immediately after `-p`. Grok `/usage` has a weekly window only.
+Grok work is `grok --output-format json --permission-mode bypassPermissions
+--prompt-file FILE`; review swaps the permission flag for `--tools Read,Glob,Grep
+--disallowed-tools Write,Edit,Bash --no-subagents --disable-web-search`. Grok
+`/usage` has a weekly window only.
 
 ## Cursor writes during a review
 
@@ -354,9 +367,9 @@ appear only with `--model-picker on`, and the key carries a `_second_wind` marke
 so nothing else in `settings.json` is touched. `model-picker.py --print` shows the
 line without writing it, and `model-picker.py --off` removes the key.
 
-Setting `--model-picker off` at `--write` stops the refresh rewriting the rows,
-it does not remove the key already in the file. Run `model-picker.py --off` after
-it, or wait for `--uninstall`.
+Setting `--model-picker off` at `--write` stops the refresh rewriting the rows
+and removes the key when it carries our marker. `model-picker.py --off` does the
+same by itself.
 
 ## Settings changes do not take effect
 
@@ -367,15 +380,17 @@ this one. Restart before concluding something is broken.
 ## Undo everything
 
 ```bash
-python3 ~/.claude/skills/second-wind/scripts/setup.py --uninstall
-rm -rf ~/.second-wind ~/.claude/skills/second-wind
+./install.sh --uninstall        # from the checkout; lists what it removes, then asks
+rm -rf ~/.second-wind            # only if you also want the config and history gone
 ```
 
-Run the uninstall **before** the `rm -rf`, because any status line it replaced is
-stored under `~/.second-wind` and is put back from there.
+`install.sh --uninstall` works even when the skill folder has already been
+deleted. Run it **before** removing `~/.second-wind`, because any status line it
+replaced is stored there and is put back from there.
 
-It removes our hooks, status line and model picker key, restores the previous
-status line, and unloads the launchd agent. It does not roll the whole settings
+It removes the skill folders, our hooks, status line and model picker key,
+restores the previous status line, unloads the refresh agent, and stops the Grok
+Bot bridge for good, with its stored key and script copies. It does not roll the whole settings
 file back; setup left a timestamped copy beside the original, so a full rollback
 is a manual file copy. It prints the two workdir trust entries to delete by hand,
 because editing those files while a client is running risks corrupting them.

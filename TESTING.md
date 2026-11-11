@@ -201,3 +201,23 @@ workspace unchanged. Both run.sh and the Python command wrote the same ledger,
 and the personal Claude alias resolved to its existing role. Sixty-five legacy
 exchanges were copied and indexed; repeating migration copied none and added no
 duplicate entries. These results do not establish live Linux-client behaviour.
+
+## Health, update and the 10 November 2026 review
+
+`tests/test_review_fixes.py` holds one test per fault the review found: the
+runtime mirror runs every reader with nothing but itself, backups are capped,
+pruning touches only exchanges, a hook is ours by content, an old Antigravity
+reading is not drawn, and the runner returns 75 for an account out of
+allowance both before sending and when a vendor refuses.
+
+`tests/test_health_update.py` covers the health report against synthetic state
+files, and updating against a real git remote, checkout and copied install in
+a temporary folder: check, refusal without a terminal, update, the kept
+previous copy, a linked install, a checkout with local changes and a branch
+with no upstream. The installer's dry run, record and uninstall run there too.
+
+Checked live on macOS on 10 November 2026: the health report against a
+machine with a signed-out Cursor, a rate-limited usage endpoint and a spent
+Codex account; the installer into an empty home, twice; the update check from
+a linked install. Not checked live: an update that actually moves a copied
+install on a second machine, and uninstall against a real Claude profile.

@@ -1658,9 +1658,9 @@ class Destinations(Base):
         self.house()
         rows = {row["worker"]: row["models"] for row in swlib.destinations()}
         self.assertEqual([entry["text"] for entry in rows["secondary"]],
-                         ["claude-fable-5-1 high", "claude-opus-5-5 high",
+                         ["claude-fable-5-2 high", "claude-opus-5-5 high",
                           "claude-sonnet-5-5 medium",
-                          "claude-haiku-4-5-20251001 low"])
+                          "claude-haiku-5-5 low"])
         self.assertEqual(rows["secondary"][1],
                          {"model": "claude-opus-5-5", "effort": "high",
                           "text": "claude-opus-5-5 high",
@@ -1717,9 +1717,9 @@ class Destinations(Base):
                          ["gpt-6 low", "default"])
         # A worker the block does not name keeps the built-in presets.
         self.assertEqual([entry["text"] for entry in swlib.model_menu("secondary")],
-                         ["claude-fable-5-1 high", "claude-opus-5-5 high",
+                         ["claude-fable-5-2 high", "claude-opus-5-5 high",
                           "claude-sonnet-5-5 medium",
-                          "claude-haiku-4-5-20251001 low"])
+                          "claude-haiku-5-5 low"])
 
     def test_an_empty_menu_in_the_config_falls_back(self):
         self.write_config(codex={"enabled": True},
@@ -1813,14 +1813,27 @@ class RouteCli(Base):
         self.where = os.path.join(self.home, "project")
         os.makedirs(self.where)
 
-    def run_route(self, *args, store=None, cwd=None):
+    def run_route(self, *args, store=None, cwd=None, session_env=None):
         environment = dict(os.environ)
+        # The suite may itself be running inside a Claude Code session.
+        environment.pop("CLAUDE_CODE_SESSION_ID", None)
+        if session_env:
+            environment["CLAUDE_CODE_SESSION_ID"] = session_env
         environment["SW_HOME"] = self.home
         environment["SW_DESKTOP_STORE"] = store or os.path.join(self.home, "gone")
         return subprocess.run(
             [sys.executable, os.path.join(SCRIPTS, "route.py")] + list(args),
             capture_output=True, text=True, timeout=30, env=environment,
             cwd=cwd or self.where)
+
+    def test_here_takes_the_session_claude_code_names_before_the_store(self):
+        other = "1111bbbb-2222-3333-4444-555566667777"
+        self.write_config(codex={"enabled": True})
+        done = self.run_route("--set", "codex", "--here", store=self.session_entry(),
+                              session_env=other)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.route(other)["worker"], "codex")
+        self.assertFalse(os.path.exists(swlib.route_path(self.SESSION)))
 
     def session_entry(self, session=None):
         folder = os.path.join(self.store, "outer", "inner")

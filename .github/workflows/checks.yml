@@ -1,6 +1,29 @@
 name: checks
 on: [push, pull_request]
 jobs:
+  # The tool's live surface is macOS on the Python that ships with it, so the
+  # tests run there too and not only on a current Linux.
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            python: "3.9"
+          - os: ubuntu-latest
+            python: "3.9"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: unit tests
+        run: python3 -m unittest discover -s second-wind/tests
+      - name: each test file runs by itself
+        run: |
+          cd second-wind
+          for file in tests/test_*.py; do python3 -m unittest "$file" >/dev/null 2>&1 || { echo "$file fails alone"; exit 1; }; done
   lint:
     runs-on: ubuntu-latest
     steps:

@@ -9,7 +9,7 @@ this same file; installation does not create a second configuration.
 | Key | Meaning |
 |---|---|
 | `version` | Config schema version. This build writes and expects 4. `--check` fails an older one. |
-| `accounts` | Additional named delegation accounts, used from either harness. Each has `kind` (`claude`, `codex`, `grok`, `cursor`, `antigravity`, `grokbot`) and `label`. Claude and Codex require `config_dir`; Claude also requires `expected_email`. Any account may set `model`, its default model, which `--model` overrides. Antigravity takes an optional `home`, the `HOME` its sign-in lives under (one sign-in per `HOME`, so a second account needs its own), and an optional `binary`; otherwise `agy` on PATH, then the copy bundled in the Gemini macOS app. Codex/Cursor compare `expected_email` when their client reports it. These accounts have no Claude usage-panel or picker integration. |
+| `accounts` | Additional named delegation accounts, used from either harness. Each has `kind` (`claude`, `codex`, `grok`, `cursor`, `antigravity`, `grokbot`) and `label`. Claude and Codex require `config_dir`; Claude also requires `expected_email`. Any account may set `model`, its default model, which `--model` overrides. Antigravity takes an optional `home`, the `HOME` its sign-in lives under (one sign-in per `HOME`, so a second account needs its own), and an optional `binary`; otherwise `agy` on PATH, then the copy bundled in the Gemini macOS app. Codex/Cursor compare `expected_email` when their client reports it. These accounts have no picker integration and, except Antigravity, no usage-panel row. |
 | `aliases` | Old account name to canonical account name, such as `{"old-personal":"secondary"}`. Aliases share the destination's sign-in and ledger role; they are not separate profiles. Do not reuse existing role names. |
 | `level` | `reviewer`, `worker` or `relief`. Sets `defaults.mode`, `failover.enabled` and which hooks setup installs. |
 | `primary.config_dir` | The profile that orchestrates and holds the conversation. Usually `~/.claude`. |
@@ -42,7 +42,8 @@ this same file; installation does not create a second configuration.
 | `log.dir` | Where the ledger and the exchange files go. |
 | `log.max_exchange_kb` | Size cap per saved exchange. |
 | `log.prune_days` | How long exchanges are kept. |
-| `timeout_seconds` | Seconds before a delegated call is killed. |
+| `timeout_seconds` | Seconds before a delegated call is killed. Setup writes 600; 7200 when the key is absent. |
+| `update.check` | `false` stops the once-a-day background check for a newer version. Nothing is ever installed without `update.py` being run. |
 | `tested_versions` | Client versions present when setup ran. `--check` warns when an installed client has moved on, because a moved label is the usual cause of a reading that stops parsing. |
 | `skill_dir` | Where the skill lives, so SKILL.md can find its own scripts. |
 

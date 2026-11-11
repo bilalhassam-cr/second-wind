@@ -32,6 +32,17 @@ VENDOR_KEYS = (
 )
 
 
+ROLE_NAMES = ("primary", "secondary", "codex", "codex2", "codex3", "grok", "cursor")
+# What exchange_path and the migration write, and so what pruning may remove.
+EXCHANGE_NAME = re.compile(r"^(?:legacy-codex-wind-)?\d{8}-\d{6}-.+\.md$")
+# A worker that has run out of allowance, in the vendors' own words. Matched
+# only on a failed run, so a reply that discusses limits is never mistaken.
+OUT_OF_ALLOWANCE = re.compile(
+    r"hit your (?:usage |spend |weekly |session )?(?:limit|cap)|usage limit reached|"
+    r"quota (?:exceeded|exhausted)|out of (?:credits|quota)", re.I)
+EXIT_OUT_OF_ALLOWANCE = 75
+
+
 class GrokBotRefused(RuntimeError):
     pass
 
@@ -65,7 +76,7 @@ def normalise_config(data: dict[str, Any]) -> dict[str, Any]:
     config = dict(data)
     accounts = {}
     if data["version"] == 4:
-        for role in ("primary", "secondary", "codex", "codex2", "codex3", "grok", "cursor"):
+        for role in ROLE_NAMES:
             entry = data.get(role) or {}
             if not entry or (role != "primary" and entry.get("enabled") is not True):
                 continue
@@ -423,8 +434,10 @@ def record_exchange(
         os.close(fd)
     days = int((config.get("log") or {}).get("prune_days", 30))
     if days > 0:
+        # Only files this runner named. The folder is the user's to choose,
+        # and a bare *.md once took month-old notes with it.
         for old in path.parent.glob("*.md"):
-            if old.stat().st_mtime < time.time() - days * 86400:
+            if EXCHANGE_NAME.match(old.name) and old.stat().st_mtime < time.time() - days * 86400:
                 old.unlink()
 
 
@@ -463,6 +476,12 @@ def write_config(data: dict[str, Any]) -> None:
             shutil.copy2(config_path(), backup)
             backup.chmod(0o600)
         os.replace(temporary, config_path())
+        # The newest five. Every setup and migration used to leave one more.
+        # Only names this function wrote: config.backup-<nanoseconds>.json.
+        ours = sorted(path for path in root.glob("config.backup-*.json")
+                      if re.fullmatch(r"config\.backup-\d{15,}\.json", path.name))
+        for old in ours[:-5]:
+            old.unlink()
     finally:
         Path(temporary).unlink(missing_ok=True)
 
@@ -496,7 +515,7 @@ def command_migrate(args: argparse.Namespace) -> int:
                 raise WindError(f"migration identity conflict for {name}; saved emails differ")
             matches.append(target)
         target = matches[0] if matches else name
-        reserved = name in ("primary", "secondary", "codex", "codex2", "codex3", "grok", "cursor") and name in data
+        reserved = name in ROLE_NAMES and name in data
         if (name in current["accounts"] or reserved) and (not matches or target != name):
             raise WindError(f"migration account-name conflict: {name}")
         if target == name and not matches:
@@ -601,7 +620,12 @@ def command_run(args: argparse.Namespace) -> int:
     if args.bot:
         raise WindError("--bot is only available for Grok Bot")
     if not (args.review or args.work):
-        raise WindError("run requires --review or --work")
+        # The config's own default, as config.md has always said and run.sh
+        # has always done. Anything else there is an error, not a guess.
+        chosen = (config.get("defaults") or {}).get("mode")
+        if chosen not in ("review", "work"):
+            raise WindError("run requires --review or --work")
+        setattr(args, chosen, True)
     status = auth_status(profile)
     workspace = Path(args.workspace).expanduser().resolve()
     prompt_path = Path(args.prompt_file).expanduser().resolve()
@@ -682,11 +706,22 @@ def command_run(args: argparse.Namespace) -> int:
 
     # A cached, explicitly observed identity/plan change blocks delegation.
     role = profile.get("_role", args.account)
-    if config.get("version") == 4 and role in ("primary", "secondary", "codex", "codex2", "codex3", "grok", "cursor"):
+    if config.get("version") == 4 and role in ROLE_NAMES:
         import swlib
         drift = swlib.identity_drift(role, config)
         if drift:
             raise WindError(f"{role} sign-in changed: {drift}; restore it or explicitly repin it")
+        # A reading still worth showing that says nothing is left. Sending
+        # anyway costs the caller a failed run to learn what is already known.
+        if not getattr(args, "ignore_usage", False) and swlib.spent(role, cfg=config):
+            usage = swlib.load_usage(role)
+            note = swlib.spent_reset_note(role, usage)
+            refresh_usage(profile, [role])
+            print(f"second-wind: {profile['label']} has no allowance left on its last reading"
+                  f"{' (' + note + ')' if note else ''}; nothing sent. "
+                  "Choose another account, or pass --ignore-usage if the reading is wrong.",
+                  file=sys.stderr)
+            return EXIT_OUT_OF_ALLOWANCE
     # Reserve a private record before spending allowance. A failed worker or
     # empty final message must be recorded with the same exit code we return.
     path = exchange_path(config, args.account, workspace)
@@ -781,6 +816,10 @@ def command_run(args: argparse.Namespace) -> int:
     if returncode == 0 and not output.strip():
         returncode = 4
         print("second-wind: worker returned an empty response", file=sys.stderr)
+    out_of_allowance = (returncode not in (0, 124, 130) and
+                        bool(OUT_OF_ALLOWANCE.search(diagnostics[-4000:] + output[-2000:])))
+    if out_of_allowance:
+        returncode = EXIT_OUT_OF_ALLOWANCE
     elapsed = time.monotonic() - started
     record_exchange(
         path,
@@ -804,13 +843,13 @@ def command_run(args: argparse.Namespace) -> int:
         print(f"second-wind: client diagnostics retained in exchange ({len(diagnostics)} characters)", file=sys.stderr)
     if timed_out:
         print(f"second-wind: worker timed out after {timeout}s", file=sys.stderr)
+    if out_of_allowance:
+        print(f"second-wind: {profile['label']} is out of allowance (exit {EXIT_OUT_OF_ALLOWANCE}); "
+              "choose another account", file=sys.stderr)
     print(f"second-wind: exchange {path}", file=sys.stderr)
-    if config.get("version") == 4 and os.environ.get("SW_NO_REFRESH") != "1" and role in ("primary", "secondary", "codex", "codex2", "codex3", "grok", "cursor"):
-        refresh = Path(__file__).with_name("usage-refresh.sh")
-        with open(os.devnull, "w") as sink:
-            subprocess.Popen(["/bin/sh", str(refresh), "--force", "--only", role, "primary"],
-                             env=clean_env(profile), stdin=subprocess.DEVNULL, stdout=sink, stderr=sink,
-                             start_new_session=True)
+    if config.get("version") == 4 and role in ROLE_NAMES:
+        # A run that found the account empty is news whatever the last reading said.
+        refresh_usage(profile, [role, "primary"], always=[role] if out_of_allowance else [])
     if kind == "antigravity" and os.environ.get("SW_NO_REFRESH") != "1":
         reader = Path(__file__).with_name("antigravity-usage.py")
         with open(os.devnull, "w") as sink:
@@ -818,6 +857,25 @@ def command_run(args: argparse.Namespace) -> int:
                              env=os.environ.copy(), stdin=subprocess.DEVNULL, stdout=sink, stderr=sink,
                              start_new_session=True)
     return returncode
+
+
+def refresh_usage(profile: dict[str, Any], roles: list[str], always: list[str] | None = None) -> list[str]:
+    """Start a background reading for the roles nobody has read in the last
+    five minutes. Returns the roles asked for. Every job used to force one, and
+    fifty jobs a day got an account's usage endpoint rate limited."""
+    if os.environ.get("SW_NO_REFRESH") == "1":
+        return []
+    import swlib
+    due = [role for role in dict.fromkeys(roles)
+           if role in (always or []) or not swlib.recently_read(role)]
+    if not due:
+        return []
+    refresh = Path(__file__).with_name("usage-refresh.sh")
+    with open(os.devnull, "w") as sink:
+        subprocess.Popen(["/bin/sh", str(refresh), "--force", "--only", *due],
+                         env=clean_env(profile), stdin=subprocess.DEVNULL, stdout=sink, stderr=sink,
+                         start_new_session=True)
+    return due
 
 
 class GrokBotNotIssued(WindError):
@@ -1289,8 +1347,30 @@ def command_grokbot(args):
     return 0
 
 
+def _sibling(name: str):
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    return __import__(name)
+
+
+def command_health(args: argparse.Namespace) -> int:
+    flags = [flag for flag, on in (("--json", args.json), ("--tidy", args.tidy), ("--quick", args.quick)) if on]
+    return _sibling("health").main(flags)
+
+
+def command_update(args: argparse.Namespace) -> int:
+    flags = [flag for flag, on in (("--check", args.check), ("--yes", args.yes)) if on]
+    return _sibling("update").main(flags)
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="second-wind")
+    try:
+        release = (Path(__file__).resolve().parents[1] / "VERSION").read_text().strip()
+    except OSError:
+        release = "unknown"
+    root.add_argument("--version", action="version", version="second-wind " + release)
     commands = root.add_subparsers(dest="command", required=True)
     status = commands.add_parser("status", help="verify configured subscription identities without a model request")
     status.add_argument("account", nargs="?")
@@ -1309,11 +1389,22 @@ def parser() -> argparse.ArgumentParser:
     access.add_argument("--work", action="store_true")
     run.add_argument("--bot")
     run.add_argument("--model")
-    run.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
+    run.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max", "ultra"))
     run.add_argument("--timeout", type=int)
+    run.add_argument("--ignore-usage", action="store_true",
+                     help="send even when the last usage reading says this account is spent")
     run.add_argument("--resume", help="continue a native Claude or Codex session UUID")
     run.add_argument("--session-result", help="write native session metadata to a private JSON file")
     run.set_defaults(handler=command_run)
+    health = commands.add_parser("health", help="what needs you, and the fix for each")
+    health.add_argument("--json", action="store_true")
+    health.add_argument("--tidy", action="store_true")
+    health.add_argument("--quick", action="store_true")
+    health.set_defaults(handler=command_health)
+    update = commands.add_parser("update", help="check for a newer Second Wind and install it")
+    update.add_argument("--check", action="store_true", help="only say whether one exists")
+    update.add_argument("--yes", action="store_true", help="install without asking")
+    update.set_defaults(handler=command_update)
     grokbot = commands.add_parser("grokbot", help="talk to a configured persistent bot")
     grokbot.add_argument("account", nargs="?")
     grokbot.add_argument("action", choices=("bots", "read", "check", "interrupt", "setup"))

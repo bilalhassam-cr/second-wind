@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import swlib  # noqa: E402
@@ -67,6 +68,30 @@ def spawn_refresh(*args):
         pass
 
 
+def check_for_update(cfg):
+    """Once a day, ask the checkout's own remote whether it has moved on, in
+    the background. The answer goes in a file the health report reads; nothing
+    is installed. `"update": {"check": false}` in the config turns it off."""
+    try:
+        if (cfg.get("update") or {}).get("check") is False:
+            return
+        # Its own stamp, never the answer file: writing "no updates" there
+        # before the check ran erased an update an earlier check had found.
+        stamp = os.path.join(swlib.sw_home(), "update-check.stamp")
+        if os.path.exists(stamp) and time.time() - os.path.getmtime(stamp) < 86400:
+            return
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "update.py")
+        if not os.path.exists(script):
+            return
+        swlib.write_text_atomic(stamp, "%d\n" % time.time())
+        subprocess.Popen([sys.executable, script, "--check", "--quiet"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True, cwd="/")
+    except Exception:
+        pass
+
+
 def main():
     raw = ""
     try:
@@ -110,6 +135,15 @@ def main():
                      "stops it." % route["label"])
     else:
         lines.append("Type /second-wind to pick where the next tasks run.")
+    # What needs the user, with the fix: a signed-out account, a reader this
+    # tool broke. Without it a fault sat behind "the last refresh failed" for
+    # weeks. State files only, and never more than two lines.
+    try:
+        import health
+        lines.extend(health.brief(cfg))
+    except Exception:
+        pass
+    check_for_update(cfg)
     context = "\n".join(lines) + "\n\n" + INSTRUCTION
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "SessionStart",

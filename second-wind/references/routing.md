@@ -47,7 +47,7 @@ never shows a bare model name.
 
 | Worker | Presets |
 |---|---|
-| Personal Claude (`secondary`) | `claude-fable-5-1/high`, `claude-opus-5-5/high`, `claude-sonnet-5-5/medium`, `claude-haiku-4-5-20251001/low` |
+| Personal Claude (`secondary`) | `claude-fable-5-2/high`, `claude-opus-5-5/high`, `claude-sonnet-5-5/medium`, `claude-haiku-5-5/low` |
 | Codex | `gpt-6.1-sol/high`, `gpt-6.1-sol/medium`, `gpt-6-astra/high` |
 | Grok Build | `default/high`, `default/medium` |
 | Cursor Agent | `default` |
@@ -76,10 +76,10 @@ to type, because that is the only thing that changes a running session:
 
 | Preset | Type this | For |
 |---|---|---|
-| Fable 5.1, high | `/model claude-fable-5-1` then `/effort high` | The default. Long deliverables. |
+| Fable 5.2, high | `/model claude-fable-5-2` then `/effort high` | The default. Long deliverables. |
 | Opus 5.5, high | `/model claude-opus-5-5` then `/effort high` | Hard reasoning, spends heavily. |
 | Sonnet 5.5, medium | `/model claude-sonnet-5-5` then `/effort medium` | Everyday tasks, light on the allowance. |
-| Haiku 4.5, low | `/model claude-haiku-4-5-20251001` then `/effort low` | The cheapest pass. |
+| Haiku 5.5, low | `/model claude-haiku-5-5` then `/effort low` | The cheapest pass. |
 
 ## The route files
 

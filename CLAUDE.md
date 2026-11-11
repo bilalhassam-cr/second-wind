@@ -151,6 +151,30 @@ Do not "simplify" these away; each cost real debugging time.
   account's home (1,600 of them by 9 Nov 2026). Verified with every stdin and
   session variant on 9 Nov 2026.
 
+- The scheduled refresh runs a copy of the readers in `~/.second-wind/runtime`,
+  because launchd cannot read `~/Documents`. A reader that imports a sibling
+  the copy lacks dies on the import, on every run, and the forced refresh
+  after a job hides it by succeeding from the skill folder. `card_json.py` was
+  missing from 22 October to 10 November 2026. `RUNTIME_FILES` in swlib is the
+  list, and a test reads every reader's imports against it.
+- A crashed reader's first stderr line is "Traceback (most recent call last):".
+  The status keeps the last line.
+- `backup_once` keeps the original and five timestamped copies. The model
+  picker runs on every refresh and takes the original only: with a copy per
+  refresh, one machine held 3,200 copies of `settings.json`.
+- The model picker rewrites the user's live `settings.json` from a timer. It
+  re-reads the file before writing and leaves it alone if it changed.
+- The runner forces a usage read after a job only when none was made in the
+  last five minutes. One per job got an account rate limited.
+- A hook or status line is ours by the file's content, or because the file is
+  gone, never by its name alone. `notification.py` and `statusline.sh` are
+  what most people call their own.
+- Pruning matches the exchange file name. The log folder is the user's choice.
+- The suite may run inside a Claude Code session, which sets
+  `CLAUDE_CODE_SESSION_ID`. A test that runs `route.py` drops it.
+- The installed skill on the author's machine is a link to this checkout, so
+  an edit here is live at once. Work on a branch does not change that.
+
 ## Both harnesses
 
 `second-wind/` is the single skill installed in both Claude Code and Codex.

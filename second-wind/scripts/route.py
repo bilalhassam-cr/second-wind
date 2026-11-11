@@ -46,6 +46,12 @@ def here_session(a):
     None when nothing can name it."""
     if a.session:
         return a.session.strip()
+    # Claude Code hands every command it runs its own session id, which is
+    # the id a hook is given. Asked first: the store can only say which
+    # session was last active in this folder, and two chats can share one.
+    named = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    if named:
+        return named
     record = swlib.desktop_session_here()
     session = (record or {}).get("cliSessionId")
     return session.strip() if isinstance(session, str) and session.strip() \

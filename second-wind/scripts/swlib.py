@@ -42,6 +42,10 @@ WORKER_ROLES = ("secondary", "codex", "codex2", "codex3", "grok", "cursor")
 # A reading older than this is not shown as a figure at all. The guard ignores
 # it and the brief says so, because a wrong percentage is worse than no figure.
 DEAD_SECONDS = 3600
+# Antigravity is read hourly, not every tick, because each read starts agy's
+# server and updater. Its reading is therefore routinely up to 75 minutes old,
+# and is dropped at two hours rather than one.
+ANTIGRAVITY_DEAD_SECONDS = 7200
 DEFAULT_INTERVAL_MINUTES = 15
 CONFIG_VERSION = 4
 STATUS_KINDS = ("ok", "login", "nologin", "trust", "parser", "failed", "none")
@@ -134,15 +138,17 @@ def thresholds(cfg=None):
 
 
 def enabled_roles(cfg=None):
-    """The roles this machine is configured to use. Primary is always in."""
+    """The roles this machine is configured to use. Primary is in whenever any
+    role is: a config that holds only named accounts, which is what a
+    Codex-only setup looks like, has no primary and must not be shown one."""
     cfg = load_config() if cfg is None else cfg
     if not cfg:
         return []
-    roles = ["primary"]
-    for role in WORKER_ROLES:
-        if (cfg.get(role) or {}).get("enabled") is True:
-            roles.append(role)
-    return roles
+    workers = [role for role in WORKER_ROLES
+               if (cfg.get(role) or {}).get("enabled") is True]
+    if not workers and not isinstance(cfg.get("primary"), dict):
+        return []
+    return ["primary"] + workers
 
 
 def reading_enabled(role, cfg=None):
@@ -286,8 +292,8 @@ ROUTE_MAX_AGE = 12 * 3600
 # a row reading Opus 5.5 could quietly run Opus 5. Four at most per worker,
 # because the presets are offered as one question, and a question takes four.
 PICKER_MODELS = {
-    "secondary": ("claude-fable-5-1/high", "claude-opus-5-5/high",
-                  "claude-sonnet-5-5/medium", "claude-haiku-4-5-20251001/low"),
+    "secondary": ("claude-fable-5-2/high", "claude-opus-5-5/high",
+                  "claude-sonnet-5-5/medium", "claude-haiku-5-5/low"),
     "codex": ("gpt-6.1-sol/high", "gpt-6.1-sol/medium", "gpt-6-astra/high"),
     "codex2": ("gpt-6.1-sol/high", "gpt-6.1-sol/medium", "gpt-6-astra/high"),
     "codex3": ("gpt-6.1-sol/high", "gpt-6.1-sol/medium", "gpt-6-astra/high"),
@@ -298,12 +304,12 @@ PICKER_MODELS = {
 # somebody guess from a model name. A preset nobody wrote a line for gets a
 # plain description built from its own words.
 MODEL_NOTES = {
-    "claude-fable-5-1/high":
-        "Fable 5.1, high effort: the strongest model, long deliverables",
+    "claude-fable-5-2/high":
+        "Fable 5.2, high effort: the strongest model, long deliverables",
     "claude-opus-5-5/high": "Opus 5.5, high effort: hard reasoning, spends heavily",
     "claude-sonnet-5-5/medium":
         "Sonnet 5.5, medium: everyday tasks, light on the allowance",
-    "claude-haiku-4-5-20251001/low": "Haiku 4.5, low: the cheapest pass",
+    "claude-haiku-5-5/low": "Haiku 5.5, low: the cheapest pass",
     "gpt-6.1-sol/high": "GPT-6.1-Sol, high effort: complex problems, slower",
     "gpt-6.1-sol/medium": "GPT-6.1-Sol, medium: everyday tasks",
     "gpt-6-astra/high":
@@ -435,7 +441,10 @@ def destinations(cfg=None, now=None):
 
 def write_json_atomic(path, data, mode=0o600):
     """Temp file in the same directory then rename, so a crash or a concurrent
-    reader never sees half a settings file."""
+    reader never sees half a settings file. A symlink is written through, to
+    the file it points at: replacing the link itself would cut a settings file
+    kept in a dotfiles folder loose from it."""
+    path = os.path.realpath(path) if os.path.islink(path) else path
     folder = os.path.dirname(path) or "."
     os.makedirs(folder, exist_ok=True)
     handle, tmp = tempfile.mkstemp(dir=folder, prefix=".second-wind-", suffix=".tmp")
@@ -455,6 +464,7 @@ def write_json_atomic(path, data, mode=0o600):
 
 
 def write_text_atomic(path, text, mode=0o600):
+    path = os.path.realpath(path) if os.path.islink(path) else path
     folder = os.path.dirname(path) or "."
     os.makedirs(folder, exist_ok=True)
     handle, tmp = tempfile.mkstemp(dir=folder, prefix=".second-wind-", suffix=".tmp")
@@ -472,11 +482,15 @@ def write_text_atomic(path, text, mode=0o600):
     return path
 
 
-def backup_once(path):
+def backup_once(path, stamped=True):
     """Back up a file we are about to edit. Two copies on purpose: one
     ``.second-wind-original`` taken the first time we ever touch this file and
     never overwritten, plus a timestamped copy per write. The original is what
     somebody wants a year later; the timestamped ones are for today.
+
+    ``stamped=False`` takes the original only. That is for the model picker,
+    which rewrites one key of its own on every refresh: a copy per refresh is
+    a copy of the same file a hundred times a day.
 
     Returns (original_path_or_None, timestamped_path_or_None).
     """
@@ -487,9 +501,35 @@ def backup_once(path):
     if not os.path.exists(original):
         shutil.copy2(path, original)
         made_original = original
+    if not stamped:
+        return made_original, None
     stamped = "%s.second-wind-backup-%s" % (path, time.strftime("%Y%m%d-%H%M%S"))
     shutil.copy2(path, stamped)
+    prune_backups(path)
     return made_original, stamped
+
+
+# How many timestamped copies of one file are kept. The original is never
+# counted and never removed. Without a limit a machine that rewrote its
+# settings on every refresh held three thousand copies of them.
+BACKUPS_KEPT = 5
+
+
+def prune_backups(path, keep=BACKUPS_KEPT):
+    """Remove all but the newest timestamped backups of this file. Only names
+    this module writes are matched, and a failure is never worth a word."""
+    stamp = re.compile(r"^\d{8}-\d{6}$")
+    prefix = path + ".second-wind-backup-"
+    copies = sorted(name for name in glob.glob(glob.escape(prefix) + "*")
+                    if stamp.match(name[len(prefix):]))
+    removed = []
+    for old in copies[:-keep] if keep > 0 else copies:
+        try:
+            os.unlink(old)
+            removed.append(old)
+        except OSError:
+            pass
+    return removed
 
 
 # ---------------------------------------------------------------- route store
@@ -1009,6 +1049,9 @@ RUNTIME_FILES = (
     "cursor-usage.py",
     "antigravity-usage.py",
     "model-picker.py",
+    # claude-usage.py imports it. Left out, every scheduled Claude reading
+    # died on the import for nineteen days; a test now reads the imports.
+    "card_json.py",
 )
 
 
@@ -1191,6 +1234,62 @@ def freshness(role, now=None, cfg=None):
     if age >= DEAD_SECONDS:
         return "dead"
     return "fresh" if age < interval_minutes(cfg) * 60 else "stale"
+
+
+def recently_read(role, seconds=300, now=None):
+    """Whether a reader has tried this role in the last few minutes, whether
+    it got a figure or a failure. The runner asks before forcing another read:
+    fifty jobs a day each forcing one got an account's usage endpoint rate
+    limited, and a failure retried at once only fails again."""
+    now = time.time() if now is None else now
+    latest = 0.0
+    for path in (usage_path(role), status_path(role)):
+        try:
+            latest = max(latest, os.path.getmtime(path))
+        except OSError:
+            pass
+    return now - latest < seconds
+
+
+def _window_reset(usage, key, read_at):
+    """When this window resets, as an epoch, or None when nothing says."""
+    try:
+        from card_json import reset_epoch
+        return reset_epoch(usage.get(key + "_resets_at"), usage.get(key + "_resets"), read_at)
+    except Exception:
+        return None
+
+
+def spent_windows(role, usage, now=None):
+    """The windows of this reading that are used up and have not reset since
+    it was taken, as a list of 'five_hour' and 'seven_day'.
+
+    Exactly used up: 99.6% is not, whatever it rounds to for display. And a
+    window whose reset time has passed is not either, because the allowance
+    came back at that moment even though nobody has read it yet. Cursor and a
+    monthly-only Codex plan have no such windows and are never refused here.
+    """
+    now = time.time() if now is None else now
+    read_at = number(usage.get("cached_at")) or now
+    full = []
+    for key in ("five_hour", "seven_day"):
+        pct = number(usage.get(key + "_pct"))
+        if pct is None or pct < 100:
+            continue
+        resets = _window_reset(usage, key, read_at)
+        if resets is not None and now >= resets:
+            continue
+        full.append(key)
+    return full
+
+
+def spent(role, usage=None, now=None, cfg=None):
+    """True when a reading still worth showing says this account has nothing
+    left. An unknown, dead or missing reading is never 'spent'."""
+    if freshness(role, now=now, cfg=cfg) not in ("fresh", "stale"):
+        return False
+    usage = load_usage(role) if usage is None else usage
+    return bool(spent_windows(role, usage, now))
 
 
 def short_age(seconds):
@@ -1486,6 +1585,20 @@ def reset_note(role, usage):
     return "resets %s" % resets if resets else ""
 
 
+def spent_reset_note(role, usage):
+    """When a spent account has allowance again: the 5-hour window's reset
+    when that is the one that ran out, since it comes back first, and the
+    row's own reset otherwise."""
+    five, week = number(usage.get("five_hour_pct")), number(usage.get("seven_day_pct"))
+    soon = _known(usage.get("five_hour_resets"))
+    # Only when the week still has room: with both used up, the 5-hour reset
+    # brings nothing back.
+    if five is not None and five >= 100 and soon and (week is None or week < 100):
+        soon = re.sub(r"\s*\([^()]*\)\s*$", "", soon).strip()
+        return "resets %s" % _normalize_reset(soon)
+    return reset_note(role, usage)
+
+
 # ------------------------------------------------------------ field notes
 
 # A test round's diary: what setup did, what the readers reported over time,
@@ -1654,9 +1767,24 @@ def field_note(event, cfg=None, **data):
         fd = os.open(field_notes_path(), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         with os.fdopen(fd, "a") as handle:
             handle.write(json.dumps(row) + "\n")
+        _trim_field_notes()
         return True
     except Exception:
         return False
+
+
+# The diary is for a test round, not for ever. Past this size the older half
+# goes; a refresh event every quarter of an hour otherwise grows it without end.
+FIELD_NOTES_MAX_BYTES = 1000000
+
+
+def _trim_field_notes():
+    path = field_notes_path()
+    if os.path.getsize(path) <= FIELD_NOTES_MAX_BYTES:
+        return
+    with open(path) as handle:
+        lines = handle.readlines()
+    write_text_atomic(path, "".join(lines[len(lines) // 2:]))
 
 
 def load_field_notes():
@@ -1882,8 +2010,13 @@ def brief_card(cfg=None, now=None):
         if not usage:
             rows.append("%s  no current reading, refreshing" % label)
             continue
-        if number(usage.get("read_at")) is not None:
-            ages.append(max(0, current - number(usage["read_at"])))
+        read_at = number(usage.get("read_at"))
+        if read_at is None or current - read_at >= ANTIGRAVITY_DEAD_SECONDS:
+            # Kept through an offline spell, or written by nobody knows what:
+            # either way not a figure to draw as if it were current.
+            rows.append("%s  no current reading, refreshing" % label)
+            continue
+        ages.append(max(0, current - read_at))
         if usage.get("error"):
             rows.append("%s  usage reading failed: %s" % (label, str(usage["error"])[:80]))
             continue

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install Second Wind for Claude Code, Codex Wind for Codex, or both.
+# Install, update or remove Second Wind for Claude Code, Codex or both.
 set -eu
 # shellcheck disable=SC1007
 SOURCE=$(CDPATH= cd "$(dirname "$0")" && pwd)

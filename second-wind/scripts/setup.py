@@ -33,6 +33,8 @@ import re
 import shutil
 import subprocess
 import sys
+import shlex
+import glob
 import tempfile
 import time
 
@@ -135,40 +137,98 @@ def discover():
 # ---------------------------------------------------------------- settings
 
 
-def hook_command(event):
+def hook_path(event):
     return os.path.join(HOOK_DIR, HOOK_FILES[event][0])
 
 
-def statusline_command():
+def statusline_path():
     return os.path.join(HERE, "statusline.sh")
+
+
+def hook_command(event):
+    """The path as Claude Code's shell will read it. Quoted only when it has
+    to be, so an ordinary install writes exactly what it always wrote; a
+    skills folder with a space in its name used to break every hook."""
+    return shlex.quote(hook_path(event))
+
+
+def statusline_command():
+    return shlex.quote(statusline_path())
+
+
+def _tokens(command):
+    """A settings command as its words, quotes removed."""
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
 
 
 def same_command(actual, expected):
     """The installer may be reached through a symlink to the checkout."""
-    return (isinstance(actual, str) and
-            os.path.realpath(actual) == os.path.realpath(expected))
+    if not isinstance(actual, str) or not actual.strip():
+        return False
+    mine, theirs = _tokens(actual), _tokens(expected)
+    return bool(mine and theirs and
+                os.path.realpath(mine[0]) == os.path.realpath(theirs[0]))
+
+
+def statusline_is_ours(entry):
+    """Whether a statusLine entry is second-wind's, at this install's path or
+    an earlier one. An earlier one matters twice: saved as "the status line we
+    replaced" it would be restored on uninstall as a dead path, and compared
+    by spelling it would never be removed at all."""
+    command = entry.get("command") if isinstance(entry, dict) else None
+    if not isinstance(command, str) or not command.strip():
+        return False
+    if same_command(command, statusline_command()):
+        return True
+    return any(os.path.basename(token) == "statusline.sh" and _file_is_ours(token)
+               for token in _tokens(command))
+
+
+def _file_is_ours(path):
+    """Whether the script at this path is second-wind's own, by what it says.
+    A missing file counts: nothing is lost by removing an entry that cannot
+    run."""
+    path = expand(path)
+    # A bare name is found through PATH, not here: it is somebody's working
+    # script, and "no such file in this folder" says nothing about it.
+    if not os.path.isabs(path):
+        return False
+    if not os.path.isfile(path):
+        return True
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(65536)
+    except OSError:
+        return False
+    return any(mark in head for mark in (b"second-wind", b"swlib", b"SW_HOME"))
 
 
 def is_ours(command):
     """True for a command second-wind installed, in this version or an older
-    one. Matched on the exact paths this install writes, on our own hook
-    basenames inside a directory called hooks, and on the basenames older
-    versions used. Never on a substring: a rule that removed any .py or .sh
+    one. Matched on the exact paths this install writes, and on our own hook
+    basenames and the basenames older versions used when the file itself is
+    ours or is gone. Never on a substring: a rule that removed any .py or .sh
     living under a path containing "second-wind" also removed somebody's own
     second-wind-notes.sh, and uninstall is not the place to guess."""
     if not isinstance(command, str) or not command.strip():
         return False
-    ours = {statusline_command()}
-    ours.update(hook_command(event) for event in HOOK_FILES)
+    ours = {statusline_path()}
+    ours.update(hook_path(event) for event in HOOK_FILES)
     # scan every token, because an entry may name an interpreter first
-    for token in command.split():
+    for token in _tokens(command):
         if token in ours:
             return True
         base = os.path.basename(token)
         parent = os.path.basename(os.path.dirname(token))
-        if base in LEGACY_BASENAMES:
-            return True
-        if parent == "hooks" and base in HOOK_BASENAMES:
+        # One of our names, in this version or an older one. The name alone
+        # is not enough: notification.py and statusline.sh are what most
+        # people call their own. So the file has to be ours by content, or be
+        # gone, in which case the entry is broken whoever wrote it.
+        if (base in LEGACY_BASENAMES or
+                (parent == "hooks" and base in HOOK_BASENAMES)) and _file_is_ours(token):
             return True
     return False
 
@@ -293,7 +353,7 @@ def merge_settings(config_dir, events=(), statusline=False, model_picker=None,
     sl = {"type": "command", "command": statusline_command(), "padding": 0}
     if statusline:
         existing = data.get("statusLine")
-        if existing and existing != sl:
+        if existing and existing != sl and not statusline_is_ours(existing):
             store = {}
             if os.path.exists(replaced_store()):
                 try:
@@ -306,8 +366,7 @@ def merge_settings(config_dir, events=(), statusline=False, model_picker=None,
             print("  note: replaced an existing status line in %s. "
                   "Uninstall restores it." % tilde(path))
         data["statusLine"] = sl
-    elif isinstance(data.get("statusLine"), dict) and \
-            data["statusLine"].get("command") == statusline_command():
+    elif statusline_is_ours(data.get("statusLine")):
         restored = None
         if os.path.exists(replaced_store()):
             try:
@@ -578,6 +637,36 @@ def launchd_remove():
         os.unlink(LAUNCHD_PLIST)
         return "unloaded and deleted %s" % tilde(LAUNCHD_PLIST)
     return "no launchd agent was installed"
+
+
+BRIDGE_LABEL = "com.second-wind.bot-bridge"
+
+
+def bridge_remove():
+    """Stop the Grok Bot bridge for good: unload its agent, delete its plist,
+    its stored key and its script copies. The job history stays with the
+    logs. Uninstall used to leave all of it running."""
+    folder = os.path.join(sw_home(), "bridge")
+    plist = os.path.join(HOME, "Library", "LaunchAgents", BRIDGE_LABEL + ".plist")
+    if not os.path.exists(plist) and not os.path.isdir(folder):
+        return "no bot bridge was installed"
+    if sys.platform == "darwin":
+        subprocess.run(["launchctl", "bootout", "gui/%d/%s" % (os.getuid(), BRIDGE_LABEL)],
+                       capture_output=True, text=True)
+    removed = []
+    if os.path.exists(plist):
+        os.unlink(plist)
+        removed.append("its launchd agent")
+    key = os.path.join(folder, "service-key")
+    if os.path.exists(key):
+        os.unlink(key)
+        removed.append("its stored key")
+    copies = glob.glob(os.path.join(folder, "runtime-*"))
+    for copy in copies:
+        shutil.rmtree(copy, ignore_errors=True)
+    if copies:
+        removed.append("%d script copies" % len(copies))
+    return "bot bridge stopped; removed %s" % (", ".join(removed) or "nothing else")
 
 
 # ---------------------------------------------------------------- detect
@@ -1107,7 +1196,7 @@ def cmd_write(a):
           % ", ".join("%s %s" % (name, version or "not installed")
                       for name, version in versions.items()))
     missing = [event for event in level["events"]
-               if not os.path.exists(hook_command(event))]
+               if not os.path.exists(hook_path(event))]
     if missing:
         print("\n  ! these hook files are not present yet: %s"
               % ", ".join(HOOK_FILES[event][0] for event in missing))
@@ -1585,7 +1674,7 @@ def cmd_check():
                         for group in hooks.get(event, []) if isinstance(group, dict)
                         for inner in (group.get("hooks") or [])
                         if isinstance(inner, dict))
-            present = os.path.exists(command)
+            present = os.path.exists(hook_path(event))
             state = "installed" if wired else "MISSING"
             if not present:
                 state += ", hook file MISSING"
@@ -1925,6 +2014,7 @@ def cmd_uninstall():
         print("  launchd left alone: SW_HOME points at a temporary directory")
     else:
         print("  %s" % launchd_remove())
+        print("  %s" % bridge_remove())
     print("Accounts and logins were not touched.")
     folder = expand((cfg.get("refresh") or {}).get("workdir", "")) or workdir_path()
     print("The workdir trust entries are left in place, because removing them "

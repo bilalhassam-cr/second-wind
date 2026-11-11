@@ -26,7 +26,9 @@ PROMPT = r"Plan,\s+search,\s+build\s+anything|Tip:\s+Use"
 TRUST = (r"Workspace\s+Trust\s+Required|Trust\s+this\s+workspace|"
          r"Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory")
 LOGIN = (r"not\s+(?:signed|logged)\s+in|please\s+(?:sign|log)\s+in|"
-         r"/login\s+to|session\s+(?:has\s+)?expired|Invalid\s+API\s+key")
+         r"/login\s+to|session\s+(?:has\s+)?expired|Invalid\s+API\s+key|"
+         # 2026.10.19 greets a lapsed sign-in with this and nothing else.
+         r"Press\s+any\s+key\s+to\s+log\s+in")
 MENU = r"Show\s+plan\s+and\s+on-demand\s+usage"
 PANEL = r"Monthly\s+plan\s+and\s+on-demand\s+usage|\d+%\s*used"
 # Cursor says it is loading, then shows the panel or its own failure:

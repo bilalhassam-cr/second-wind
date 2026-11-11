@@ -431,9 +431,18 @@ def service(args):
     target = 'gui/' + str(os.getuid())
     if args.action == 'stop':
         proc = subprocess.run(['launchctl', 'bootout', target + '/' + LABEL], capture_output=True, text=True)
-        if proc.returncode:
+        # The plist goes too. Left behind with RunAtLoad it brought the bridge
+        # back at the next login, after the user had been told it had stopped.
+        had_plist = plist.exists()
+        still_loaded = subprocess.run(['launchctl', 'print', target + '/' + LABEL],
+                                      capture_output=True).returncode == 0
+        if still_loaded:
+            raise sw.WindError('could not stop service: ' + (proc.stderr.strip() or 'it is still loaded'))
+        if had_plist:
+            plist.unlink()
+        if proc.returncode and not had_plist:
             raise sw.WindError('could not stop service: ' + proc.stderr.strip())
-        print('Bridge stopped; native session history retained.')
+        print('Bridge stopped and will not start at login; native session history retained.')
         return
     cfg = settings()
     profile = sw.account(sw.load_config(), cfg['source_account'])
@@ -477,6 +486,10 @@ def service(args):
     result = subprocess.run(['launchctl', 'bootstrap', target, str(plist)], capture_output=True, text=True)
     if result.returncode:
         raise sw.WindError('could not start bridge service: ' + result.stderr.strip())
+    # Only the copy just started is the code that runs; older ones mislead.
+    for old in directory().glob('runtime-*'):
+        if old != runtime:
+            shutil.rmtree(old, ignore_errors=True)
     print('Bridge service started. Run bridge status to inspect it.')
 
 

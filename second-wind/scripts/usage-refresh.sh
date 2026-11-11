@@ -106,7 +106,11 @@ for role in swlib.enabled_roles(cfg):
         continue
     if not swlib.reading_enabled(role, cfg):
         continue
-    if force or swlib.freshness(role, cfg=cfg) != "fresh":
+    # Not twice in five minutes unless forced. Every session start asks for
+    # a refresh of whatever is not fresh, and an account whose reads are
+    # failing is never fresh: retried at each one, a rate limit never lifts.
+    if force or (swlib.freshness(role, cfg=cfg) != "fresh"
+                 and not swlib.recently_read(role)):
         print("role %s" % role)
 PY
 )
@@ -135,7 +139,9 @@ run_reader() {
     case "$(sed -n '1p' "$out" 2>/dev/null)" in
       OK*|FAILED:*|"LOGIN EXPIRED:"*|"NO CLI SIGN-IN:"*|"TRUST PROMPT:"*|"PARSER MISMATCH:"*) ;;
       *)
-        detail=$(sed -n '1p' "$err" 2>/dev/null)
+        # The last line, not the first: a Python crash opens with "Traceback
+        # (most recent call last):" and names the fault at the end.
+        detail=$(grep -v '^[[:space:]]*$' "$err" 2>/dev/null | tail -n 1)
         status "$role" "FAILED: ${detail:-the usage reader stopped without saying why.}" ;;
     esac
   fi
